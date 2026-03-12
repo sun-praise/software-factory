@@ -52,7 +52,7 @@ Milestone 概览：
   - 去重键、错误处理与状态推进
   - Normalizer/Worker 链路打通（部分能力处于占位或规划中）
 
-说明：README 只描述当前仓库已实现能力和明确计划，不承诺未落地功能。
+说明：本文档描述已实现功能和明确规划中的能力，未列出的功能视为不在当前范围内。
 
 ## 本地运行
 
@@ -71,12 +71,13 @@ pip install -r requirements.txt
 cp example.env .env
 ```
 
-按需编辑 `.env`：
+按需编辑 `.env`（括号内为默认值）：
 
-- `APP_ENV`：运行环境
-- `HOST`、`PORT`：服务监听地址
-- `DB_PATH`：SQLite 文件路径
-- `GITHUB_WEBHOOK_SECRET`：GitHub Webhook 验签密钥（未配置时可用于本地联调）
+- `APP_ENV`（`development`，可选）：运行环境标识
+- `HOST`（`127.0.0.1`，可选）：服务监听地址
+- `PORT`（`8000`，可选）：服务监听端口
+- `DB_PATH`（`./data/software_factory.db`，可选）：SQLite 文件路径
+- `GITHUB_WEBHOOK_SECRET`（空字符串，可选）：本地联调可留空；生产环境建议配置并启用签名校验
 
 3) 初始化数据库
 
@@ -89,7 +90,7 @@ python scripts/init_db.py
 4) 启动服务
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 常用页面：
@@ -111,9 +112,10 @@ curl -i http://127.0.0.1:8000/healthz
 ```bash
 curl -i -X POST http://127.0.0.1:8000/hook-events \
   -H 'content-type: application/json' \
-  -H 'x-event-type: UserPromptSubmit' \
-  -d '{"event":"UserPromptSubmit","session_id":"sess_demo","repo":"owner/repo","branch":"feat/demo"}'
+  -d '{"event":"UserPromptSubmit","session_id":"sess_demo","repo":"owner/repo","branch":"feat/demo","cwd":"/tmp/software-factory","timestamp":"2026-03-12T12:00:00Z"}'
 ```
+
+说明：当前实现通过 JSON body 的 `event` 字段识别事件类型，不读取 `x-event-type` header。
 
 模拟 GitHub Webhook（`/github/webhook`）：
 
@@ -124,11 +126,15 @@ curl -i -X POST http://127.0.0.1:8000/github/webhook \
   -d '{"action":"submitted","review":{"id":123},"pull_request":{"number":10}}'
 ```
 
-代码静态编译检查：
+说明：当前 `/github/webhook` 仅做事件接收与回显，签名校验计划在后续 Milestone 实现；生产环境请务必配置 `GITHUB_WEBHOOK_SECRET` 并在入口层启用校验。
+
+语法/字节码编译检查：
 
 ```bash
 python -m compileall app scripts
 ```
+
+说明：`compileall` 仅用于语法与导入层面的快速检查，不替代静态分析。建议按需增加 `ruff`、`mypy` 等工具。
 
 ## CI 说明
 
@@ -168,6 +174,12 @@ python -m compileall app scripts
 - 短期（M2）：完善事件模型、幂等、状态机与错误处理
 - 中期（M3，规划中）：接入可运行的 Normalizer + Agent Worker 执行链路
 - 长期（规划中）：更稳健的策略控制、可选重试和多 worker 扩展
+
+## 常见问题
+
+- 数据库初始化失败：先确认 `DB_PATH` 的目录存在且有写权限，再重试 `python scripts/init_db.py`
+- `8000` 端口被占用：改用其他端口启动（例如 `--port 8001`）
+- Webhook 调试无响应：检查 `content-type`、`x-github-event` 和 JSON 格式是否正确
 
 ## Hook Samples
 
