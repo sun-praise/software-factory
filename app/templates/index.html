@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Software Factory - Runs</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Runs</h1>
+        <p class="muted">Minimal server-rendered dashboard placeholder.</p>
+      </header>
+
+      <section>
+        <h2>Task List</h2>
+        {% if runs and runs|length > 0 %}
+        <ul class="list">
+          {% for run in runs %}
+          <li>
+            <a href="/runs/{{ run.id }}">{{ run.id }}</a>
+            <span class="muted">{{ run.status | default("pending") }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty">No runs yet. This is a placeholder for M1.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

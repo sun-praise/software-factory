@@ -1,0 +1,103 @@
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --text: #1e2430;
+  --muted: #5f6b7b;
+  --border: #d7dce4;
+  --accent: #2f6feb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Noto Sans", Arial, sans-serif;
+  color: var(--text);
+  background: linear-gradient(180deg, #f7f8fa 0%, #eef1f5 100%);
+}
+
+.container {
+  max-width: 760px;
+  margin: 2rem auto;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+h1,
+h2 {
+  margin-top: 0;
+}
+
+h2 {
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.list li {
+  margin: 0.4rem 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.empty {
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 0.35rem 0.8rem;
+  margin: 0;
+}
+
+.meta dt {
+  font-weight: 600;
+}
+
+.meta dd {
+  margin: 0;
+}
+
+.log {
+  margin: 0;
+  padding: 0.8rem;
+  background: #f1f3f7;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 680px) {
+  .container {
+    margin: 1rem;
+    padding: 1rem;
+  }
+
+  .meta {
+    grid-template-columns: 1fr;
+  }
+}
