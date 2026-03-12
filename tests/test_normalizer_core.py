@@ -11,7 +11,7 @@ _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "normalizer_events"
 
 def _load_events_fixture(name: str) -> list[dict]:
     fixture_path = _FIXTURE_DIR / name
-    with fixture_path.open("r", encoding="ascii") as file:
+    with fixture_path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 

@@ -23,7 +23,8 @@ def normalize_review_events(
     must_fix: list[dict[str, Any]] = []
     should_fix: list[dict[str, Any]] = []
     ignore: list[dict[str, Any]] = []
-    seen: set[tuple[str, str | None, int | None, str]] = set()
+    seen_actionable: set[tuple[str, str | None, int | None, str]] = set()
+    seen_ignore: set[tuple[str, str | None, int | None, str]] = set()
 
     for event in events:
         if not isinstance(event, Mapping):
@@ -41,15 +42,13 @@ def normalize_review_events(
         if candidate is None:
             continue
 
+        normalized_text = _normalize_text_for_dedupe(candidate["text"])
         dedupe_key = (
             candidate["source"],
             candidate["path"],
             candidate["line"],
-            _normalize_text_for_dedupe(candidate["text"]),
+            normalized_text,
         )
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
 
         item = {
             "source": candidate["source"],
@@ -59,9 +58,18 @@ def normalize_review_events(
             "severity": classify_severity(candidate["text"]),
         }
 
-        if _is_ignorable_text(candidate["text"]):
+        if _is_ignorable_text(normalized_text):
+            if dedupe_key in seen_ignore:
+                continue
+            seen_ignore.add(dedupe_key)
             ignore.append(item)
-        elif candidate["is_must_fix"]:
+            continue
+
+        if dedupe_key in seen_actionable:
+            continue
+        seen_actionable.add(dedupe_key)
+
+        if candidate["is_must_fix"]:
             must_fix.append(item)
         else:
             should_fix.append(item)
@@ -176,6 +184,5 @@ def _as_int(value: Any) -> int | None:
     return None
 
 
-def _is_ignorable_text(text: str) -> bool:
-    normalized = _normalize_text_for_dedupe(text)
-    return not normalized or normalized in _IGNORE_TEXTS
+def _is_ignorable_text(normalized_text: str) -> bool:
+    return not normalized_text or normalized_text in _IGNORE_TEXTS
