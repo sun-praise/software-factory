@@ -65,6 +65,11 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
+运行要求：
+
+- Python 3.11+
+- SQLite 3.35+（`autofix_runs` 队列 claim 使用 `RETURNING`，低版本会自动降级到兼容路径）
+
 2) 配置环境变量
 
 ```bash
@@ -135,6 +140,14 @@ python -m compileall app scripts
 ```
 
 说明：`compileall` 仅用于语法与导入层面的快速检查，不替代静态分析。建议按需增加 `ruff`、`mypy` 等工具。
+
+Worker 调试（M5）：
+
+```bash
+python scripts/run_worker.py --once
+```
+
+说明：MVP 默认单 worker 串行执行；多 worker 并发执行不在当前保证范围。
 
 ## CI 说明
 
