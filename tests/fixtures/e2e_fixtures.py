@@ -12,9 +12,11 @@ from app.config import get_settings
 from app.main import app
 from app.models import SCHEMA_SQL
 from app.routes.github import _get_debounce_backend
+from app.services.ai_client import FixPlan
 from app.services.agent_runner import RunnerOps
 from app.services.github_signature import build_signature
 from app.db import init_db
+from app.services.patch_applier import ApplyResult
 
 
 def make_in_memory_conn() -> sqlite3.Connection:
@@ -126,6 +128,8 @@ def make_mock_runner_ops(
             "error": commit_error if not commit_success else None,
         },
         post_pr_comment=lambda *_: (comment_ok, "ok" if comment_ok else "api error"),
+        generate_fix=lambda **_: FixPlan(summary="updated file", changes=()),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
 

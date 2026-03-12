@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from app.models import SCHEMA_SQL
+from app.services.ai_client import AIConfigError, FixPlan
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
@@ -11,6 +12,7 @@ from app.services.agent_runner import (
     _sanitize_log_text,
     run_once,
 )
+from app.services.patch_applier import ApplyResult
 from app.services.queue import claim_next_queued_run, enqueue_autofix_run
 
 
@@ -60,6 +62,11 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: FixPlan(
+            summary="updated file",
+            changes=(),
+        ),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -77,6 +84,7 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
     logs_path = Path(result["logs_path"])
     assert logs_path.exists()
     logs_text = logs_path.read_text(encoding="utf-8")
+    assert "ai_summary: updated file" in logs_text
     assert "pytest -q" in logs_text
     assert "ruff check ." in logs_text
     assert "mypy ." in logs_text
@@ -113,6 +121,8 @@ def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: FixPlan(summary="attempted fix", changes=()),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -152,6 +162,8 @@ def test_run_once_records_comment_failure_in_db(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (False, "api unavailable"),
+        generate_fix=lambda **_: FixPlan(summary="updated file", changes=()),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -233,6 +245,8 @@ def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
             "error": "push_rejected",
         },
         post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: FixPlan(summary="updated file", changes=()),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -261,3 +275,33 @@ def test_sanitize_log_text_redacts_tokens() -> None:
     assert "xyz" not in masked
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
     assert "[REDACTED]" in masked
+
+
+def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: (_ for _ in ()).throw(
+            AIConfigError("missing API key")
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    assert "ai_not_configured" in str(result["error_summary"])
