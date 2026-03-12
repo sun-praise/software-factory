@@ -119,6 +119,13 @@ def reset_autofix_count_on_sha_change(
     pr_number: int,
     new_head_sha: str | None,
 ) -> bool:
+    """Reset autofix_count when head_sha changes.
+
+    Note: This function does NOT commit. Caller is responsible for transaction management.
+
+    Returns:
+        True if reset was performed, False otherwise.
+    """
     if not new_head_sha:
         return False
     row = conn.execute(
@@ -133,6 +140,5 @@ def reset_autofix_count_on_sha_change(
             "UPDATE pull_requests SET autofix_count = 0, head_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
             (new_head_sha, repo, pr_number),
         )
-        conn.commit()
         return True
     return False
