@@ -8,6 +8,7 @@ from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
     _default_executor,
+    _sanitize_log_text,
     run_once,
 )
 from app.services.queue import claim_next_queued_run, enqueue_autofix_run
@@ -188,3 +189,35 @@ def test_default_executor_passes_timeout(monkeypatch, tmp_path: Path) -> None:
     assert captured["timeout"] == CHECK_COMMAND_TIMEOUT_SECONDS
     assert captured["cwd"] == str(tmp_path)
     assert result.returncode == 0
+
+
+def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
+    conn = _make_conn()
+    enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=8,
+        head_sha="abc999",
+        normalized_review_json={
+            "summary": "unsupported project",
+            "project_type": "elixir",
+            "must_fix": [],
+            "should_fix": [],
+        },
+    )
+    run = claim_next_queued_run(conn)
+    assert run is not None
+
+    result = run_once(conn=conn, run=run, workspace_dir=str(tmp_path))
+    assert result["status"] == "failed"
+    assert "unsupported_project_type" in str(result["error_summary"])
+    assert result["comment_posted"] is False
+
+
+def test_sanitize_log_text_redacts_tokens() -> None:
+    raw = "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz"
+    masked = _sanitize_log_text(raw)
+    assert "abc123" not in masked
+    assert "xyz" not in masked
+    assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
+    assert "[REDACTED]" in masked

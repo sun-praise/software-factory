@@ -75,6 +75,40 @@ def run_once(
         normalized_review=payload,
     )
     commands = active_ops.collect_check_commands(project_type)
+    if not commands:
+        error_summary = f"unsupported_project_type: {project_type or 'unknown'}"
+        logs_path = _write_logs(
+            workspace_dir=workspace,
+            run_id=run_id,
+            lines=[
+                f"run_id={run_id}",
+                f"repo={repo}",
+                f"pr_number={pr_number}",
+                error_summary,
+            ],
+        )
+        mark_run_finished(
+            conn=conn,
+            run_id=run_id,
+            status="failed",
+            commit_sha=None,
+            error_summary=error_summary,
+            logs_path=logs_path,
+        )
+        return {
+            "run_id": run_id,
+            "status": "failed",
+            "error_summary": error_summary,
+            "logs_path": logs_path,
+            "commit_sha": None,
+            "checks": {
+                "overall_status": "failed",
+                "passed_count": 0,
+                "failed_count": 0,
+                "failed_commands": [],
+            },
+            "comment_posted": False,
+        }
 
     execute = _default_executor if executor is None else executor
     check_results: list[dict[str, Any]] = []
@@ -330,11 +364,14 @@ def _validate_workspace_dir(workspace_dir: str) -> str:
 
 def _sanitize_log_text(text: str) -> str:
     sanitized = text
-    for pattern in _REDACTION_PATTERNS:
-        if pattern.pattern.startswith("(?i)"):
-            sanitized = pattern.sub(lambda m: f"{m.group(1)}[REDACTED]", sanitized)
-        else:
-            sanitized = pattern.sub("[REDACTED]", sanitized)
+    sanitized = _REDACTION_PATTERNS[0].sub("[REDACTED]", sanitized)
+    sanitized = _REDACTION_PATTERNS[1].sub("[REDACTED]", sanitized)
+    sanitized = _REDACTION_PATTERNS[2].sub(
+        lambda m: f"{m.group(1)}[REDACTED]", sanitized
+    )
+    sanitized = _REDACTION_PATTERNS[3].sub(
+        lambda m: f"{m.group(1)}[REDACTED]", sanitized
+    )
     return sanitized
 
 

@@ -67,14 +67,13 @@ def collect_check_commands(project_type: str | None = None) -> list[str]:
     }
 
     normalized = (project_type or "").strip().lower()
+    if not normalized:
+        return templates["python"]
+
     if normalized in templates:
         return templates[normalized]
 
-    return [
-        "run-test-suite",
-        "run-lint-suite",
-        "run-typecheck-suite",
-    ]
+    return []
 
 
 def summarize_check_results(results: list[dict[str, Any]]) -> dict[str, Any]:

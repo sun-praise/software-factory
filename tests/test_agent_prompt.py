@@ -45,12 +45,16 @@ def test_build_autofix_prompt_contains_required_constraints_and_summaries() -> N
     assert "#24" in prompt
 
 
-def test_collect_check_commands_defaults_to_lightweight_placeholders() -> None:
+def test_collect_check_commands_defaults_to_python_commands() -> None:
     assert collect_check_commands() == [
-        "run-test-suite",
-        "run-lint-suite",
-        "run-typecheck-suite",
+        "python -m pytest -q",
+        "python -m ruff check .",
+        "python -m mypy .",
     ]
+
+
+def test_collect_check_commands_unknown_type_returns_empty() -> None:
+    assert collect_check_commands("elixir") == []
 
 
 def test_collect_check_commands_for_python_node_go_rust() -> None:
