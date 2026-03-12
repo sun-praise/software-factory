@@ -191,17 +191,17 @@ def run_once(
 
         checks_summary = active_ops.summarize_check_results(check_results)
         status = "failed"
-        error_summary = None
+        run_error_summary = None
         commit_sha: str | None = None
 
         if checks_summary["overall_status"] != "passed":
             failed_commands = checks_summary.get("failed_commands") or []
-            error_summary = (
+            run_error_summary = (
                 f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
             )
-            log_lines.append(error_summary)
+            log_lines.append(run_error_summary)
         else:
-            status, commit_sha, error_summary = _finalize_git_changes(
+            status, commit_sha, run_error_summary = _finalize_git_changes(
                 repo_dir=workspace,
                 branch=branch,
                 head_sha=head_sha,
@@ -224,16 +224,16 @@ def run_once(
                 run_id=run_id,
                 status=status,
                 commit_sha=commit_sha,
-                error_summary=error_summary,
+                error_summary=run_error_summary,
                 logs_path=logs_path,
             )
         else:
-            status, error_summary = _finish_failed_run(
+            status, run_error_summary = _finish_failed_run(
                 conn,
                 run_id,
-                error_summary or "unknown_failure",
+                run_error_summary or "unknown_failure",
                 logs_path,
-                error_code=_infer_error_code(error_summary),
+                error_code=_infer_error_code(run_error_summary),
             )
     finally:
         release_pr_lock(
@@ -249,7 +249,7 @@ def run_once(
         return {
             "run_id": run_id,
             "status": status,
-            "error_summary": error_summary,
+            "error_summary": run_error_summary,
             "logs_path": logs_path,
             "commit_sha": commit_sha,
             "checks": checks_summary,
@@ -261,7 +261,7 @@ def run_once(
         status=status,
         summary=checks_summary,
         commit_sha=commit_sha,
-        error_summary=error_summary,
+        error_summary=run_error_summary,
         logs_path=logs_path,
     )
     posted, comment_message = active_ops.post_pr_comment(
@@ -274,20 +274,20 @@ def run_once(
         comment_failure = f"pr_comment_failed: {comment_message}"
         log_lines.append(comment_failure)
         _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
-        error_summary = _merge_error_summary(error_summary, comment_failure)
+        run_error_summary = _merge_error_summary(run_error_summary, comment_failure)
         mark_run_finished(
             conn=conn,
             run_id=run_id,
             status=status,
             commit_sha=commit_sha,
-            error_summary=error_summary,
+            error_summary=run_error_summary,
             logs_path=logs_path,
         )
 
     return {
         "run_id": run_id,
         "status": status,
-        "error_summary": error_summary,
+        "error_summary": run_error_summary,
         "logs_path": logs_path,
         "commit_sha": commit_sha,
         "checks": checks_summary,
