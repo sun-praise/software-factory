@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any, cast
+
+from app.services.concurrency import can_start_new_run
 
 
 def enqueue_autofix_run(
@@ -13,15 +16,43 @@ def enqueue_autofix_run(
     head_sha: str | None,
     normalized_review_json: Mapping[str, Any],
     trigger_source: str = "github_webhook",
-) -> int:
+    *,
+    idempotency_key: str | None = None,
+    max_attempts: int = 3,
+    retryable: bool = True,
+) -> int | None:
     payload_json = json.dumps(normalized_review_json, ensure_ascii=True, sort_keys=True)
-    cursor = conn.execute(
-        """
-        INSERT INTO autofix_runs (repo, pr_number, head_sha, status, trigger_source, normalized_review_json)
-        VALUES (?, ?, ?, 'queued', ?, ?)
-        """,
-        (repo, pr_number, head_sha, trigger_source, payload_json),
-    )
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO autofix_runs (
+                repo,
+                pr_number,
+                head_sha,
+                status,
+                trigger_source,
+                idempotency_key,
+                normalized_review_json,
+                max_attempts,
+                retryable,
+                updated_at
+            )
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                repo,
+                pr_number,
+                head_sha,
+                trigger_source,
+                idempotency_key,
+                payload_json,
+                max_attempts,
+                int(retryable),
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return None
+
     conn.commit()
     lastrowid = cursor.lastrowid
     if lastrowid is None:
@@ -29,7 +60,17 @@ def enqueue_autofix_run(
     return cast(int, lastrowid)
 
 
-def claim_next_queued_run(conn: sqlite3.Connection) -> dict[str, Any] | None:
+def claim_next_queued_run(
+    conn: sqlite3.Connection,
+    *,
+    worker_id: str | None = None,
+    max_running_runs: int | None = None,
+) -> dict[str, Any] | None:
+    _promote_due_retries(conn)
+    if max_running_runs is not None and not can_start_new_run(conn, max_running_runs):
+        return None
+
+    timestamp = _utc_now_timestamp()
     try:
         cursor = conn.execute(
             """
@@ -41,10 +82,15 @@ def claim_next_queued_run(conn: sqlite3.Connection) -> dict[str, Any] | None:
                 LIMIT 1
             )
             UPDATE autofix_runs
-            SET status = 'running'
+            SET status = 'running',
+                worker_id = COALESCE(?, worker_id),
+                claimed_at = COALESCE(claimed_at, ?),
+                started_at = COALESCE(started_at, ?),
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = (SELECT id FROM picked)
             RETURNING *
-            """
+            """,
+            (worker_id, timestamp, timestamp),
         )
         row = cursor.fetchone()
         if row is None:
@@ -71,8 +117,16 @@ def claim_next_queued_run(conn: sqlite3.Connection) -> dict[str, Any] | None:
 
     run_id = int(selected["id"] if isinstance(selected, sqlite3.Row) else selected[0])
     conn.execute(
-        "UPDATE autofix_runs SET status = 'running' WHERE id = ?",
-        (run_id,),
+        """
+        UPDATE autofix_runs
+        SET status = 'running',
+            worker_id = COALESCE(?, worker_id),
+            claimed_at = COALESCE(claimed_at, ?),
+            started_at = COALESCE(started_at, ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (worker_id, timestamp, timestamp, run_id),
     )
     row = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,)).fetchone()
     conn.commit()
@@ -94,6 +148,7 @@ def mark_run_finished(
     commit_sha: str | None = None,
     error_summary: str | None = None,
     logs_path: str | None = None,
+    last_error_code: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -102,12 +157,48 @@ def mark_run_finished(
             commit_sha = ?,
             error_summary = ?,
             logs_path = ?,
-            finished_at = CURRENT_TIMESTAMP
+            last_error_code = COALESCE(?, last_error_code),
+            last_error_at = CASE WHEN ? IS NULL THEN last_error_at ELSE CURRENT_TIMESTAMP END,
+            finished_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (status, commit_sha, error_summary, logs_path, run_id),
+        (
+            status,
+            commit_sha,
+            error_summary,
+            logs_path,
+            last_error_code,
+            last_error_code,
+            run_id,
+        ),
     )
     conn.commit()
+
+
+def _promote_due_retries(conn: sqlite3.Connection) -> None:
+    now_value = _utc_now_timestamp()
+    conn.execute(
+        """
+        UPDATE autofix_runs
+        SET status = 'queued',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE status = 'retry_scheduled'
+          AND retry_after IS NOT NULL
+          AND retry_after <= ?
+        """,
+        (now_value,),
+    )
+    conn.commit()
+
+
+def _utc_now_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _to_dict(row: Any, cursor: sqlite3.Cursor) -> dict[str, Any]:

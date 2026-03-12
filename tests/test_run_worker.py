@@ -19,12 +19,21 @@ def test_process_one_marks_failed_when_run_once_raises(
     calls: dict[str, object] = {}
 
     monkeypatch.setattr(run_worker, "connect_db", lambda: _ConnContext())
-    monkeypatch.setattr(run_worker, "claim_next_queued_run", lambda conn: {"id": 9})
+    monkeypatch.setattr(
+        run_worker,
+        "claim_next_queued_run",
+        lambda conn, **kwargs: {"id": 9},
+    )
 
     def _boom(**kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(run_worker, "run_once", _boom)
+    monkeypatch.setattr(
+        run_worker,
+        "schedule_retry",
+        lambda *args, **kwargs: type("Plan", (), {"scheduled": False})(),
+    )
 
     def _mark_run_finished(**kwargs):
         calls.update(kwargs)

@@ -9,18 +9,23 @@ import sqlite3
 import subprocess
 from typing import Any, Callable, Mapping
 
+from app.config import get_settings
 from app.services.agent_prompt import (
     build_autofix_prompt,
     collect_check_commands,
     summarize_check_results,
 )
+from app.services.concurrency import acquire_pr_lock, release_pr_lock
 from app.services.git_ops import (
     checkout_branch,
     commit_and_push,
     ensure_head_sha,
     post_pr_comment,
 )
+from app.services.logging_config import cleanup_archived_logs, get_run_log_path
+from app.services.policy import increment_autofix_count
 from app.services.queue import mark_run_finished
+from app.services.retry import schedule_retry
 
 
 Executor = Callable[[str, str], Any]
@@ -54,11 +59,13 @@ def run_once(
     executor: Executor | None = None,
     ops: RunnerOps | None = None,
 ) -> dict[str, Any]:
+    settings = get_settings()
     active_ops = ops or RunnerOps()
     workspace = _validate_workspace_dir(workspace_dir)
     run_id = int(run["id"])
     repo = str(run.get("repo") or "")
     pr_number = int(run.get("pr_number") or 0)
+    worker_id = _safe_text(run.get("worker_id")) or settings.worker_id
 
     payload = _parse_payload(run.get("normalized_review_json"))
     head_sha = _safe_text(run.get("head_sha")) or _safe_text(payload.get("head_sha"))
@@ -75,6 +82,11 @@ def run_once(
         normalized_review=payload,
     )
     commands = active_ops.collect_check_commands(project_type)
+    cleanup_archived_logs(
+        base_dir=workspace,
+        archive_subdir=settings.log_archive_subdir,
+        older_than_days=settings.log_retention_days,
+    )
     if not commands:
         error_summary = f"unsupported_project_type: {project_type or 'unknown'}"
         logs_path = _write_logs(
@@ -87,18 +99,17 @@ def run_once(
                 error_summary,
             ],
         )
-        mark_run_finished(
-            conn=conn,
-            run_id=run_id,
-            status="failed",
-            commit_sha=None,
-            error_summary=error_summary,
-            logs_path=logs_path,
+        status, scheduled_error = _finish_failed_run(
+            conn,
+            run_id,
+            error_summary,
+            logs_path,
+            error_code="unsupported_project_type",
         )
         return {
             "run_id": run_id,
-            "status": "failed",
-            "error_summary": error_summary,
+            "status": status,
+            "error_summary": scheduled_error,
             "logs_path": logs_path,
             "commit_sha": None,
             "checks": {
@@ -122,59 +133,128 @@ def run_once(
         prompt,
         "",
     ]
-
-    for command in commands:
-        result = _coerce_result(execute(command, workspace))
-        check_results.append(
-            {
-                "command": command,
-                "exit_code": result["returncode"],
-                "stdout": result["stdout"],
-                "stderr": result["stderr"],
-            }
-        )
-        log_lines.extend(
-            [
-                f"[check] {command}",
-                f"exit_code={result['returncode']}",
-                "stdout:",
-                _sanitize_log_text(result["stdout"]),
-                "stderr:",
-                _sanitize_log_text(result["stderr"]),
-                "",
-            ]
-        )
-
-    checks_summary = active_ops.summarize_check_results(check_results)
-    status = "failed"
-    error_summary: str | None = None
-    commit_sha: str | None = None
-
-    if checks_summary["overall_status"] != "passed":
-        failed_commands = checks_summary.get("failed_commands") or []
-        error_summary = (
-            f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
-        )
-        log_lines.append(error_summary)
-    else:
-        status, commit_sha, error_summary = _finalize_git_changes(
-            repo_dir=workspace,
-            branch=branch,
-            head_sha=head_sha,
-            commit_message=commit_message,
-            active_ops=active_ops,
-            log_lines=log_lines,
-        )
-
-    logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
-    mark_run_finished(
+    lock_acquired = acquire_pr_lock(
         conn=conn,
+        repo=repo,
+        pr_number=pr_number,
+        lock_owner=worker_id,
+        lock_ttl_seconds=settings.pr_lock_ttl_seconds,
         run_id=run_id,
-        status=status,
-        commit_sha=commit_sha,
-        error_summary=error_summary,
-        logs_path=logs_path,
     )
+    if not lock_acquired:
+        log_lines.append("pr_lock: already held")
+        logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        status, error_summary = _finish_failed_run(
+            conn,
+            run_id,
+            "pr_locked",
+            logs_path,
+            error_code="pr_locked",
+        )
+        return {
+            "run_id": run_id,
+            "status": status,
+            "error_summary": error_summary,
+            "logs_path": logs_path,
+            "commit_sha": None,
+            "checks": {
+                "overall_status": "failed",
+                "passed_count": 0,
+                "failed_count": 0,
+                "failed_commands": [],
+            },
+            "comment_posted": False,
+        }
+
+    try:
+        for command in commands:
+            result = _coerce_result(execute(command, workspace))
+            check_results.append(
+                {
+                    "command": command,
+                    "exit_code": result["returncode"],
+                    "stdout": result["stdout"],
+                    "stderr": result["stderr"],
+                }
+            )
+            log_lines.extend(
+                [
+                    f"[check] {command}",
+                    f"exit_code={result['returncode']}",
+                    "stdout:",
+                    _sanitize_log_text(result["stdout"]),
+                    "stderr:",
+                    _sanitize_log_text(result["stderr"]),
+                    "",
+                ]
+            )
+
+        checks_summary = active_ops.summarize_check_results(check_results)
+        status = "failed"
+        error_summary: str | None = None
+        commit_sha: str | None = None
+
+        if checks_summary["overall_status"] != "passed":
+            failed_commands = checks_summary.get("failed_commands") or []
+            error_summary = (
+                f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
+            )
+            log_lines.append(error_summary)
+        else:
+            status, commit_sha, error_summary = _finalize_git_changes(
+                repo_dir=workspace,
+                branch=branch,
+                head_sha=head_sha,
+                commit_message=commit_message,
+                active_ops=active_ops,
+                log_lines=log_lines,
+            )
+
+        logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        if status == "success":
+            increment_autofix_count(
+                conn,
+                repo,
+                pr_number,
+                branch=branch,
+                head_sha=head_sha,
+            )
+            mark_run_finished(
+                conn=conn,
+                run_id=run_id,
+                status=status,
+                commit_sha=commit_sha,
+                error_summary=error_summary,
+                logs_path=logs_path,
+            )
+        else:
+            status, error_summary = _finish_failed_run(
+                conn,
+                run_id,
+                error_summary or "unknown_failure",
+                logs_path,
+                error_code=_infer_error_code(error_summary),
+            )
+    finally:
+        release_pr_lock(
+            conn,
+            repo,
+            pr_number,
+            lock_owner=worker_id,
+            run_id=run_id,
+            force=False,
+        )
+
+    if status == "retry_scheduled":
+        return {
+            "run_id": run_id,
+            "status": status,
+            "error_summary": error_summary,
+            "logs_path": logs_path,
+            "commit_sha": commit_sha,
+            "checks": checks_summary,
+            "comment_posted": False,
+        }
 
     comment_body = _build_pr_comment(
         run_id=run_id,
@@ -253,11 +333,63 @@ def _finalize_git_changes(
 
 
 def _write_logs(workspace_dir: str, run_id: int, lines: list[str]) -> str:
-    logs_dir = Path(workspace_dir) / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    logs_file = logs_dir / f"autofix-run-{run_id}.log"
+    logs_file = get_run_log_path(
+        workspace_dir,
+        run_id,
+        relative_dir=get_settings().log_dir,
+    )
     logs_file.write_text("\n".join(lines), encoding="utf-8")
     return str(logs_file)
+
+
+def _finish_failed_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    error_summary: str,
+    logs_path: str,
+    *,
+    error_code: str,
+) -> tuple[str, str]:
+    non_retryable_error_codes = {
+        "unsupported_project_type",
+        "checks_failed",
+        "head_sha_mismatch",
+    }
+    plan = schedule_retry(
+        conn,
+        run_id,
+        error_code=error_code,
+        error_summary=error_summary,
+        base_delay_seconds=get_settings().retry_backoff_base_seconds,
+        max_delay_seconds=get_settings().retry_backoff_max_seconds,
+        non_retryable_error_codes=non_retryable_error_codes,
+    )
+    status = "retry_scheduled" if plan.scheduled else "failed"
+    if not plan.scheduled:
+        mark_run_finished(
+            conn=conn,
+            run_id=run_id,
+            status="failed",
+            error_summary=error_summary,
+            logs_path=logs_path,
+            last_error_code=error_code,
+        )
+        return status, error_summary
+
+    conn.execute(
+        "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (logs_path, run_id),
+    )
+    conn.commit()
+    return status, f"{error_summary}; retry_after={plan.retry_after}"
+
+
+def _infer_error_code(error_summary: str | None) -> str:
+    if not error_summary:
+        return "unknown_failure"
+    if ":" in error_summary:
+        return error_summary.split(":", 1)[0].strip() or "unknown_failure"
+    return error_summary.strip() or "unknown_failure"
 
 
 def _build_pr_comment(

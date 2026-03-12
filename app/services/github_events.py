@@ -29,6 +29,40 @@ class GitHubReviewEvent:
     raw_payload_json: str
 
 
+def extract_event_body(event_type: str, payload: Mapping[str, Any]) -> str | None:
+    normalized_type = event_type.strip().lower()
+    if normalized_type == "pull_request_review":
+        review = payload.get("review")
+        if isinstance(review, Mapping):
+            return _as_str(review.get("body"))
+        return None
+
+    if normalized_type in {"pull_request_review_comment", "issue_comment"}:
+        comment = payload.get("comment")
+        if isinstance(comment, Mapping):
+            return _as_str(comment.get("body"))
+        return None
+
+    return None
+
+
+def build_review_batch_id(normalized_review: Mapping[str, Any]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(normalized_review, ensure_ascii=True, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return digest[:16]
+
+
+def build_task_idempotency_key(
+    repo: str,
+    pr_number: int,
+    head_sha: str | None,
+    review_batch_id: str,
+) -> str:
+    stable_head_sha = (head_sha or "unknown").strip() or "unknown"
+    return f"task:{repo}:{pr_number}:{stable_head_sha}:{review_batch_id}"
+
+
 def extract_review_event(
     event_type: str, payload: Mapping[str, Any]
 ) -> GitHubReviewEvent | None:
