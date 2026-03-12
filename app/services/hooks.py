@@ -10,44 +10,62 @@ from app.db import connect_db
 def process_hook_event(
     payload: dict[str, Any], header_event_type: str
 ) -> dict[str, Any]:
-    event_name = str(payload.get("event") or header_event_type or "unknown")
-
-    with connect_db() as conn:
-        if event_name == "UserPromptSubmit":
-            session_id = _register_session(conn, payload)
-            linked_pr_number = _link_pr_for_session(conn, session_id, payload)
-            return {
-                "action": "session_registered",
-                "linked_pr_number": linked_pr_number,
-                "session_row_id": session_id,
-            }
-
-        if event_name in {"PostToolUse", "PostToolUseFailure"}:
-            result = _record_tool_event(conn, event_name, payload)
-            return {
-                "action": "tool_event_recorded",
-                "linked_pr_number": result["linked_pr_number"],
-                "event_key": result["event_key"],
-                "session_row_id": result["session_row_id"],
-            }
-
-    return {
+    event_name = _resolve_event_name(payload, header_event_type)
+    base_result: dict[str, Any] = {
         "action": "ignored",
         "linked_pr_number": None,
+        "event_key": None,
+        "session_row_id": None,
     }
+
+    try:
+        with connect_db() as conn:
+            if event_name == "UserPromptSubmit":
+                session_id = _register_session(conn, payload)
+                linked_pr_number = _link_pr_for_session(conn, session_id, payload)
+                base_result.update(
+                    {
+                        "action": "session_registered",
+                        "linked_pr_number": linked_pr_number,
+                        "session_row_id": session_id,
+                    }
+                )
+                return base_result
+
+            if event_name in {"PostToolUse", "PostToolUseFailure"}:
+                result = _record_tool_event(conn, event_name, payload)
+                base_result.update(
+                    {
+                        "action": "tool_event_recorded",
+                        "linked_pr_number": result["linked_pr_number"],
+                        "event_key": result["event_key"],
+                        "session_row_id": result["session_row_id"],
+                    }
+                )
+                return base_result
+    except Exception as exc:
+        base_result.update(
+            {
+                "action": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return base_result
+
+    return base_result
 
 
 def _register_session(conn: Any, payload: dict[str, Any]) -> int:
     repo = _extract_repo(payload)
     branch = _extract_branch(payload)
-    cwd = _extract_text(payload.get("cwd"))
-    session_key = _extract_text(payload.get("session_id"))
+    cwd = _extract_cwd(payload)
+    session_key = _extract_session_key(payload)
 
     existing = None
     if session_key:
         existing = conn.execute(
             """
-            SELECT id, metadata_json
+            SELECT id, repo, branch, cwd, metadata_json
             FROM sessions
             WHERE json_extract(metadata_json, '$.session_id') = ?
             ORDER BY id DESC
@@ -59,7 +77,7 @@ def _register_session(conn: Any, payload: dict[str, Any]) -> int:
     if existing is None and repo and branch:
         existing = conn.execute(
             """
-            SELECT id, metadata_json
+            SELECT id, repo, branch, cwd, metadata_json
             FROM sessions
             WHERE repo = ? AND branch = ? AND ended_at IS NULL
             ORDER BY id DESC
@@ -78,6 +96,9 @@ def _register_session(conn: Any, payload: dict[str, Any]) -> int:
     metadata_json = json.dumps(metadata, ensure_ascii=True, sort_keys=True)
 
     if existing:
+        resolved_repo = repo or str(existing["repo"])
+        resolved_branch = branch or str(existing["branch"])
+        resolved_cwd = cwd or _extract_text(existing["cwd"])
         conn.execute(
             """
             UPDATE sessions
@@ -85,9 +106,9 @@ def _register_session(conn: Any, payload: dict[str, Any]) -> int:
             WHERE id = ?
             """,
             (
-                repo or "unknown/unknown",
-                branch or "unknown",
-                cwd,
+                resolved_repo,
+                resolved_branch,
+                resolved_cwd,
                 metadata_json,
                 existing["id"],
             ),
@@ -245,7 +266,7 @@ def _link_pull_request(
 
 
 def _find_session(conn: Any, payload: dict[str, Any]) -> Any:
-    session_key = _extract_text(payload.get("session_id"))
+    session_key = _extract_session_key(payload)
     if session_key:
         row = conn.execute(
             """
@@ -278,74 +299,96 @@ def _find_session(conn: Any, payload: dict[str, Any]) -> Any:
 
 
 def _extract_repo(payload: dict[str, Any]) -> str | None:
-    value = payload.get("repo")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
+    for source in _candidate_maps(payload):
+        value = source.get("repo")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
 
-    repository = payload.get("repository")
-    if isinstance(repository, dict):
-        full_name = repository.get("full_name")
-        if isinstance(full_name, str) and full_name.strip():
-            return full_name.strip()
+        repository = source.get("repository")
+        if isinstance(repository, dict):
+            full_name = repository.get("full_name")
+            if isinstance(full_name, str) and full_name.strip():
+                return full_name.strip()
 
+    return None
+
+
+def _extract_session_key(payload: dict[str, Any]) -> str | None:
+    for source in _candidate_maps(payload):
+        session_id = source.get("session_id")
+        if isinstance(session_id, str) and session_id.strip():
+            return session_id.strip()
+    return None
+
+
+def _extract_cwd(payload: dict[str, Any]) -> str | None:
+    for source in _candidate_maps(payload):
+        cwd = source.get("cwd")
+        if isinstance(cwd, str) and cwd.strip():
+            return cwd.strip()
     return None
 
 
 def _extract_branch(payload: dict[str, Any]) -> str | None:
-    branch = payload.get("branch")
-    if isinstance(branch, str) and branch.strip():
-        value = branch.strip()
-        return value.removeprefix("refs/heads/")
+    for source in _candidate_maps(payload):
+        branch = source.get("branch")
+        if isinstance(branch, str) and branch.strip():
+            value = branch.strip()
+            return value.removeprefix("refs/heads/")
     return None
 
 
 def _extract_pr_number(payload: dict[str, Any]) -> int | None:
-    direct = payload.get("pr_number")
-    if isinstance(direct, int):
-        return direct
-    if isinstance(direct, str) and direct.isdigit():
-        return int(direct)
+    for source in _candidate_maps(payload):
+        direct = source.get("pr_number")
+        if isinstance(direct, int):
+            return direct
+        if isinstance(direct, str) and direct.isdigit():
+            return int(direct)
 
-    pull_request = payload.get("pull_request")
-    if isinstance(pull_request, dict):
-        number = pull_request.get("number")
-        if isinstance(number, int):
-            return number
-        if isinstance(number, str) and number.isdigit():
-            return int(number)
+        pull_request = source.get("pull_request")
+        if isinstance(pull_request, dict):
+            number = pull_request.get("number")
+            if isinstance(number, int):
+                return number
+            if isinstance(number, str) and number.isdigit():
+                return int(number)
 
     return None
 
 
 def _extract_head_sha(payload: dict[str, Any]) -> str | None:
-    for key in ("head_sha", "headSha", "commit_sha", "commitSha"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    for source in _candidate_maps(payload):
+        for key in ("head_sha", "headSha", "commit_sha", "commitSha"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
 
-    pull_request = payload.get("pull_request")
-    if isinstance(pull_request, dict):
-        head = pull_request.get("head")
-        if isinstance(head, dict):
-            sha = head.get("sha")
-            if isinstance(sha, str) and sha.strip():
-                return sha.strip()
+        pull_request = source.get("pull_request")
+        if isinstance(pull_request, dict):
+            head = pull_request.get("head")
+            if isinstance(head, dict):
+                sha = head.get("sha")
+                if isinstance(sha, str) and sha.strip():
+                    return sha.strip()
 
     return None
 
 
 def _extract_actor(payload: dict[str, Any]) -> str | None:
-    for key in ("tool_name", "tool", "actor"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    for source in _candidate_maps(payload):
+        for key in ("tool_name", "tool", "actor"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 
 def _extract_event_key(event_name: str, payload: dict[str, Any]) -> str:
-    explicit_key = payload.get("event_key")
-    if isinstance(explicit_key, str) and explicit_key.strip():
-        return explicit_key.strip()
+    for source in _candidate_maps(payload):
+        explicit_key = source.get("event_key")
+        if isinstance(explicit_key, str) and explicit_key.strip():
+            return explicit_key.strip()
 
     stable_payload = json.dumps(payload, ensure_ascii=True, sort_keys=True)
     digest = hashlib.sha1(f"{event_name}:{stable_payload}".encode("utf-8")).hexdigest()
@@ -368,3 +411,30 @@ def _read_metadata(raw_value: str | None) -> dict[str, Any]:
     if isinstance(loaded, dict):
         return loaded
     return {}
+
+
+def _resolve_event_name(payload: dict[str, Any], header_event_type: str) -> str:
+    for source in _candidate_maps(payload):
+        for key in ("event", "event_type", "hook_event_name"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    if isinstance(header_event_type, str) and header_event_type.strip():
+        return header_event_type.strip()
+
+    return "unknown"
+
+
+def _candidate_maps(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    maps: list[dict[str, Any]] = [payload]
+
+    nested_payload = payload.get("payload")
+    if isinstance(nested_payload, dict):
+        maps.append(nested_payload)
+
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        maps.append(metadata)
+
+    return maps
