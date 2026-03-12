@@ -61,3 +61,8 @@ Web pages:
 - `http://127.0.0.1:8000/runs/demo-run`
 
 Most APIs are placeholders in M1 and return a unified structure (`ok`, `message`, `event_type`, `received`).
+
+## Hook Samples
+
+- Hook configuration sample: `example_hooks.json`
+- Hook event guide and debugging notes: `docs/hook-samples.md`

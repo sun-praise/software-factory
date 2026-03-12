@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/json' -H 'x-event-type: UserPromptSubmit' --data-binary @-"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/json' -H 'x-event-type: PostToolUse' --data-binary @-"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/json' -H 'x-event-type: PostToolUseFailure' --data-binary @-"
+          }
+        ]
+      }
+    ]
+  }
+}
