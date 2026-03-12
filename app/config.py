@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     port: int = 8000
     db_path: str = "./data/software_factory.db"
     github_webhook_secret: str = ""
+    github_webhook_debounce_seconds: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
