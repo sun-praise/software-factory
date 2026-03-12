@@ -7,6 +7,7 @@ from app.schemas.hooks import (
     PostToolUseFailureEvent,
     UserPromptSubmitEvent,
 )
+from app.schemas.normalizer import IssueItem, NormalizedReview
 
 __all__ = [
     "BaseHookEvent",
@@ -14,4 +15,6 @@ __all__ = [
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
     "UserPromptSubmitEvent",
+    "IssueItem",
+    "NormalizedReview",
 ]

@@ -1,0 +1,34 @@
+[
+  {
+    "event_type": "pull_request_review",
+    "payload": {
+      "review": {
+        "state": "changes_requested",
+        "body": "Critical security issue in auth flow"
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "This can throw an exception",
+        "path": "app/main.py",
+        "line": 12
+      }
+    }
+  },
+  {
+    "event_type": "issue_comment",
+    "payload": {
+      "issue": {
+        "pull_request": {
+          "url": "https://example.test/pr/9"
+        }
+      },
+      "comment": {
+        "body": "Please refactor this for maintainability"
+      }
+    }
+  }
+]

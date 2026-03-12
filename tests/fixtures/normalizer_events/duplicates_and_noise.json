@@ -1,0 +1,82 @@
+[
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "This is a BUG",
+        "path": "app/main.py",
+        "line": 20
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "  this   is a bug  ",
+        "path": "app/main.py",
+        "line": 20
+      }
+    }
+  },
+  {
+    "event_type": "issue_comment",
+    "payload": {
+      "issue": {
+        "pull_request": {
+          "url": "https://example.test/pr/9"
+        }
+      },
+      "comment": {
+        "body": "thanks"
+      }
+    }
+  },
+  {
+    "event_type": "issue_comment",
+    "payload": {
+      "issue": {
+        "pull_request": {
+          "url": "https://example.test/pr/9"
+        }
+      },
+      "comment": {
+        "body": " THANKS "
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review",
+    "payload": {
+      "review": {
+        "state": "commented",
+        "body": ""
+      }
+    }
+  },
+  {
+    "event_type": "issue_comment",
+    "payload": {
+      "issue": {
+        "number": 9
+      },
+      "comment": {
+        "body": "this should not be included"
+      }
+    }
+  },
+  {
+    "event_type": "push",
+    "payload": {
+      "ref": "refs/heads/main"
+    }
+  },
+  {
+    "payload": {
+      "comment": {
+        "body": "missing event type"
+      }
+    }
+  },
+  "not an event"
+]
