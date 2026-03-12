@@ -141,6 +141,14 @@ python -m compileall app scripts
 
 说明：`compileall` 仅用于语法与导入层面的快速检查，不替代静态分析。建议按需增加 `ruff`、`mypy` 等工具。
 
+Worker 调试（M5）：
+
+```bash
+python scripts/run_worker.py --once
+```
+
+说明：MVP 默认单 worker 串行执行；多 worker 并发执行不在当前保证范围。
+
 ## CI 说明
 
 仓库当前包含两个工作流：

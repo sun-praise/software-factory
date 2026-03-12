@@ -4,7 +4,12 @@ import sqlite3
 from pathlib import Path
 
 from app.models import SCHEMA_SQL
-from app.services.agent_runner import RunnerOps, run_once
+from app.services.agent_runner import (
+    CHECK_COMMAND_TIMEOUT_SECONDS,
+    RunnerOps,
+    _default_executor,
+    run_once,
+)
 from app.services.queue import claim_next_queued_run, enqueue_autofix_run
 
 
@@ -125,3 +130,61 @@ def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None
     assert row is not None
     assert row["status"] == "failed"
     assert "ruff check" in str(row["error_summary"])
+
+
+def test_run_once_records_comment_failure_in_db(tmp_path: Path) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (False, "api unavailable"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert result["comment_posted"] is False
+    assert "pr_comment_failed" in str(result["error_summary"])
+
+    row = conn.execute(
+        "SELECT error_summary FROM autofix_runs WHERE id = ?", (run["id"],)
+    ).fetchone()
+    assert row is not None
+    assert "pr_comment_failed" in str(row["error_summary"])
+
+
+def test_default_executor_passes_timeout(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+
+        class _Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return _Result()
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = _default_executor("pytest -q", str(tmp_path))
+
+    assert captured["timeout"] == CHECK_COMMAND_TIMEOUT_SECONDS
+    assert captured["cwd"] == str(tmp_path)
+    assert result.returncode == 0

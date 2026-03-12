@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from pathlib import Path
+import re
 import shlex
 import sqlite3
 import subprocess
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from app.services.agent_prompt import (
@@ -23,6 +24,14 @@ from app.services.queue import mark_run_finished
 
 
 Executor = Callable[[str, str], Any]
+CHECK_COMMAND_TIMEOUT_SECONDS = 300
+
+_REDACTION_PATTERNS = (
+    re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
+    re.compile(r"(github_pat_[A-Za-z0-9_]{20,})"),
+    re.compile(r"(?i)(token\s*[=:]\s*)([^\s]+)"),
+    re.compile(r"(?i)(secret\s*[=:]\s*)([^\s]+)"),
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,7 @@ def run_once(
     ops: RunnerOps | None = None,
 ) -> dict[str, Any]:
     active_ops = ops or RunnerOps()
+    workspace = _validate_workspace_dir(workspace_dir)
     run_id = int(run["id"])
     repo = str(run.get("repo") or "")
     pr_number = int(run.get("pr_number") or 0)
@@ -54,6 +64,9 @@ def run_once(
     head_sha = _safe_text(run.get("head_sha")) or _safe_text(payload.get("head_sha"))
     branch = _resolve_branch(conn, run, payload)
     project_type = _safe_text(payload.get("project_type"))
+    commit_message = _safe_text(payload.get("commit_message")) or (
+        f"fix: apply autofix updates for PR #{pr_number}"
+    )
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
@@ -77,7 +90,7 @@ def run_once(
     ]
 
     for command in commands:
-        result = _coerce_result(execute(command, workspace_dir))
+        result = _coerce_result(execute(command, workspace))
         check_results.append(
             {
                 "command": command,
@@ -91,9 +104,9 @@ def run_once(
                 f"[check] {command}",
                 f"exit_code={result['returncode']}",
                 "stdout:",
-                result["stdout"],
+                _sanitize_log_text(result["stdout"]),
                 "stderr:",
-                result["stderr"],
+                _sanitize_log_text(result["stderr"]),
                 "",
             ]
         )
@@ -111,15 +124,15 @@ def run_once(
         log_lines.append(error_summary)
     else:
         status, commit_sha, error_summary = _finalize_git_changes(
-            repo_dir=workspace_dir,
+            repo_dir=workspace,
             branch=branch,
             head_sha=head_sha,
-            pr_number=pr_number,
+            commit_message=commit_message,
             active_ops=active_ops,
             log_lines=log_lines,
         )
 
-    logs_path = _write_logs(workspace_dir=workspace_dir, run_id=run_id, lines=log_lines)
+    logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
     mark_run_finished(
         conn=conn,
         run_id=run_id,
@@ -138,14 +151,24 @@ def run_once(
         logs_path=logs_path,
     )
     posted, comment_message = active_ops.post_pr_comment(
-        workspace_dir,
+        workspace,
         repo,
         pr_number,
         comment_body,
     )
     if not posted:
-        log_lines.append(f"pr_comment_failed: {comment_message}")
-        _write_logs(workspace_dir=workspace_dir, run_id=run_id, lines=log_lines)
+        comment_failure = f"pr_comment_failed: {comment_message}"
+        log_lines.append(comment_failure)
+        _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        error_summary = _merge_error_summary(error_summary, comment_failure)
+        mark_run_finished(
+            conn=conn,
+            run_id=run_id,
+            status=status,
+            commit_sha=commit_sha,
+            error_summary=error_summary,
+            logs_path=logs_path,
+        )
 
     return {
         "run_id": run_id,
@@ -162,7 +185,7 @@ def _finalize_git_changes(
     repo_dir: str,
     branch: str | None,
     head_sha: str | None,
-    pr_number: int,
+    commit_message: str,
     active_ops: RunnerOps,
     log_lines: list[str],
 ) -> tuple[str, str | None, str | None]:
@@ -178,7 +201,7 @@ def _finalize_git_changes(
 
     commit_result = active_ops.commit_and_push(
         repo_dir=repo_dir,
-        message=f"fix: apply autofix updates for PR #{pr_number}",
+        message=commit_message,
         branch=branch,
     )
     if commit_result.get("success"):
@@ -271,6 +294,7 @@ def _default_executor(
         check=False,
         capture_output=True,
         text=True,
+        timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
     )
 
 
@@ -295,3 +319,26 @@ def _safe_text(value: Any) -> str | None:
         if text:
             return text
     return None
+
+
+def _validate_workspace_dir(workspace_dir: str) -> str:
+    resolved = Path(workspace_dir).expanduser().resolve()
+    if not resolved.exists() or not resolved.is_dir():
+        raise ValueError(f"Invalid workspace_dir: {workspace_dir}")
+    return str(resolved)
+
+
+def _sanitize_log_text(text: str) -> str:
+    sanitized = text
+    for pattern in _REDACTION_PATTERNS:
+        if pattern.pattern.startswith("(?i)"):
+            sanitized = pattern.sub(lambda m: f"{m.group(1)}[REDACTED]", sanitized)
+        else:
+            sanitized = pattern.sub("[REDACTED]", sanitized)
+    return sanitized
+
+
+def _merge_error_summary(existing: str | None, new_error: str) -> str:
+    if not existing:
+        return new_error
+    return f"{existing}; {new_error}"

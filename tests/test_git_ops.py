@@ -37,6 +37,7 @@ def _patch_run(
         assert kwargs["check"] is False
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
+        assert kwargs["timeout"] == 30
         return result
 
     monkeypatch.setattr(subprocess, "run", fake_run)
