@@ -6,9 +6,11 @@ This document explains how to use `example_hooks.json` with the local endpoint:
 
 ## Event Purpose
 
-- `UserPromptSubmit`: sent when a user submits a new prompt. Use it to create or refresh a session record.
-- `PostToolUse`: sent after a tool succeeds. Use it to collect execution metadata for traceability.
-- `PostToolUseFailure`: sent after a tool fails. Use it to record errors and detect flaky steps.
+- `UserPromptSubmit`: sent when a user submits a new prompt.
+- `PostToolUse`: sent after a tool succeeds.
+- `PostToolUseFailure`: sent after a tool fails.
+
+Current endpoint behavior in this branch: it accepts JSON, reads event type from `x-event-type`, and echoes both values in the response.
 
 ## Payload Samples
 
@@ -70,17 +72,17 @@ Send sample events with curl:
 curl -i -X POST http://127.0.0.1:8000/hook-events \
   -H 'content-type: application/json' \
   -H 'x-event-type: UserPromptSubmit' \
-  -d '{"event":"UserPromptSubmit","session_id":"sess_demo_001"}'
+  -d '{"event":"UserPromptSubmit","session_id":"sess_demo_001","prompt":"Add hook sample documentation"}'
 
 curl -i -X POST http://127.0.0.1:8000/hook-events \
   -H 'content-type: application/json' \
   -H 'x-event-type: PostToolUse' \
-  -d '{"event":"PostToolUse","tool_name":"Edit","status":"success"}'
+  -d '{"event":"PostToolUse","session_id":"sess_demo_001","tool_name":"Edit","status":"success"}'
 
 curl -i -X POST http://127.0.0.1:8000/hook-events \
   -H 'content-type: application/json' \
   -H 'x-event-type: PostToolUseFailure' \
-  -d '{"event":"PostToolUseFailure","tool_name":"Bash","status":"failure"}'
+  -d '{"event":"PostToolUseFailure","session_id":"sess_demo_001","tool_name":"Bash","status":"failure"}'
 ```
 
 Expected response shape:
@@ -91,10 +93,15 @@ Expected response shape:
   "message": "Hook event received",
   "event_type": "PostToolUse",
   "received": {
-    "event": "PostToolUse"
+    "event": "PostToolUse",
+    "session_id": "sess_demo_001",
+    "tool_name": "Edit",
+    "status": "success"
   }
 }
 ```
+
+If `x-event-type` is missing, `event_type` becomes `"unknown"`.
 
 ## Troubleshooting
 
