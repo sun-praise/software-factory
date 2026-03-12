@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     bot_logins: tuple[str, ...] = ()
     noise_comment_patterns: tuple[str, ...] = ()
     managed_repo_prefixes: tuple[str, ...] = ()
+    non_retryable_error_codes: tuple[str, ...] = (
+        "unsupported_project_type",
+        "checks_failed",
+        "head_sha_mismatch",
+    )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"
     log_archive_subdir: str = "archive"
@@ -31,6 +36,7 @@ class Settings(BaseSettings):
         "bot_logins",
         "noise_comment_patterns",
         "managed_repo_prefixes",
+        "non_retryable_error_codes",
         mode="before",
     )
     @classmethod

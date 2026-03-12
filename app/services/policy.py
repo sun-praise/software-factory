@@ -104,3 +104,35 @@ def _resolve_max_autofix_per_pr(value: int | None) -> int:
     if limit < 0:
         raise ValueError("max_autofix_per_pr must be non-negative")
     return limit
+
+
+def _safe_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def reset_autofix_count_on_sha_change(
+    conn: sqlite3.Connection,
+    repo: str,
+    pr_number: int,
+    new_head_sha: str | None,
+) -> bool:
+    if not new_head_sha:
+        return False
+    row = conn.execute(
+        "SELECT head_sha FROM pull_requests WHERE repo = ? AND pr_number = ? LIMIT 1",
+        (repo, pr_number),
+    ).fetchone()
+    if row is None:
+        return False
+    old_sha = _safe_text(row["head_sha"])
+    if old_sha and old_sha != new_head_sha:
+        conn.execute(
+            "UPDATE pull_requests SET autofix_count = 0, head_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
+            (new_head_sha, repo, pr_number),
+        )
+        conn.commit()
+        return True
+    return False

@@ -132,7 +132,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                     event.repo,
                     event.pr_number,
                 )
-                if is_autofix_limit_reached(conn, event.repo, event.pr_number):
+                if remaining_quota == 0:
                     queue_status = "autofix_limit_reached"
                 else:
                     run_id = enqueue_autofix_run(

@@ -33,6 +33,9 @@ def init_db() -> None:
         _migrate_m6_columns(conn)
 
 
+ALLOWED_TABLES = {"pull_requests", "autofix_runs"}
+
+
 def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
     _ensure_columns(
         conn,
@@ -78,6 +81,8 @@ def _ensure_columns(
     table_name: str,
     expected_columns: dict[str, str],
 ) -> None:
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table_name}")
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     existing = {str(row[1]) for row in rows}
     for column_name, column_sql in expected_columns.items():

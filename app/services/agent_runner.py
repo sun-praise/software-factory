@@ -350,11 +350,7 @@ def _finish_failed_run(
     *,
     error_code: str,
 ) -> tuple[str, str]:
-    non_retryable_error_codes = {
-        "unsupported_project_type",
-        "checks_failed",
-        "head_sha_mismatch",
-    }
+    non_retryable_error_codes = set(get_settings().non_retryable_error_codes)
     plan = schedule_retry(
         conn,
         run_id,

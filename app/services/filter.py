@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from functools import lru_cache
 
 from app.config import get_settings
+
+
+@lru_cache(maxsize=64)
+def _compile_pattern(pattern: str) -> re.Pattern | None:
+    try:
+        return re.compile(pattern, flags=re.IGNORECASE)
+    except re.error:
+        return None
 
 
 def is_bot_actor(actor: str | None, *, bot_logins: Iterable[str] | None = None) -> bool:
@@ -139,12 +148,8 @@ def _normalize_value(value: str | None) -> str | None:
 
 
 def _pattern_matches(text: str, pattern: str) -> bool:
-    if not isinstance(pattern, str):
-        return False
-    candidate = pattern.strip()
-    if not candidate:
-        return False
-    try:
-        return re.search(candidate, text, flags=re.IGNORECASE) is not None
-    except re.error:
-        return re.search(re.escape(candidate), text, flags=re.IGNORECASE) is not None
+    compiled = _compile_pattern(pattern)
+    if compiled is None:
+        escaped = re.compile(re.escape(pattern), flags=re.IGNORECASE)
+        return escaped.search(text) is not None
+    return compiled.search(text) is not None

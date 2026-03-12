@@ -49,7 +49,7 @@ def acquire_pr_lock(
           AND (
               lock_owner IS NULL
               OR lock_expires_at IS NULL
-              OR lock_expires_at <= ?
+              OR lock_expires_at < ?
               OR lock_owner = ?
           )
         """,

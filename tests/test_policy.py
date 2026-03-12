@@ -9,6 +9,7 @@ from app.services.policy import (
     get_remaining_autofix_quota,
     increment_autofix_count,
     is_autofix_limit_reached,
+    reset_autofix_count_on_sha_change,
 )
 
 
@@ -116,3 +117,51 @@ def test_get_remaining_autofix_quota_rejects_negative_limit() -> None:
             15,
             max_autofix_per_pr=-1,
         )
+
+
+def test_reset_autofix_count_resets_when_sha_changes() -> None:
+    conn = _make_conn()
+    increment_autofix_count(conn, "acme/widgets", 20, amount=3, head_sha="abc123")
+    assert get_autofix_count(conn, "acme/widgets", 20) == 3
+
+    result = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 20, new_head_sha="def456"
+    )
+
+    assert result is True
+    assert get_autofix_count(conn, "acme/widgets", 20) == 0
+
+
+def test_reset_autofix_count_does_not_reset_when_sha_unchanged() -> None:
+    conn = _make_conn()
+    increment_autofix_count(conn, "acme/widgets", 21, amount=2, head_sha="abc123")
+    assert get_autofix_count(conn, "acme/widgets", 21) == 2
+
+    result = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 21, new_head_sha="abc123"
+    )
+
+    assert result is False
+    assert get_autofix_count(conn, "acme/widgets", 21) == 2
+
+
+def test_reset_autofix_count_returns_false_for_nonexistent_pr() -> None:
+    conn = _make_conn()
+
+    result = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 999, new_head_sha="abc123"
+    )
+
+    assert result is False
+
+
+def test_reset_autofix_count_returns_false_for_empty_sha() -> None:
+    conn = _make_conn()
+    increment_autofix_count(conn, "acme/widgets", 22, amount=1, head_sha="abc123")
+
+    result = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 22, new_head_sha=None
+    )
+
+    assert result is False
+    assert get_autofix_count(conn, "acme/widgets", 22) == 1
