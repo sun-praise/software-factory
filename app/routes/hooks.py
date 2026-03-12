@@ -13,6 +13,5 @@ async def hook_events(event: HookEvent) -> dict[str, object]:
         "ok": True,
         "message": "Hook event received",
         "event_type": event.event,
-        "event": normalized_event,
         "received": normalized_event,
     }

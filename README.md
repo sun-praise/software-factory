@@ -52,7 +52,7 @@ curl -i -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/
 curl -i -X POST http://127.0.0.1:8000/github/webhook -H 'x-github-event: pull_request_review' -H 'content-type: application/json' -d '{"action":"submitted"}'
 ```
 
-`/hook-events` validates payload schema for `UserPromptSubmit`, `PostToolUse`, and `PostToolUseFailure`. Invalid payloads return HTTP `422`.
+`/hook-events` validates payload schema for `UserPromptSubmit`, `PostToolUse`, and `PostToolUseFailure`. Invalid payloads return HTTP `422`. `timestamp` must be ISO-8601 with timezone (for example `Z`).
 
 Web pages:
 
