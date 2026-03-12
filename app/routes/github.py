@@ -8,7 +8,20 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.config import get_settings
 from app.db import connect_db
 from app.services.debounce import InMemoryDebounceBackend
-from app.services.github_events import extract_review_event, insert_review_event
+from app.services.filter import get_filter_reason
+from app.services.github_events import (
+    build_review_batch_id,
+    build_task_idempotency_key,
+    extract_event_body,
+    extract_review_event,
+    insert_review_event,
+)
+from app.services.policy import (
+    ensure_pull_request_row,
+    get_remaining_autofix_quota,
+    is_autofix_limit_reached,
+    reset_autofix_count_on_sha_change,
+)
 from app.services.normalizer import normalize_review_events
 from app.services.queue import enqueue_autofix_run
 from app.services.github_signature import (
@@ -69,9 +82,45 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             "signature": signature_result.status,
         }
 
+    filter_reason = get_filter_reason(
+        event.repo,
+        actor=event.actor,
+        body=extract_event_body(event_type, payload),
+    )
+    if filter_reason is not None:
+        return {
+            "ok": True,
+            "message": "GitHub webhook received",
+            "event_type": event_type,
+            "ignored": True,
+            "reason": filter_reason,
+            "signature": signature_result.status,
+            "repo": event.repo,
+            "pr_number": event.pr_number,
+        }
+
     run_id: int | None = None
+    idempotency_key: str | None = None
+    queue_status = "not_queued"
+    remaining_quota: int | None = None
     try:
         with connect_db() as conn:
+            # 先调用 reset 函数是为了在 SHA 变更时重置 autofix 计数
+            # 对于新 PR（数据库无记录），reset 返回 False 是预期行为
+            # head_sha 的更新由后续 ensure_pull_request_row 统一处理
+            reset_autofix_count_on_sha_change(
+                conn,
+                event.repo,
+                event.pr_number,
+                event.head_sha,
+            )
+            ensure_pull_request_row(
+                conn,
+                event.repo,
+                event.pr_number,
+                branch=_extract_branch_from_payload(payload),
+                head_sha=event.head_sha,
+            )
             insert_status = insert_review_event(conn, event)
             if insert_status == "inserted":
                 normalized_review = _build_normalized_review(
@@ -80,14 +129,35 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                     pr_number=event.pr_number,
                     head_sha=event.head_sha,
                 )
-                run_id = enqueue_autofix_run(
-                    conn=conn,
+                review_batch_id = build_review_batch_id(normalized_review)
+                normalized_review["review_batch_id"] = review_batch_id
+                idempotency_key = build_task_idempotency_key(
                     repo=event.repo,
                     pr_number=event.pr_number,
                     head_sha=event.head_sha,
-                    normalized_review_json=normalized_review,
-                    trigger_source="github_webhook",
+                    review_batch_id=review_batch_id,
                 )
+                remaining_quota = get_remaining_autofix_quota(
+                    conn,
+                    event.repo,
+                    event.pr_number,
+                )
+                if remaining_quota == 0:
+                    queue_status = "autofix_limit_reached"
+                else:
+                    run_id = enqueue_autofix_run(
+                        conn=conn,
+                        repo=event.repo,
+                        pr_number=event.pr_number,
+                        head_sha=event.head_sha,
+                        normalized_review_json=normalized_review,
+                        trigger_source="github_webhook",
+                        idempotency_key=idempotency_key,
+                        max_attempts=get_settings().max_retry_attempts,
+                    )
+                    queue_status = "queued" if run_id is not None else "duplicate_task"
+            else:
+                queue_status = "duplicate_event"
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -109,8 +179,11 @@ async def github_webhook(request: Request) -> dict[str, Any]:
         "repo": event.repo,
         "pr_number": event.pr_number,
         "event_key": event.event_key,
+        "idempotency_key": idempotency_key,
         "insert_status": insert_status,
+        "queue_status": queue_status,
         "queued_run_id": run_id,
+        "remaining_quota": remaining_quota,
         "debounce_window_seconds": debounce_backend.window_seconds,
         "debounce_ready": debounce_backend.is_ready(event.repo, event.pr_number),
     }

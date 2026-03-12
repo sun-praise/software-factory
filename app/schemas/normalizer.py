@@ -21,6 +21,7 @@ class NormalizedReview(BaseModel):
     repo: NonEmptyStr
     pr_number: PositiveInt
     head_sha: NonEmptyStr | None = None
+    review_batch_id: NonEmptyStr | None = None
     must_fix: list[IssueItem] = Field(default_factory=list)
     should_fix: list[IssueItem] = Field(default_factory=list)
     ignore: list[IssueItem] = Field(default_factory=list)

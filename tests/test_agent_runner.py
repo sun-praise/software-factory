@@ -84,9 +84,15 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
     row = conn.execute(
         "SELECT * FROM autofix_runs WHERE id = ?", (run["id"],)
     ).fetchone()
+    pr_row = conn.execute(
+        "SELECT autofix_count FROM pull_requests WHERE repo = ? AND pr_number = ?",
+        ("acme/widgets", 7),
+    ).fetchone()
     assert row is not None
     assert row["status"] == "success"
     assert row["logs_path"] == str(logs_path)
+    assert pr_row is not None
+    assert pr_row["autofix_count"] == 1
 
 
 def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None:
@@ -212,6 +218,40 @@ def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
     assert result["status"] == "failed"
     assert "unsupported_project_type" in str(result["error_summary"])
     assert result["comment_posted"] is False
+
+
+def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": False,
+            "commit_sha": None,
+            "error": "push_rejected",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    row = conn.execute(
+        "SELECT status, retry_after, logs_path FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert result["status"] == "retry_scheduled"
+    assert row is not None
+    assert row["status"] == "retry_scheduled"
+    assert row["retry_after"] is not None
+    assert row["logs_path"] == str(Path(result["logs_path"]))
 
 
 def test_sanitize_log_text_redacts_tokens() -> None:

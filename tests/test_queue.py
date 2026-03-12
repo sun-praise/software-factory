@@ -26,6 +26,7 @@ def test_enqueue_claim_finish_status_flow() -> None:
         head_sha="abc123",
         normalized_review_json={"summary": "1 blocking issue"},
     )
+    assert run_id is not None
 
     first_claim = claim_next_queued_run(conn)
     second_claim = claim_next_queued_run(conn)
@@ -49,3 +50,45 @@ def test_enqueue_claim_finish_status_flow() -> None:
     assert row["commit_sha"] == "deadbeef"
     assert row["logs_path"] == "logs/autofix-run-1.log"
     assert row["finished_at"] is not None
+
+
+def test_enqueue_autofix_run_deduplicates_idempotency_key() -> None:
+    conn = _make_conn()
+
+    first = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha="abc123",
+        normalized_review_json={"summary": "1 blocking issue"},
+        idempotency_key="task:acme/widgets:42:abc123:batch-1",
+    )
+    second = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha="abc123",
+        normalized_review_json={"summary": "1 blocking issue"},
+        idempotency_key="task:acme/widgets:42:abc123:batch-1",
+    )
+
+    assert isinstance(first, int)
+    assert second is None
+
+
+def test_claim_next_queued_run_promotes_due_retry() -> None:
+    conn = _make_conn()
+    conn.execute(
+        """
+        INSERT INTO autofix_runs (repo, pr_number, status, retry_after)
+        VALUES (?, ?, 'retry_scheduled', '2000-01-01T00:00:00Z')
+        """,
+        ("acme/widgets", 8),
+    )
+    conn.commit()
+
+    claimed = claim_next_queued_run(conn, worker_id="worker-a", max_running_runs=2)
+
+    assert claimed is not None
+    assert claimed["status"] == "running"
+    assert claimed["worker_id"] == "worker-a"

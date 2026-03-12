@@ -29,6 +29,7 @@ def test_normalized_review_valid_object() -> None:
         "repo": "acme/widgets",
         "pr_number": 42,
         "head_sha": "abc123",
+        "review_batch_id": None,
         "must_fix": [
             {
                 "source": "review_comment",

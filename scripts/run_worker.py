@@ -13,8 +13,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import connect_db, init_db
+from app.config import get_settings
 from app.services.agent_runner import run_once
 from app.services.queue import claim_next_queued_run, mark_run_finished
+from app.services.retry import schedule_retry
+from app.services.logging_config import get_run_log_path
 
 
 _STOP_WORKER = False
@@ -27,25 +30,50 @@ def _handle_stop_signal(signum: int, _frame: object) -> None:
 
 
 def _process_one(workspace_dir: str) -> bool:
+    settings = get_settings()
     with connect_db() as conn:
-        run = claim_next_queued_run(conn)
+        run = claim_next_queued_run(
+            conn,
+            worker_id=settings.worker_id,
+            max_running_runs=settings.max_concurrent_runs,
+        )
         if run is None:
             return False
         try:
             run_once(conn=conn, run=run, workspace_dir=workspace_dir)
         except Exception as exc:
             run_id = int(run["id"])
-            logs_dir = Path(workspace_dir) / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            crash_log = logs_dir / f"autofix-run-{run_id}-worker-crash.log"
-            crash_log.write_text(traceback.format_exc(), encoding="utf-8")
-            mark_run_finished(
-                conn=conn,
-                run_id=run_id,
-                status="failed",
-                error_summary=f"worker_exception: {type(exc).__name__}: {exc}",
-                logs_path=str(crash_log),
+            crash_log = get_run_log_path(
+                workspace_dir,
+                run_id,
+                relative_dir=settings.log_dir,
+                prefix="autofix-run-worker-crash",
             )
+            crash_log.write_text(traceback.format_exc(), encoding="utf-8")
+            error_summary = f"worker_exception: {type(exc).__name__}: {exc}"
+            plan = schedule_retry(
+                conn,
+                run_id,
+                error_code="worker_exception",
+                error_summary=error_summary,
+                base_delay_seconds=settings.retry_backoff_base_seconds,
+                max_delay_seconds=settings.retry_backoff_max_seconds,
+            )
+            if not plan.scheduled:
+                mark_run_finished(
+                    conn=conn,
+                    run_id=run_id,
+                    status="failed",
+                    error_summary=error_summary,
+                    logs_path=str(crash_log),
+                    last_error_code="worker_exception",
+                )
+            else:
+                conn.execute(
+                    "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (str(crash_log), run_id),
+                )
+                conn.commit()
     return True
 
 
