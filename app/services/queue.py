@@ -177,6 +177,11 @@ def mark_run_finished(
 
 
 def _promote_due_retries(conn: sqlite3.Connection) -> None:
+    """
+    将到期的重试任务从 'retry_scheduled' 状态提升为 'queued' 状态。
+
+    注意：此函数不执行 commit，由调用者统一管理事务，避免多次 commit 导致的性能问题。
+    """
     now_value = _utc_now_timestamp()
     conn.execute(
         """
@@ -189,7 +194,6 @@ def _promote_due_retries(conn: sqlite3.Connection) -> None:
         """,
         (now_value,),
     )
-    conn.commit()
 
 
 def _utc_now_timestamp() -> str:

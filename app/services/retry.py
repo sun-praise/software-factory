@@ -6,6 +6,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
+# 终止状态集合：处于这些状态的 autofix run 不会进行重试
+# - success: 已成功完成
+# - cancelled: 已被用户或系统取消
 TERMINAL_STATUSES = {"success", "cancelled"}
 
 
@@ -16,6 +19,21 @@ class RetryPlan:
     retry_after: str | None
     delay_seconds: int | None
     next_attempt_count: int
+
+
+@dataclass
+class RetryConfig:
+    """重试配置参数
+
+    Attributes:
+        base_delay_seconds: 基础延迟秒数，首次重试的等待时间
+        max_delay_seconds: 最大延迟秒数，指数退避的上限
+        non_retryable_error_codes: 不可重试的错误代码集合，遇到这些错误将终止重试
+    """
+
+    base_delay_seconds: int = 30
+    max_delay_seconds: int = 1800
+    non_retryable_error_codes: set[str] | None = None
 
 
 def should_retry(
@@ -67,10 +85,18 @@ def schedule_retry(
     error_code: str | None = None,
     error_summary: str | None = None,
     now: datetime | None = None,
+    config: RetryConfig | None = None,
     base_delay_seconds: int = 30,
     max_delay_seconds: int = 1800,
     non_retryable_error_codes: set[str] | None = None,
 ) -> RetryPlan:
+    if config is None:
+        config = RetryConfig(
+            base_delay_seconds=base_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+            non_retryable_error_codes=non_retryable_error_codes,
+        )
+
     row = conn.execute(
         """
         SELECT id, status, attempt_count, max_attempts, retryable
@@ -96,7 +122,7 @@ def schedule_retry(
         max_attempts=max_attempts,
         retryable=retryable,
         error_code=error_code,
-        non_retryable_error_codes=non_retryable_error_codes,
+        non_retryable_error_codes=config.non_retryable_error_codes,
     ):
         conn.execute(
             """
@@ -113,8 +139,8 @@ def schedule_retry(
             (
                 0
                 if error_code
-                and non_retryable_error_codes
-                and error_code in non_retryable_error_codes
+                and config.non_retryable_error_codes
+                and error_code in config.non_retryable_error_codes
                 else int(retryable),
                 error_code,
                 error_time,
@@ -134,8 +160,8 @@ def schedule_retry(
     retry_number = max(1, attempt_count)
     delay_seconds = compute_backoff_seconds(
         retry_number=retry_number,
-        base_seconds=base_delay_seconds,
-        max_seconds=max_delay_seconds,
+        base_seconds=config.base_delay_seconds,
+        max_seconds=config.max_delay_seconds,
     )
     retry_after = _to_timestamp(current_time + timedelta(seconds=delay_seconds))
     next_attempt_count = attempt_count + 1

@@ -96,7 +96,7 @@ def release_pr_lock(
             lock_expires_at = NULL,
             updated_at = CURRENT_TIMESTAMP
         WHERE {" AND ".join(conditions)}
-        """,
+        """,  # nosec B608: conditions只包含硬编码SQL片段，参数值通过参数化查询传递
         tuple(parameters),
     )
     conn.commit()

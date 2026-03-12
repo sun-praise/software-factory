@@ -20,6 +20,7 @@ from app.services.policy import (
     ensure_pull_request_row,
     get_remaining_autofix_quota,
     is_autofix_limit_reached,
+    reset_autofix_count_on_sha_change,
 )
 from app.services.normalizer import normalize_review_events
 from app.services.queue import enqueue_autofix_run
@@ -110,6 +111,12 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                 event.pr_number,
                 branch=_extract_branch_from_payload(payload),
                 head_sha=event.head_sha,
+            )
+            reset_autofix_count_on_sha_change(
+                conn,
+                event.repo,
+                event.pr_number,
+                event.head_sha,
             )
             insert_status = insert_review_event(conn, event)
             if insert_status == "inserted":

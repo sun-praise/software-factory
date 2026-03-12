@@ -81,6 +81,14 @@ def _ensure_columns(
     table_name: str,
     expected_columns: dict[str, str],
 ) -> None:
+    """
+    Ensure table has expected columns, adding missing ones.
+
+    Security: This function uses SQL string formatting, so we enforce:
+    1. table_name must be in ALLOWED_TABLES whitelist
+    2. column_name must be alphanumeric (with underscores only)
+    3. column_sql is trusted as it comes from hardcoded migration data
+    """
     if table_name not in ALLOWED_TABLES:
         raise ValueError(f"Invalid table name: {table_name}")
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -88,4 +96,6 @@ def _ensure_columns(
     for column_name, column_sql in expected_columns.items():
         if column_name in existing:
             continue
+        if not column_name.replace("_", "").isalnum():
+            raise ValueError(f"Invalid column name: {column_name}")
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
