@@ -67,6 +67,8 @@ def claim_next_queued_run(
     max_running_runs: int | None = None,
 ) -> dict[str, Any] | None:
     _promote_due_retries(conn)
+    # 竞态窗口：promote 后、claim 前可能有其他 worker 已 claim 任务
+    # 这是可接受的竞态 - 任务最终会被处理
     if max_running_runs is not None and not can_start_new_run(conn, max_running_runs):
         return None
 

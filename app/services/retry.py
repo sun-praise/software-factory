@@ -6,9 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-# 终止状态集合：处于这些状态的 autofix run 不会进行重试
-# - success: 已成功完成
-# - cancelled: 已被用户或系统取消
+# 终态：success（成功完成）和 cancelled（用户主动取消，不应自动重试）
 TERMINAL_STATUSES = {"success", "cancelled"}
 
 
