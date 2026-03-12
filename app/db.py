@@ -91,11 +91,11 @@ def _ensure_columns(
     """
     if table_name not in ALLOWED_TABLES:
         raise ValueError(f"Invalid table name: {table_name}")
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()  # nosec B608: table_name validated against ALLOWED_TABLES whitelist above
     existing = {str(row[1]) for row in rows}
     for column_name, column_sql in expected_columns.items():
         if column_name in existing:
             continue
         if not column_name.replace("_", "").isalnum():
             raise ValueError(f"Invalid column name: {column_name}")
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")  # nosec B608: table_name and column_name validated above

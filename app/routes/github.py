@@ -105,6 +105,9 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     remaining_quota: int | None = None
     try:
         with connect_db() as conn:
+            # 先调用 reset 函数是为了在 SHA 变更时重置 autofix 计数
+            # 对于新 PR（数据库无记录），reset 返回 False 是预期行为
+            # head_sha 的更新由后续 ensure_pull_request_row 统一处理
             reset_autofix_count_on_sha_change(
                 conn,
                 event.repo,

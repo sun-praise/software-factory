@@ -137,8 +137,8 @@ def reset_autofix_count_on_sha_change(
     old_sha = _safe_text(row["head_sha"])
     if old_sha and old_sha != new_head_sha:
         conn.execute(
-            "UPDATE pull_requests SET autofix_count = 0, head_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
-            (new_head_sha, repo, pr_number),
+            "UPDATE pull_requests SET autofix_count = 0, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
+            (repo, pr_number),
         )
         return True
     return False
