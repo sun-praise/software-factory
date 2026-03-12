@@ -105,18 +105,18 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     remaining_quota: int | None = None
     try:
         with connect_db() as conn:
+            reset_autofix_count_on_sha_change(
+                conn,
+                event.repo,
+                event.pr_number,
+                event.head_sha,
+            )
             ensure_pull_request_row(
                 conn,
                 event.repo,
                 event.pr_number,
                 branch=_extract_branch_from_payload(payload),
                 head_sha=event.head_sha,
-            )
-            reset_autofix_count_on_sha_change(
-                conn,
-                event.repo,
-                event.pr_number,
-                event.head_sha,
             )
             insert_status = insert_review_event(conn, event)
             if insert_status == "inserted":

@@ -49,6 +49,8 @@ def acquire_pr_lock(
           AND (
               lock_owner IS NULL
               OR lock_expires_at IS NULL
+              -- 使用 `<` 而非 `<=` 是有意设计：允许锁在边界时刻被其他 worker 获取，
+              -- 这是可重入设计的一部分，避免在精确的过期时间点产生竞争
               OR lock_expires_at < ?
               OR lock_owner = ?
           )

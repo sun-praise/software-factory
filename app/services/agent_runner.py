@@ -191,7 +191,7 @@ def run_once(
 
         checks_summary = active_ops.summarize_check_results(check_results)
         status = "failed"
-        error_summary: str | None = None
+        error_summary = None
         commit_sha: str | None = None
 
         if checks_summary["overall_status"] != "passed":
