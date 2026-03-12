@@ -66,10 +66,10 @@ def claim_next_queued_run(
     worker_id: str | None = None,
     max_running_runs: int | None = None,
 ) -> dict[str, Any] | None:
+    conn.execute("BEGIN IMMEDIATE")
     _promote_due_retries(conn)
-    # 竞态窗口：promote 后、claim 前可能有其他 worker 已 claim 任务
-    # 这是可接受的竞态 - 任务最终会被处理
     if max_running_runs is not None and not can_start_new_run(conn, max_running_runs):
+        conn.rollback()
         return None
 
     timestamp = _utc_now_timestamp()
@@ -96,6 +96,7 @@ def claim_next_queued_run(
         )
         row = cursor.fetchone()
         if row is None:
+            conn.rollback()
             return None
         conn.commit()
         return _to_dict(row, cursor)
@@ -103,7 +104,6 @@ def claim_next_queued_run(
         if "RETURNING" not in str(exc).upper():
             raise
 
-    conn.execute("BEGIN IMMEDIATE")
     selected = conn.execute(
         """
         SELECT id

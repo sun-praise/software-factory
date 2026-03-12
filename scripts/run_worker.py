@@ -16,7 +16,7 @@ from app.db import connect_db, init_db
 from app.config import get_settings
 from app.services.agent_runner import run_once
 from app.services.queue import claim_next_queued_run, mark_run_finished
-from app.services.retry import schedule_retry
+from app.services.retry import RetryConfig, schedule_retry
 from app.services.logging_config import get_run_log_path
 
 
@@ -51,13 +51,16 @@ def _process_one(workspace_dir: str) -> bool:
             )
             crash_log.write_text(traceback.format_exc(), encoding="utf-8")
             error_summary = f"worker_exception: {type(exc).__name__}: {exc}"
+            config = RetryConfig(
+                base_delay_seconds=settings.retry_backoff_base_seconds,
+                max_delay_seconds=settings.retry_backoff_max_seconds,
+            )
             plan = schedule_retry(
                 conn,
                 run_id,
                 error_code="worker_exception",
                 error_summary=error_summary,
-                base_delay_seconds=settings.retry_backoff_base_seconds,
-                max_delay_seconds=settings.retry_backoff_max_seconds,
+                config=config,
             )
             if not plan.scheduled:
                 mark_run_finished(
