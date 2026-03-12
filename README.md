@@ -48,7 +48,7 @@ Use curl for quick debugging while developing endpoints:
 
 ```bash
 curl -i http://127.0.0.1:8000/healthz
-curl -i -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/json' -d '{"event":"UserPromptSubmit","session_id":"sess-1","repo":"sun-praise/software-factory","branch":"feat/m2-hooks-schema","cwd":"/workspace/software-factory","timestamp":"2026-03-12T10:00:00Z","metadata":{"client":"opencode"},"payload":{"prompt":"hello"}}'
+curl -i -X POST http://127.0.0.1:8000/hook-events -H 'content-type: application/json' -H 'x-event-type: UserPromptSubmit' -d '{"event":"UserPromptSubmit"}'
 curl -i -X POST http://127.0.0.1:8000/github/webhook -H 'x-github-event: pull_request_review' -H 'content-type: application/json' -d '{"action":"submitted"}'
 ```
 
@@ -61,3 +61,8 @@ Web pages:
 - `http://127.0.0.1:8000/runs/demo-run`
 
 Most APIs are placeholders in M1 and return a unified structure (`ok`, `message`, `event_type`, `received`).
+
+## Hook Samples
+
+- Hook configuration sample: `example_hooks.json`
+- Hook event guide and debugging notes: `docs/hook-samples.md`
