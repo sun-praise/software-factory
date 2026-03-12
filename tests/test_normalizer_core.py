@@ -94,3 +94,23 @@ def test_issue_comment_without_pr_reference_is_ignored() -> None:
     assert result["should_fix"] == []
     assert result["ignore"] == []
     assert result["summary"] == "0 blocking issues, 0 suggestions, 0 ignored"
+
+
+def test_huge_line_number_string_is_treated_as_none() -> None:
+    events = [
+        {
+            "event_type": "pull_request_review_comment",
+            "payload": {
+                "comment": {
+                    "body": "null handling issue",
+                    "path": "app/main.py",
+                    "line": str(2**200),
+                }
+            },
+        }
+    ]
+
+    result = normalize_review_events("acme/widgets", 9, events)
+
+    assert len(result["must_fix"]) == 1
+    assert result["must_fix"][0]["line"] is None

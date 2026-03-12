@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
+import sys
 from typing import Any, Mapping
+
+
+logger = logging.getLogger(__name__)
 
 
 _IGNORE_TEXTS = {
@@ -28,11 +33,13 @@ def normalize_review_events(
 
     for event in events:
         if not isinstance(event, Mapping):
+            logger.debug("Skip non-mapping review event: %r", event)
             continue
 
         event_type_raw = event.get("event_type")
         payload_raw = event.get("payload")
         if not isinstance(event_type_raw, str) or not isinstance(payload_raw, Mapping):
+            logger.debug("Skip invalid event envelope: %r", event)
             continue
 
         event_type = event_type_raw.strip().lower()
@@ -40,6 +47,7 @@ def normalize_review_events(
 
         candidate = _extract_candidate(event_type, payload)
         if candidate is None:
+            logger.debug("Skip unsupported or incomplete event type=%s", event_type)
             continue
 
         normalized_text = _normalize_text_for_dedupe(candidate["text"])
@@ -178,9 +186,14 @@ def _as_text(value: Any) -> str:
 
 def _as_int(value: Any) -> int | None:
     if isinstance(value, int):
+        if value < 0 or value > sys.maxsize:
+            return None
         return value
     if isinstance(value, str) and value.isdigit():
-        return int(value)
+        parsed = int(value)
+        if parsed > sys.maxsize:
+            return None
+        return parsed
     return None
 
 
