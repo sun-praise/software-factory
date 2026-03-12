@@ -114,7 +114,7 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
     calls = _patch_run(
         monkeypatch,
         [
-            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (["git", "add", "-u"], _cp(["git", "add", "-u"])),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
@@ -125,7 +125,7 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
     result = git_ops.commit_and_push("/repo", "msg")
     assert result == {"success": False, "commit_sha": None, "error": "no_changes"}
     assert calls == [
-        ["git", "add", "-A"],
+        ["git", "add", "-u"],
         ["git", "diff", "--cached", "--quiet"],
     ]
 
@@ -134,7 +134,7 @@ def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
     calls = _patch_run(
         monkeypatch,
         [
-            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (["git", "add", "-u"], _cp(["git", "add", "-u"])),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
@@ -170,7 +170,7 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
     calls = _patch_run(
         monkeypatch,
         [
-            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (["git", "add", "-u"], _cp(["git", "add", "-u"])),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),

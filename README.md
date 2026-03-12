@@ -65,6 +65,11 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
+运行要求：
+
+- Python 3.11+
+- SQLite 3.35+（`autofix_runs` 队列 claim 使用 `RETURNING`，低版本会自动降级到兼容路径）
+
 2) 配置环境变量
 
 ```bash

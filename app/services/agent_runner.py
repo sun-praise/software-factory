@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +39,7 @@ class RunnerOps:
 
 
 def run_once(
-    conn: Any,
+    conn: sqlite3.Connection,
     run: dict[str, Any],
     workspace_dir: str,
     executor: Executor | None = None,
@@ -224,7 +225,7 @@ def _build_pr_comment(
 
 
 def _resolve_branch(
-    conn: Any, run: Mapping[str, Any], payload: Mapping[str, Any]
+    conn: sqlite3.Connection, run: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> str | None:
     from_payload = _safe_text(payload.get("branch"))
     if from_payload:

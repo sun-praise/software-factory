@@ -134,6 +134,7 @@ def _build_normalized_review(
 
     events: list[dict[str, Any]] = []
     branch: str | None = None
+    project_type: str | None = None
     for row in rows:
         event_type = row["event_type"]
         payload = _parse_row_payload(row["raw_payload_json"])
@@ -141,6 +142,8 @@ def _build_normalized_review(
             continue
         if branch is None:
             branch = _extract_branch_from_payload(payload)
+        if project_type is None:
+            project_type = _extract_project_type_from_payload(payload)
         events.append({"event_type": event_type, "payload": payload})
 
     normalized = normalize_review_events(
@@ -150,7 +153,7 @@ def _build_normalized_review(
         head_sha=head_sha,
     )
     normalized["branch"] = branch
-    normalized["project_type"] = "python"
+    normalized["project_type"] = project_type or "python"
     return normalized
 
 
@@ -175,3 +178,22 @@ def _extract_branch_from_payload(payload: dict[str, Any]) -> str | None:
     if isinstance(ref, str) and ref.strip():
         return ref.strip()
     return None
+
+
+def _extract_project_type_from_payload(payload: dict[str, Any]) -> str | None:
+    repository = payload.get("repository")
+    if not isinstance(repository, dict):
+        return None
+    language = repository.get("language")
+    if not isinstance(language, str):
+        return None
+
+    normalized = language.strip().lower()
+    mapping = {
+        "python": "python",
+        "javascript": "node",
+        "typescript": "node",
+        "go": "go",
+        "rust": "rust",
+    }
+    return mapping.get(normalized)

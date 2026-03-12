@@ -4,14 +4,32 @@ import subprocess
 from typing import Sequence
 
 
+GIT_COMMAND_TIMEOUT_SECONDS = 30
+GH_COMMAND_TIMEOUT_SECONDS = 30
+
+
 def _run_git(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=repo_dir,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raw_stderr = exc.stderr or ""
+        if isinstance(raw_stderr, bytes):
+            stderr = raw_stderr.decode("utf-8", errors="replace").strip()
+        else:
+            stderr = str(raw_stderr).strip()
+        message = (
+            stderr or f"git command timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s"
+        )
+        return subprocess.CompletedProcess(
+            args=["git", *args], returncode=124, stdout="", stderr=message
+        )
 
 
 def _pick_message(result: subprocess.CompletedProcess[str]) -> str:
@@ -44,7 +62,7 @@ def commit_and_push(
     remote: str = "origin",
     branch: str | None = None,
 ) -> dict:
-    add_result = _run_git(repo_dir, ["add", "-A"])
+    add_result = _run_git(repo_dir, ["add", "-u"])
     if add_result.returncode != 0:
         return {
             "success": False,
@@ -116,22 +134,26 @@ def post_pr_comment(
     pr_number: int,
     body: str,
 ) -> tuple[bool, str]:
-    result = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "comment",
-            str(pr_number),
-            "--repo",
-            repo,
-            "--body",
-            body,
-        ],
-        cwd=repo_dir,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "comment",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--body",
+                body,
+            ],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"gh pr comment timed out after {GH_COMMAND_TIMEOUT_SECONDS}s"
     if result.returncode == 0:
         output = result.stdout.strip() or "comment_posted"
         return True, output

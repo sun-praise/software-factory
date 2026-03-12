@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 
 def enqueue_autofix_run(
@@ -22,29 +22,69 @@ def enqueue_autofix_run(
         """,
         (repo, pr_number, head_sha, trigger_source, payload_json),
     )
-    return int(cursor.lastrowid)
+    conn.commit()
+    lastrowid = cursor.lastrowid
+    if lastrowid is None:
+        raise RuntimeError("Failed to get inserted autofix_run id")
+    return cast(int, lastrowid)
 
 
 def claim_next_queued_run(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    cursor = conn.execute(
-        """
-        WITH picked AS (
-            SELECT id
-            FROM autofix_runs
-            WHERE status = 'queued'
-            ORDER BY id ASC
-            LIMIT 1
+    try:
+        cursor = conn.execute(
+            """
+            WITH picked AS (
+                SELECT id
+                FROM autofix_runs
+                WHERE status = 'queued'
+                ORDER BY id ASC
+                LIMIT 1
+            )
+            UPDATE autofix_runs
+            SET status = 'running'
+            WHERE id = (SELECT id FROM picked)
+            RETURNING *
+            """
         )
-        UPDATE autofix_runs
-        SET status = 'running'
-        WHERE id = (SELECT id FROM picked)
-        RETURNING *
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        conn.commit()
+        return _to_dict(row, cursor)
+    except sqlite3.OperationalError as exc:
+        if "RETURNING" not in str(exc).upper():
+            raise
+
+    conn.execute("BEGIN IMMEDIATE")
+    selected = conn.execute(
         """
+        SELECT id
+        FROM autofix_runs
+        WHERE status = 'queued'
+        ORDER BY id ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    if selected is None:
+        conn.rollback()
+        return None
+
+    run_id = int(selected["id"] if isinstance(selected, sqlite3.Row) else selected[0])
+    conn.execute(
+        "UPDATE autofix_runs SET status = 'running' WHERE id = ?",
+        (run_id,),
     )
-    row = cursor.fetchone()
+    row = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,)).fetchone()
+    conn.commit()
     if row is None:
         return None
-    return _to_dict(row, cursor)
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    if isinstance(row, tuple):
+        cursor = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,))
+        keys = [item[0] for item in (cursor.description or [])]
+        return {key: value for key, value in zip(keys, row, strict=False)}
+    return _to_dict(row, conn.cursor())
 
 
 def mark_run_finished(
@@ -67,6 +107,7 @@ def mark_run_finished(
         """,
         (status, commit_sha, error_summary, logs_path, run_id),
     )
+    conn.commit()
 
 
 def _to_dict(row: Any, cursor: sqlite3.Cursor) -> dict[str, Any]:
