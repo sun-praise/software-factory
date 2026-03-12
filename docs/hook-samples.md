@@ -24,7 +24,7 @@ The app reads JSON body from the hook command and event type from `x-event-type`
   "session_id": "sess_demo_001",
   "repo": "sun-praise/software-factory",
   "branch": "feat/m2-hook-docs",
-  "cwd": "/home/svtter/work/project/software-factory/.worktrees/m2-hook-docs",
+  "cwd": "/home/user/your-project",
   "prompt": "Add hook sample documentation",
   "timestamp": "2026-03-12T09:00:00Z"
 }
@@ -110,3 +110,36 @@ If `x-event-type` is missing, `event_type` becomes `"unknown"`.
 - Empty `received` payload: ensure `content-type: application/json` is set and payload is valid JSON.
 - Hook command works manually but not in runtime: check your hook config path and confirm runner can execute `curl`.
 - Unexpected shell quoting errors: use single quotes around JSON in curl examples or move payload to a file.
+
+## Configuration Loading
+
+### File Location
+
+Copy `example_hooks.json` to your project root or OpenEdge config directory:
+
+```bash
+cp example_hooks.json ~/.config/opencode/hooks.json
+```
+
+Or keep it in your project:
+
+```bash
+# Project-level hook config
+cp example_hooks.json .opencode/hooks.json
+```
+
+### Activating Hooks
+
+1. **Global config**: Place `hooks.json` in `~/.config/opencode/`
+2. **Project config**: Place `hooks.json` in `<project>/.opencode/`
+3. OpenEdge will automatically load hooks on startup
+
+### Customizing Events
+
+Edit `hooks.json` to add/remove event types:
+
+- `UserPromptSubmit` - Triggered when user submits a prompt
+- `PostToolUse` - Triggered after successful tool execution
+- `PostToolUseFailure` - Triggered after failed tool execution
+
+Modify the `matcher` field to filter specific tools (regex supported).
