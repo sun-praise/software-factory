@@ -103,3 +103,21 @@ def test_insert_review_event_is_idempotent_by_event_key() -> None:
     assert first == "inserted"
     assert second == "duplicate"
     assert row[0] == 1
+
+
+def test_build_event_key_uses_fallback_digest_when_event_id_missing() -> None:
+    payload = {
+        "action": "submitted",
+        "repository": {"full_name": "acme/widgets"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123"}},
+        "review": {"state": "changes_requested", "user": {"login": "reviewer-1"}},
+        "sender": {"login": "reviewer-1"},
+    }
+
+    event = extract_review_event("pull_request_review", payload)
+    assert event is not None
+
+    assert event.event_key.startswith(
+        "gh:pull_request_review:acme/widgets:42:fallback:"
+    )
+    assert len(event.event_key.rsplit(":", maxsplit=1)[-1]) == 64

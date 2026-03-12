@@ -60,6 +60,17 @@ def test_verify_github_signature_rejects_missing_header() -> None:
     assert result.reason == SignatureFailureReason.MISSING_HEADER
 
 
+def test_verify_github_signature_rejects_empty_header() -> None:
+    result = verify_github_signature(
+        body=b"payload",
+        secret="top-secret",
+        signature_header="   ",
+    )
+
+    assert result.status == SignatureStatus.FAILED
+    assert result.reason == SignatureFailureReason.MISSING_HEADER
+
+
 def test_verify_github_signature_rejects_invalid_prefix() -> None:
     body = b"payload"
     secret = "top-secret"
@@ -73,3 +84,14 @@ def test_verify_github_signature_rejects_invalid_prefix() -> None:
 
     assert result.status == SignatureStatus.FAILED
     assert result.reason == SignatureFailureReason.INVALID_PREFIX
+
+
+def test_verify_github_signature_rejects_non_hex_digest() -> None:
+    result = verify_github_signature(
+        body=b"payload",
+        secret="top-secret",
+        signature_header="sha256=" + ("x" * 64),
+    )
+
+    assert result.status == SignatureStatus.FAILED
+    assert result.reason == SignatureFailureReason.INVALID_FORMAT

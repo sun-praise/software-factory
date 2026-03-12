@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from functools import lru_cache
 from typing import Any
 
@@ -66,12 +67,21 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             "signature": signature_result.status,
         }
 
-    with connect_db() as conn:
-        insert_status = insert_review_event(conn, event)
+    try:
+        with connect_db() as conn:
+            insert_status = insert_review_event(conn, event)
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "ok": False,
+                "message": "Failed to persist webhook event",
+                "error": str(exc),
+            },
+        ) from exc
 
     debounce_backend = _get_debounce_backend()
-    if insert_status == "inserted":
-        debounce_backend.record_event(repo=event.repo, pr_number=event.pr_number)
+    debounce_backend.record_event(repo=event.repo, pr_number=event.pr_number)
 
     return {
         "ok": True,

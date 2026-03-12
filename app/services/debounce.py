@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
 from time import monotonic
 from typing import Protocol
 
@@ -42,6 +43,7 @@ class InMemoryDebounceBackend:
 
         self.window_seconds = float(window_seconds)
         self._latest_event_at: dict[DebounceKey, float] = {}
+        self._lock = Lock()
 
     def record_event(
         self,
@@ -50,7 +52,10 @@ class InMemoryDebounceBackend:
         arrived_at: float | None = None,
     ) -> DebounceKey:
         key = DebounceKey(repo=repo, pr_number=pr_number)
-        self._latest_event_at[key] = monotonic() if arrived_at is None else arrived_at
+        with self._lock:
+            self._latest_event_at[key] = (
+                monotonic() if arrived_at is None else arrived_at
+            )
         return key
 
     def is_ready(
@@ -60,7 +65,8 @@ class InMemoryDebounceBackend:
         now: float | None = None,
     ) -> bool:
         key = DebounceKey(repo=repo, pr_number=pr_number)
-        last_event_at = self._latest_event_at.get(key)
+        with self._lock:
+            last_event_at = self._latest_event_at.get(key)
         if last_event_at is None:
             return False
 
@@ -69,13 +75,14 @@ class InMemoryDebounceBackend:
 
     def pull_ready(self, now: float | None = None) -> set[DebounceKey]:
         current = monotonic() if now is None else now
-        ready: set[DebounceKey] = {
-            key
-            for key, last_event_at in self._latest_event_at.items()
-            if current - last_event_at >= self.window_seconds
-        }
+        with self._lock:
+            ready: set[DebounceKey] = {
+                key
+                for key, last_event_at in self._latest_event_at.items()
+                if current - last_event_at >= self.window_seconds
+            }
 
-        for key in ready:
-            self._latest_event_at.pop(key, None)
+            for key in ready:
+                self._latest_event_at.pop(key, None)
 
         return ready

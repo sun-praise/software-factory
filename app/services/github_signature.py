@@ -22,7 +22,7 @@ class SignatureFailureReason(str, Enum):
     SIGNATURE_MISMATCH = "signature_mismatch"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SignatureVerificationResult:
     status: SignatureStatus
     reason: SignatureFailureReason | None = None
@@ -51,12 +51,6 @@ def verify_github_signature(
         return SignatureVerificationResult(
             status=SignatureStatus.FAILED,
             reason=SignatureFailureReason.MISSING_HEADER,
-        )
-
-    if "=" not in parsed_signature:
-        return SignatureVerificationResult(
-            status=SignatureStatus.FAILED,
-            reason=SignatureFailureReason.INVALID_FORMAT,
         )
 
     if not parsed_signature.startswith(SIGNATURE_PREFIX):

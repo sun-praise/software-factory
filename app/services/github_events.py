@@ -17,7 +17,7 @@ SUPPORTED_EVENT_TYPES = {
 InsertStatus = Literal["inserted", "duplicate"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GitHubReviewEvent:
     repo: str
     pr_number: int
@@ -36,22 +36,20 @@ def extract_review_event(
     if normalized_type not in SUPPORTED_EVENT_TYPES:
         return None
 
-    payload_map = dict(payload)
-
-    if normalized_type == "issue_comment" and not _is_pr_issue_comment(payload_map):
+    if normalized_type == "issue_comment" and not _is_pr_issue_comment(payload):
         return None
 
-    repo = _extract_repo(payload_map)
-    pr_number = _extract_pr_number(normalized_type, payload_map)
+    repo = _extract_repo(payload)
+    pr_number = _extract_pr_number(normalized_type, payload)
     if not repo or pr_number is None:
         return None
 
-    event_id = _extract_event_id(normalized_type, payload_map)
-    actor = _extract_actor(payload_map)
-    head_sha = _extract_head_sha(payload_map)
+    event_id = _extract_event_id(normalized_type, payload)
+    actor = _extract_actor(payload)
+    head_sha = _extract_head_sha(payload)
     event_key = build_event_key(
         event_type=normalized_type,
-        payload=payload_map,
+        payload=payload,
         repo=repo,
         pr_number=pr_number,
         event_id=event_id,
@@ -67,7 +65,7 @@ def extract_review_event(
         event_key=event_key,
         actor=actor,
         head_sha=head_sha,
-        raw_payload_json=json.dumps(payload_map, ensure_ascii=True, sort_keys=True),
+        raw_payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
     )
 
 
@@ -94,7 +92,7 @@ def build_event_key(
         "comment": payload.get("comment"),
         "issue": payload.get("issue"),
     }
-    digest = hashlib.sha1(
+    digest = hashlib.sha256(
         json.dumps(stable_fields, ensure_ascii=True, sort_keys=True).encode("utf-8")
     ).hexdigest()
     return f"gh:{event_type}:{repo}:{pr_number}:fallback:{digest}"
