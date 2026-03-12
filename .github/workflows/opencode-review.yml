@@ -8,7 +8,7 @@ jobs:
   review:
     name: AI Code Review
     if: github.event.pull_request.draft == false
-    runs-on: [self-hosted, builder]
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       id-token: write
       contents: read
