@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
+import sqlite3
 from typing import Any
 
 from app.db import connect_db
+
+logger = logging.getLogger(__name__)
+
+UNKNOWN_REPO = "unknown/unknown"
+UNKNOWN_BRANCH = "unknown"
 
 
 def process_hook_event(
@@ -43,7 +51,17 @@ def process_hook_event(
                     }
                 )
                 return base_result
+    except sqlite3.Error as exc:
+        logger.exception("Database error processing hook event: %s", exc)
+        base_result.update(
+            {
+                "action": "error",
+                "error": f"DatabaseError: {exc}",
+            }
+        )
+        return base_result
     except Exception as exc:
+        logger.exception("Unexpected error processing hook event: %s", exc)
         base_result.update(
             {
                 "action": "error",
@@ -120,7 +138,7 @@ def _register_session(conn: Any, payload: dict[str, Any]) -> int:
         INSERT INTO sessions (repo, branch, cwd, metadata_json)
         VALUES (?, ?, ?, ?)
         """,
-        (repo or "unknown/unknown", branch or "unknown", cwd, metadata_json),
+        (repo or UNKNOWN_REPO, branch or UNKNOWN_BRANCH, cwd, metadata_json),
     )
     return int(cursor.lastrowid)
 
@@ -167,7 +185,7 @@ def _record_tool_event(
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            repo or "unknown/unknown",
+            repo or UNKNOWN_REPO,
             linked_pr_number if linked_pr_number is not None else 0,
             event_name,
             event_key,
@@ -313,11 +331,16 @@ def _extract_repo(payload: dict[str, Any]) -> str | None:
     return None
 
 
+SESSION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
+
+
 def _extract_session_key(payload: dict[str, Any]) -> str | None:
     for source in _candidate_maps(payload):
         session_id = source.get("session_id")
         if isinstance(session_id, str) and session_id.strip():
-            return session_id.strip()
+            clean_id = session_id.strip()
+            if SESSION_ID_PATTERN.match(clean_id):
+                return clean_id
     return None
 
 

@@ -85,6 +85,7 @@ SCHEMA_STATEMENTS = [
     PULL_REQUESTS_TABLE.create_sql,
     REVIEW_EVENTS_TABLE.create_sql,
     AUTOFIX_RUNS_TABLE.create_sql,
+    "CREATE INDEX IF NOT EXISTS idx_sessions_repo_branch ON sessions(repo, branch);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_pull_requests_repo_pr_number ON pull_requests(repo, pr_number);",
     "CREATE INDEX IF NOT EXISTS idx_review_events_repo_pr_number ON review_events(repo, pr_number);",
     "CREATE INDEX IF NOT EXISTS idx_autofix_runs_repo_pr_number ON autofix_runs(repo, pr_number);",
