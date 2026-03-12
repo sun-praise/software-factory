@@ -1,0 +1,52 @@
+name: OpenCode PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    name: AI Code Review
+    if: github.event.pull_request.draft == false
+    runs-on: [self-hosted, builder]
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare OpenCode cache paths
+        run: |
+          echo "XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}" >> "$GITHUB_ENV"
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          echo "${RUNNER_TOOL_CACHE:-$HOME/.cache}/opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Install OpenCode if needed
+        shell: bash
+        run: ./.github/scripts/install-opencode.sh
+
+      - name: Run OpenCode Review
+        env:
+          MODEL: zhipuai-coding-plan/glm-5
+          PROMPT: |
+            Review this pull request (read-only mode, DO NOT modify any code):
+
+            Please check:
+            - Code quality issues
+            - Potential bugs or logic errors
+            - Code style consistency
+            - Security concerns
+            - Performance issues
+            - Suggest improvements
+
+            Please respond in Chinese. DO NOT modify any code, only provide review comments.
+          USE_GITHUB_TOKEN: "true"
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: opencode github run

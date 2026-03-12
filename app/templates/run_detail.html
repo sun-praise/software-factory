@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Run Detail</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="container">
+      <p><a href="/">Back to runs</a></p>
+
+      <header>
+        <h1>Run {{ run.id | default("N/A") }}</h1>
+        <p class="muted">Minimal run detail placeholder page.</p>
+      </header>
+
+      <section>
+        <h2>Metadata</h2>
+        <dl class="meta">
+          <dt>Status</dt>
+          <dd>{{ run.status | default("pending") }}</dd>
+          <dt>Created At</dt>
+          <dd>{{ run.created_at | default("-") }}</dd>
+          <dt>Updated At</dt>
+          <dd>{{ run.updated_at | default("-") }}</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Log Preview</h2>
+        <pre class="log">{{ run.log_preview | default("No log data yet.") }}</pre>
+      </section>
+    </main>
+  </body>
+</html>
