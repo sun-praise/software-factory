@@ -84,14 +84,18 @@ def schedule_retry(
     error_summary: str | None = None,
     now: datetime | None = None,
     config: RetryConfig | None = None,
-    base_delay_seconds: int = 30,
-    max_delay_seconds: int = 1800,
+    base_delay_seconds: int | None = None,
+    max_delay_seconds: int | None = None,
     non_retryable_error_codes: set[str] | None = None,
 ) -> RetryPlan:
     if config is None:
         config = RetryConfig(
-            base_delay_seconds=base_delay_seconds,
-            max_delay_seconds=max_delay_seconds,
+            base_delay_seconds=base_delay_seconds
+            if base_delay_seconds is not None
+            else 30,
+            max_delay_seconds=max_delay_seconds
+            if max_delay_seconds is not None
+            else 1800,
             non_retryable_error_codes=non_retryable_error_codes,
         )
 

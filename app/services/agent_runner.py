@@ -25,7 +25,7 @@ from app.services.git_ops import (
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.policy import increment_autofix_count
 from app.services.queue import mark_run_finished
-from app.services.retry import schedule_retry
+from app.services.retry import RetryConfig, schedule_retry
 
 
 Executor = Callable[[str, str], Any]
@@ -350,15 +350,18 @@ def _finish_failed_run(
     *,
     error_code: str,
 ) -> tuple[str, str]:
-    non_retryable_error_codes = set(get_settings().non_retryable_error_codes)
+    settings = get_settings()
+    config = RetryConfig(
+        base_delay_seconds=settings.retry_backoff_base_seconds,
+        max_delay_seconds=settings.retry_backoff_max_seconds,
+        non_retryable_error_codes=set(settings.non_retryable_error_codes),
+    )
     plan = schedule_retry(
         conn,
         run_id,
         error_code=error_code,
         error_summary=error_summary,
-        base_delay_seconds=get_settings().retry_backoff_base_seconds,
-        max_delay_seconds=get_settings().retry_backoff_max_seconds,
-        non_retryable_error_codes=non_retryable_error_codes,
+        config=config,
     )
     status = "retry_scheduled" if plan.scheduled else "failed"
     if not plan.scheduled:

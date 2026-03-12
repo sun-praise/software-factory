@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 import sqlite3
 
 from app.models import SCHEMA_SQL
-from app.services.retry import compute_backoff_seconds, schedule_retry, should_retry
+from app.services.retry import (
+    RetryConfig,
+    compute_backoff_seconds,
+    schedule_retry,
+    should_retry,
+)
 
 
 def _make_conn() -> sqlite3.Connection:
@@ -54,14 +59,14 @@ def test_schedule_retry_updates_retry_fields() -> None:
     conn.commit()
     run_id = int(cursor.lastrowid)
 
+    config = RetryConfig(base_delay_seconds=15, max_delay_seconds=120)
     plan = schedule_retry(
         conn,
         run_id,
         error_code="transient_network",
         error_summary="temporary failure",
         now=datetime(2026, 3, 12, 10, 0, tzinfo=timezone.utc),
-        base_delay_seconds=15,
-        max_delay_seconds=120,
+        config=config,
     )
 
     row = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,)).fetchone()
@@ -89,13 +94,14 @@ def test_schedule_retry_marks_non_retryable_failure() -> None:
     conn.commit()
     run_id = int(cursor.lastrowid)
 
+    config = RetryConfig(non_retryable_error_codes={"fatal"})
     plan = schedule_retry(
         conn,
         run_id,
         error_code="fatal",
         error_summary="not recoverable",
         now=datetime(2026, 3, 12, 10, 0, tzinfo=timezone.utc),
-        non_retryable_error_codes={"fatal"},
+        config=config,
     )
 
     row = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,)).fetchone()
@@ -105,3 +111,34 @@ def test_schedule_retry_marks_non_retryable_failure() -> None:
     assert row["status"] == "failed"
     assert row["retryable"] == 0
     assert row["last_error_code"] == "fatal"
+
+
+def test_schedule_retry_backward_compat_individual_params() -> None:
+    conn = _make_conn()
+    cursor = conn.execute(
+        """
+        INSERT INTO autofix_runs (repo, pr_number, status, attempt_count, max_attempts, retryable)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("acme/widgets", 44, "failed", 1, 3, 1),
+    )
+    conn.commit()
+    run_id = int(cursor.lastrowid)
+
+    plan = schedule_retry(
+        conn,
+        run_id,
+        error_code="transient_network",
+        error_summary="temporary failure",
+        now=datetime(2026, 3, 12, 10, 0, tzinfo=timezone.utc),
+        base_delay_seconds=20,
+        max_delay_seconds=200,
+    )
+
+    row = conn.execute("SELECT * FROM autofix_runs WHERE id = ?", (run_id,)).fetchone()
+
+    assert plan.scheduled is True
+    assert plan.delay_seconds == 20
+    assert plan.retry_after == "2026-03-12T10:00:20Z"
+    assert row is not None
+    assert row["status"] == "retry_scheduled"
