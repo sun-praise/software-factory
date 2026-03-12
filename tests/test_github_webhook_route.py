@@ -80,10 +80,12 @@ def test_webhook_inserts_and_deduplicates_review_event(tmp_path: Path) -> None:
     assert first.status_code == 200
     assert first.json()["insert_status"] == "inserted"
     assert first.json()["event_key"] == "gh:pull_request_review:acme/widgets:42:1001"
+    assert isinstance(first.json()["queued_run_id"], int)
 
     assert second.status_code == 200
     assert second.json()["insert_status"] == "duplicate"
     assert second.json()["event_key"] == "gh:pull_request_review:acme/widgets:42:1001"
+    assert second.json()["queued_run_id"] is None
 
 
 def test_issue_comment_without_pr_is_ignored(tmp_path: Path) -> None:
