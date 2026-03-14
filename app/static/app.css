@@ -15,7 +15,7 @@ body {
   margin: 0;
   font-family: "Segoe UI", "Noto Sans", Arial, sans-serif;
   color: var(--text);
-  background: linear-gradient(180deg, #f7f8fa 0%, #eef1f5 100%);
+  background: var(--bg);
 }
 
 .container {
@@ -64,6 +64,7 @@ a:hover {
   padding: 0.75rem;
   border: 1px dashed var(--border);
   border-radius: 8px;
+  background: var(--surface);
 }
 
 .meta {
@@ -84,7 +85,7 @@ a:hover {
 .log {
   margin: 0;
   padding: 0.8rem;
-  background: #f1f3f7;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow-x: auto;
