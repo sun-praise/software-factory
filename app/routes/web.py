@@ -1,7 +1,7 @@
 from pathlib import Path
-import os
 from typing import Any
 import sqlite3
+import os
 import httpx
 from urllib.parse import urlparse
 
@@ -80,80 +80,97 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
         )
 
     owner, repo_name, section, number_part = path_parts[:4]
-    if section not in {"pull", "pulls", "issues"}:
-        raise ValueError(
-            "Only pull request or issue links are supported. "
-            "Example: https://github.com/<owner>/<repo>/pull/<number> "
-            "or https://github.com/<owner>/<repo>/issues/<number>."
-        )
-
-    try:
-        pr_number = int(number_part)
-    except ValueError as exc:
-        raise ValueError("PR number in URL must be a positive integer.") from exc
-
-    if pr_number <= 0:
-        raise ValueError("PR number in URL must be a positive integer.")
-
-    repo = f"{owner}/{repo_name}"
-    issue_number = None
     if section in {"pull", "pulls"}:
-        if section == "pulls":
-            section = "pull"
-        issue_url = f"https://github.com/{repo}/{section}/{pr_number}"
-        return repo, pr_number, issue_number, issue_url
-
-    if section == "issues":
-        issue_number = pr_number
         try:
-            resolved_pr_number = _resolve_pr_number_from_issue(repo, issue_number)
-        except ValueError:
-            resolved_pr_number = None
-        if resolved_pr_number is None:
-            return repo, issue_number, issue_number, f"https://github.com/{repo}/issues/{issue_number}"
-        pr_number = resolved_pr_number
+            pr_number = int(number_part)
+        except ValueError as exc:
+            raise ValueError("PR number in URL must be a positive integer.") from exc
+
+        if pr_number <= 0:
+            raise ValueError("PR number in URL must be a positive integer.")
+
+        repo = f"{owner}/{repo_name}"
+        issue_number = None
         issue_url = f"https://github.com/{repo}/pull/{pr_number}"
         return repo, pr_number, issue_number, issue_url
 
+    if section != "issues":
+        raise ValueError(
+            "Only pull request or issue links are supported. Example: "
+            "https://github.com/<owner>/<repo>/pull/<number> or "
+            "https://github.com/<owner>/<repo>/issues/<number>."
+        )
 
-def _resolve_pr_number_from_issue(repo: str, issue_number: int) -> int | None:
-    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
-    headers = {"User-Agent": "software-factory"}
-    token = os.getenv("GITHUB_TOKEN", "").strip()
+    repo = f"{owner}/{repo_name}"
+    try:
+        issue_number = int(number_part)
+    except ValueError as exc:
+        raise ValueError("Issue number in URL must be a positive integer.") from exc
+    if issue_number <= 0:
+        raise ValueError("Issue number in URL must be a positive integer.")
+
+    pr_number = _resolve_pr_number_from_issue(
+        owner=owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+    ) or issue_number
+    if pr_number == issue_number:
+        issue_url = f"https://github.com/{repo}/issues/{issue_number}"
+    else:
+        issue_url = f"https://github.com/{repo}/pull/{pr_number}"
+
+    return repo, pr_number, issue_number, issue_url
+
+
+def _resolve_pr_number_from_issue(
+    *,
+    owner: str,
+    repo_name: str,
+    issue_number: int,
+) -> int | None:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "software-factory",
+    }
     if token:
-        headers["Authorization"] = f"Bearer {token}"
-
+        headers["Authorization"] = f"token {token}"
+    url = f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}"
     try:
         response = httpx.get(url, headers=headers, timeout=10.0)
     except httpx.RequestError as exc:
-        raise ValueError(
-            "Failed to fetch issue details from GitHub. Please try again."
-        ) from exc
+        raise ValueError(f"Failed to query issue details: {exc}") from exc
 
     if response.status_code == 404:
         raise ValueError("Issue not found or unavailable.")
     if response.status_code == 403:
+        raise ValueError("GitHub API access denied while resolving issue details.")
+    if response.status_code == 401:
+        raise ValueError("Unauthorized when querying GitHub issue details.")
+    if response.status_code >= 400:
         raise ValueError(
-            "GitHub API returned 403 while resolving issue. Please retry later or set GITHUB_TOKEN."
+            f"GitHub API returned unexpected status: {response.status_code}."
         )
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise ValueError("Failed to resolve issue to pull request.") from exc
 
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise ValueError("GitHub API returned invalid JSON while resolving issue.") from exc
-
+    payload = response.json()
     if not isinstance(payload, dict):
-        raise ValueError("Unexpected GitHub API response while resolving issue.")
+        raise ValueError("Unexpected response from GitHub API.")
 
-    pull_request = payload.get("pull_request")
-    if not isinstance(pull_request, dict):
+    pull_request_info = payload.get("pull_request")
+    if not isinstance(pull_request_info, dict):
         return None
 
-    return issue_number
+    pr_url = pull_request_info.get("url", "")
+    if not isinstance(pr_url, str):
+        return None
+
+    pull_url_parts = [part for part in pr_url.split("/") if part]
+    try:
+        return int(pull_url_parts[-1])
+    except (TypeError, ValueError):
+        return issue_number
+
+
 def _build_issue_normalized_review(
     *,
     repo: str,
