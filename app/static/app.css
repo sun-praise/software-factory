@@ -138,6 +138,25 @@ legend {
   font-family: inherit;
 }
 
+.issue-form input[type="text"],
+.issue-form input[type="number"],
+.issue-form textarea,
+.issue-form select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-family: inherit;
+}
+
+.issue-form fieldset {
+  margin-top: 0.9rem;
+}
+
+.issue-form textarea {
+  resize: vertical;
+}
+
 .actions {
   margin-top: 0.9rem;
 }

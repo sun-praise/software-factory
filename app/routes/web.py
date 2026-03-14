@@ -1,19 +1,28 @@
-from fastapi import APIRouter, Request
+from pathlib import Path
+from typing import Any
+import sqlite3
+
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
+from pydantic import ValidationError
 
 from app.db import connect_db
+from app.config import get_settings
+from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
     build_feature_flag_context,
     save_agent_feature_flags,
 )
-
-from app.db import connect_db
-from app.services.feature_flags import (
-    build_feature_flag_context,
-    save_agent_feature_flags,
+from app.schemas.issues import (
+    IssueSubmissionRequest,
 )
+from app.services.policy import (
+    ensure_pull_request_row,
+    get_remaining_autofix_quota,
+    reset_autofix_count_on_sha_change,
+)
+from app.services.queue import enqueue_autofix_run
 
 
 router = APIRouter(tags=["web"])
@@ -53,6 +62,102 @@ def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
     except OSError:
         return "No log data yet."
     return text.strip()[:max_chars] or "No log data yet."
+
+
+def _build_issue_normalized_review(payload: IssueSubmissionRequest) -> dict[str, Any]:
+    issue_text = f"{payload.title}\n\n{payload.body}".strip()
+    item = {
+        "source": "manual_issue",
+        "path": None,
+        "line": None,
+        "text": issue_text,
+        "severity": payload.severity,
+    }
+
+    must_fix: list[dict[str, Any]] = []
+    should_fix: list[dict[str, Any]] = []
+    if payload.priority == "must_fix":
+        must_fix.append(item)
+    else:
+        should_fix.append(item)
+
+    return {
+        "repo": payload.repo,
+        "pr_number": payload.pr_number,
+        "head_sha": payload.head_sha,
+        "must_fix": must_fix,
+        "should_fix": should_fix,
+        "ignore": [],
+        "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
+        "project_type": payload.project_type or "python",
+        "issue_number": payload.issue_number,
+    }
+
+
+def _enqueue_issue_fix(payload: IssueSubmissionRequest) -> dict[str, Any]:
+    run_id: int | None = None
+    remaining_quota = None
+    idempotency_key = None
+    queue_status = "not_queued"
+
+    normalized_review = _build_issue_normalized_review(payload)
+    repo = payload.repo
+    pr_number = payload.pr_number
+    branch = payload.branch
+    head_sha = payload.head_sha
+
+    review_batch_id = build_review_batch_id(normalized_review)
+    normalized_review["review_batch_id"] = review_batch_id
+    idempotency_key = build_task_idempotency_key(
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        review_batch_id=review_batch_id,
+    )
+
+    with connect_db() as conn:
+        if head_sha:
+            reset_autofix_count_on_sha_change(
+                conn,
+                repo,
+                pr_number,
+                head_sha,
+            )
+        ensure_pull_request_row(
+            conn,
+            repo,
+            pr_number,
+            branch=branch,
+            head_sha=head_sha,
+        )
+        remaining_quota = get_remaining_autofix_quota(conn, repo, pr_number)
+        if remaining_quota == 0:
+            queue_status = "autofix_limit_reached"
+        else:
+            run_id = enqueue_autofix_run(
+                conn=conn,
+                repo=repo,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                normalized_review_json=normalized_review,
+                trigger_source="manual_issue",
+                idempotency_key=idempotency_key,
+                max_attempts=get_settings().max_retry_attempts,
+            )
+            queue_status = "queued" if run_id is not None else "duplicate_task"
+
+    return {
+        "ok": True,
+        "message": "Issue submission accepted.",
+        "repo": repo,
+        "pr_number": pr_number,
+        "issue_number": payload.issue_number,
+        "queue_status": queue_status,
+        "queued_run_id": run_id,
+        "idempotency_key": idempotency_key,
+        "remaining_quota": remaining_quota,
+        "head_sha": head_sha,
+    }
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -158,3 +263,100 @@ async def save_settings(request: Request) -> RedirectResponse:
         )
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)
+
+
+@router.get("/issues", response_class=HTMLResponse)
+async def issue_entry_page(request: Request) -> HTMLResponse:
+    templates: Jinja2Templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request=request,
+        name="issue_submit.html",
+        context={
+            "request": request,
+            "title": "Submit Manual Issue",
+            "message": None,
+            "result": None,
+            "form": {},
+        },
+    )
+
+
+@router.post("/issues", response_class=HTMLResponse)
+async def submit_issue(request: Request) -> HTMLResponse:
+    templates: Jinja2Templates = request.app.state.templates
+    form = await request.form()
+
+    raw_issue_number = form.get("issue_number")
+    issue_number: int | None = None
+    if raw_issue_number not in (None, ""):
+        try:
+            issue_number = int(str(raw_issue_number))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="issue_number must be a positive integer",
+            ) from exc
+
+    request_data = {
+        "repo": form.get("repo", "").strip(),
+        "pr_number": form.get("pr_number"),
+        "issue_number": issue_number,
+        "title": form.get("title", "").strip(),
+        "body": form.get("body", "").strip(),
+        "head_sha": (form.get("head_sha") or "").strip() or None,
+        "branch": (form.get("branch") or "").strip() or None,
+        "priority": form.get("priority", "must_fix"),
+        "severity": form.get("severity", "P1"),
+        "project_type": (form.get("project_type") or "").strip() or None,
+    }
+
+    try:
+        payload = IssueSubmissionRequest.model_validate(request_data)
+    except (TypeError, ValueError, ValidationError):
+        return templates.TemplateResponse(
+            request=request,
+            name="issue_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Manual Issue",
+                "message": "Invalid input. Please check required fields.",
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+
+    try:
+        result = _enqueue_issue_fix(payload)
+    except sqlite3.Error:
+        result = {
+            "ok": False,
+            "message": "Failed to enqueue issue-based autofix",
+        }
+
+    return templates.TemplateResponse(
+        request=request,
+        name="issue_submit.html",
+        context={
+            "request": request,
+            "title": "Submit Manual Issue",
+            "message": "Submitted",
+            "result": result,
+            "form": request_data,
+        },
+    )
+
+
+@router.post("/api/issues")
+async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
+    try:
+        return _enqueue_issue_fix(payload)
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "ok": False,
+                "message": "Failed to enqueue issue-based autofix",
+                "error": str(exc),
+            },
+        ) from exc
