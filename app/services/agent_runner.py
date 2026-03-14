@@ -185,6 +185,7 @@ def run_once(
     try:
         status = "failed"
         run_error_summary = None
+        run_error_code: str | None = None
         commit_sha: str | None = None
 
         prepare_error = _prepare_workspace(
@@ -221,7 +222,12 @@ def run_once(
                 run_error_summary = f"ai_invalid_response: {exc}"
                 log_lines.append(run_error_summary)
             except AIRequestError as exc:
-                run_error_summary = f"ai_request_failed: {exc}"
+                run_error_code = (
+                    "ai_request_client_error"
+                    if not getattr(exc, "retriable", True)
+                    else "ai_request_failed"
+                )
+                run_error_summary = f"{run_error_code}: {_sanitize_log_text(str(exc))}"
                 log_lines.append(run_error_summary)
             except PatchApplyError as exc:
                 run_error_summary = f"patch_apply_failed: {exc}"
@@ -289,7 +295,7 @@ def run_once(
                 run_id,
                 run_error_summary or "unknown_failure",
                 logs_path,
-                error_code=_infer_error_code(run_error_summary),
+                error_code=run_error_code or _infer_error_code(run_error_summary),
             )
     finally:
         release_pr_lock(
@@ -428,21 +434,45 @@ def _finish_failed_run(
     )
     status = "retry_scheduled" if plan.scheduled else "failed"
     if not plan.scheduled:
-        mark_run_finished(
-            conn=conn,
-            run_id=run_id,
-            status="failed",
-            error_summary=error_summary,
-            logs_path=logs_path,
-            last_error_code=error_code,
-        )
-        return status, error_summary
+        try:
+            mark_run_finished(
+                conn=conn,
+                run_id=run_id,
+                status="failed",
+                error_summary=error_summary,
+                logs_path=logs_path,
+                last_error_code=error_code,
+            )
+            return status, error_summary
+        except sqlite3.Error:
+            conn.rollback()
+            conn.execute(
+                """
+                UPDATE autofix_runs
+                SET status = 'failed',
+                    error_summary = ?,
+                    logs_path = ?,
+                    last_error_code = COALESCE(?, last_error_code),
+                    last_error_at = CURRENT_TIMESTAMP,
+                    finished_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (error_summary, logs_path, error_code, run_id),
+            )
+            conn.commit()
+            return status, error_summary
 
-    conn.execute(
-        "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (logs_path, run_id),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (logs_path, run_id),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        return status, f"{error_summary}; db_update_failed_for_retry={run_id}"
+
     return status, f"{error_summary}; retry_after={plan.retry_after}"
 
 

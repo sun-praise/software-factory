@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         "head_sha_mismatch",
         "ai_not_configured",
         "ai_invalid_response",
+        "ai_request_client_error",
         "patch_apply_failed",
     )
     autofix_comment_author: str = "software-factory[bot]"

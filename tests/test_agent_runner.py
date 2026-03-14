@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from app.models import SCHEMA_SQL
-from app.services.ai_client import AIConfigError, FixPlan
+from app.services.ai_client import AIConfigError, AIRequestError, FixPlan
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
@@ -305,3 +305,78 @@ def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
 
     assert result["status"] == "failed"
     assert "ai_not_configured" in str(result["error_summary"])
+
+
+def test_run_once_marks_ai_400_error_as_non_retryable(tmp_path: Path) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: (_ for _ in ()).throw(
+            AIRequestError("bad request", status_code=400, retriable=False)
+        ),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    row = conn.execute(
+        "SELECT status, last_error_code, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["last_error_code"] == "ai_request_client_error"
+    assert "ai_request_client_error" in str(result["error_summary"])
+
+
+def test_run_once_schedules_retry_for_retryable_ai_request_error(tmp_path: Path) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        generate_fix=lambda **_: (_ for _ in ()).throw(
+            AIRequestError("temporary failure", status_code=503, retriable=True)
+        ),
+        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "retry_scheduled"
+    row = conn.execute(
+        "SELECT status, last_error_code, retry_after FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "retry_scheduled"
+    assert row["last_error_code"] == "ai_request_failed"

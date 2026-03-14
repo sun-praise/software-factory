@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,6 +14,16 @@ from app.config import get_settings
 MAX_CONTEXT_FILES = 8
 MAX_FILE_CHARS = 12000
 MAX_PROMPT_CHARS = 50000
+
+_TRIPLE_BACKTICK_BLOCK_RE = re.compile(r"```(?:[\w+-]+)?\s*\n?(.*?)\n```", re.DOTALL)
+_ERROR_REDACTION_PATTERNS = (
+    re.compile(r"(?i)(authorization:\s*Bearer\s+)\S+"),
+    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)\S+"),
+    re.compile(r"(?i)(token\s*[=:]\s*)\S+"),
+    re.compile(r"(?i)(secret\s*[=:]\s*)\S+"),
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghp_[A-Za-z0-9]{16,}\b"),
+)
 
 
 @dataclass(frozen=True)
@@ -37,7 +48,16 @@ class AIConfigError(AIClientError):
 
 
 class AIRequestError(AIClientError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retriable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retriable = retriable
 
 
 class AIResponseError(AIClientError):
@@ -121,10 +141,8 @@ def _collect_review_paths(normalized_review: Mapping[str, Any]) -> list[str]:
 
 
 def _read_context_file(workspace: Path, rel_path: str) -> str | None:
-    candidate = (workspace / rel_path).resolve()
-    try:
-        candidate.relative_to(workspace)
-    except ValueError:
+    candidate = _resolve_context_path(workspace, rel_path)
+    if candidate is None:
         return None
     if not candidate.exists() or not candidate.is_file():
         return None
@@ -132,6 +150,37 @@ def _read_context_file(workspace: Path, rel_path: str) -> str | None:
     if len(text) > MAX_FILE_CHARS:
         return text[:MAX_FILE_CHARS]
     return text
+
+
+def _resolve_context_path(workspace: Path, rel_path: str) -> Path | None:
+    if not rel_path:
+        return None
+
+    path_obj = Path(rel_path)
+    if path_obj.is_absolute() or any(part == ".." for part in path_obj.parts):
+        return None
+
+    candidate = (workspace / path_obj).resolve()
+    try:
+        candidate.relative_to(workspace)
+    except ValueError:
+        return None
+
+    current = candidate
+    while True:
+        try:
+            if current.is_symlink():
+                return None
+        except OSError:
+            return None
+        if current == workspace:
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return candidate
 
 
 def _call_anthropic(request_prompt: str) -> str:
@@ -216,11 +265,16 @@ def _post_json(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text.strip()
-        detail = body or str(exc)
-        raise AIRequestError(detail) from exc
+        body = _safe_http_body_text(exc.response.text)
+        status_code = exc.response.status_code
+        message = _format_http_error_message(status_code, body)
+        raise AIRequestError(
+            message,
+            status_code=status_code,
+            retriable=status_code >= 500,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise AIRequestError(str(exc)) from exc
+        raise AIRequestError(_safe_http_body_text(str(exc)), retriable=True) from exc
 
     data = response.json()
     if not isinstance(data, dict):
@@ -263,19 +317,56 @@ def _parse_fix_plan(raw_text: str) -> FixPlan:
 
 def _extract_json_object(raw_text: str) -> dict[str, Any]:
     text = raw_text.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        for part in parts:
-            candidate = part.strip()
-            if candidate.startswith("json"):
-                candidate = candidate[4:].strip()
-            if candidate.startswith("{") and candidate.endswith("}"):
-                text = candidate
-                break
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AIResponseError(f"failed to parse AI JSON: {exc}") from exc
-    if not isinstance(payload, dict):
+    parse_error: json.JSONDecodeError | None = None
+    non_object_payload = False
+    for candidate in _iter_json_candidates(text):
+        if candidate.startswith("json"):
+            candidate = candidate[4:].strip()
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            parse_error = exc
+            continue
+        else:
+            if isinstance(payload, dict):
+                return payload
+            non_object_payload = True
+    if non_object_payload:
         raise AIResponseError("AI response root must be an object")
-    return payload
+    if parse_error is None:
+        raise AIResponseError("failed to parse AI JSON")
+    raise AIResponseError(f"failed to parse AI JSON: {parse_error}") from parse_error
+
+
+def _iter_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = [text.strip()]
+    candidates.extend(
+        block.strip()
+        for block in _TRIPLE_BACKTICK_BLOCK_RE.findall(text)
+        if isinstance(block, str)
+    )
+    return candidates
+
+
+def _safe_http_body_text(value: str) -> str:
+    if not value:
+        return ""
+    sanitized = value.strip()
+    for pattern in _ERROR_REDACTION_PATTERNS:
+        sanitized = _redact_sensitive_value(sanitized, pattern)
+    return sanitized
+
+
+def _redact_sensitive_value(text: str, pattern: re.Pattern[str]) -> str:
+    def _repl(match: re.Match[str]) -> str:
+        if match.lastindex:
+            return f"{match.group(1)}[REDACTED]"
+        return "[REDACTED]"
+
+    return pattern.sub(_repl, text)
+
+
+def _format_http_error_message(status_code: int, body: str) -> str:
+    if body:
+        return f"AI request failed with status={status_code}: {body}"
+    return f"AI request failed with status={status_code}"
