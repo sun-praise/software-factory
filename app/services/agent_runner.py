@@ -33,6 +33,7 @@ from app.services.git_ops import (
     post_pr_comment,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
+from app.services.feature_flags import resolve_agent_feature_flags
 from app.services.patch_applier import ApplyResult, PatchApplyError, apply_fix_plan
 from app.services.policy import increment_autofix_count
 from app.services.queue import mark_run_finished
@@ -93,6 +94,7 @@ def run_once(
     commit_message = _safe_text(payload.get("commit_message")) or (
         f"fix: apply autofix updates for PR #{pr_number}"
     )
+    feature_flags = resolve_agent_feature_flags(conn)
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
@@ -141,7 +143,7 @@ def run_once(
         }
 
     execute = _default_executor if executor is None else executor
-    agent_modes = _normalize_agent_modes(settings.agent_sdks)
+    agent_modes = _normalize_agent_modes(feature_flags.agent_sdks)
     check_results: list[dict[str, Any]] = []
     checks_summary = {
         "overall_status": "failed",
@@ -202,6 +204,7 @@ def run_once(
                 run_id=run_id,
                 branch=branch,
                 head_sha=head_sha,
+                worktree_base_dir=feature_flags.openhands_worktree_base_dir,
             )
             log_lines.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
@@ -249,6 +252,10 @@ def run_once(
             pr_number=pr_number,
             prompt=prompt,
             modes=agent_modes,
+            openhands_command=feature_flags.openhands_command,
+            openhands_command_timeout_seconds=(
+                feature_flags.openhands_command_timeout_seconds
+            ),
         )
         if used_agent_mode == OPENHANDS_AGENT_MODE:
             check_workspace = agent_workspace
@@ -518,6 +525,8 @@ def _execute_agent_sdks(
     pr_number: int,
     prompt: str,
     modes: tuple[str, ...],
+    openhands_command: str,
+    openhands_command_timeout_seconds: int,
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
@@ -532,6 +541,8 @@ def _execute_agent_sdks(
                 repo=repo,
                 pr_number=pr_number,
                 prompt=prompt,
+                command=openhands_command,
+                timeout_seconds=openhands_command_timeout_seconds,
             )
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
@@ -549,10 +560,12 @@ def _run_openhands_agent(
     repo: str,
     pr_number: int,
     prompt: str,
+    *,
+    command: str,
+    timeout_seconds: int,
 ) -> tuple[bool, str, str | None]:
-    settings = get_settings()
-    command = settings.openhands_command.strip()
-    if not command:
+    normalized_command = command.strip()
+    if not normalized_command:
         return (
             False,
             "OpenHands command is not configured",
@@ -570,20 +583,20 @@ def _run_openhands_agent(
             check=False,
             capture_output=True,
             text=True,
-            timeout=settings.openhands_command_timeout_seconds,
+            timeout=timeout_seconds,
             input=prompt,
             env=env,
         )
     except FileNotFoundError:
         return (
             False,
-            f"OpenHands command not found: {command}",
+            f"OpenHands command not found: {normalized_command}",
             OPENHANDS_FAILURE_CODE_COMMAND,
         )
     except subprocess.TimeoutExpired:
         return (
             False,
-            f"OpenHands command timed out after {settings.openhands_command_timeout_seconds}s",
+            f"OpenHands command timed out after {timeout_seconds}s",
             OPENHANDS_FAILURE_CODE_COMMAND,
         )
 
@@ -602,14 +615,14 @@ def _prepare_openhands_workspace(
     run_id: int,
     branch: str | None,
     head_sha: str | None,
+    worktree_base_dir: str,
 ) -> tuple[str, str]:
     base_repo = Path(base_repo_dir)
     if not (base_repo / ".git").exists():
         raise ValueError("agent workspace requires a git repository")
 
     git_ref = branch or head_sha or "HEAD"
-    settings = get_settings()
-    worktree_root = Path(settings.openhands_worktree_base_dir)
+    worktree_root = Path(worktree_base_dir)
     if not worktree_root.is_absolute():
         worktree_root = base_repo / worktree_root
 

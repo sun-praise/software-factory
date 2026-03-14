@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="container">
+      <header class="stacked-header">
+        <p><a href="/">Back to runs</a></p>
+        <h1>System Settings</h1>
+        <p class="muted">Configure feature flags for autofix execution.</p>
+      </header>
+
+      {% if saved %}
+      <p class="status ok">Settings saved.</p>
+      {% endif %}
+
+      <section>
+        <form method="post" action="/settings" class="settings-form">
+          <fieldset>
+            <legend>Agent Runner</legend>
+
+            <label class="switch">
+              <input
+                type="checkbox"
+                name="agent_openhands_enabled"
+                id="agent_openhands_enabled"
+                {% if agent_openhands_enabled %}checked{% endif %}
+              >
+              <span>Enable OpenHands agent mode</span>
+            </label>
+            <p class="muted tiny">Fallback to legacy mode if OpenHands fails.</p>
+
+            <label class="switch">
+              <input
+                type="checkbox"
+                name="agent_legacy_enabled"
+                id="agent_legacy_enabled"
+                {% if agent_legacy_enabled %}checked{% endif %}
+              >
+              <span>Enable legacy AI mode</span>
+            </label>
+            <p class="muted tiny">Default mode from environment: {{ default_agent_sdks }}</p>
+
+            <label for="openhands_command">OpenHands command</label>
+            <input
+              type="text"
+              id="openhands_command"
+              name="openhands_command"
+              value="{{ openhands_command }}"
+              autocomplete="off"
+            >
+
+            <label for="openhands_command_timeout_seconds">OpenHands command timeout (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="openhands_command_timeout_seconds"
+              name="openhands_command_timeout_seconds"
+              value="{{ openhands_command_timeout_seconds }}"
+            >
+
+            <label for="openhands_worktree_base_dir">OpenHands worktree base directory</label>
+            <input
+              type="text"
+              id="openhands_worktree_base_dir"
+              name="openhands_worktree_base_dir"
+              value="{{ openhands_worktree_base_dir }}"
+              autocomplete="off"
+            >
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit">Save settings</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

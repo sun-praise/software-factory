@@ -395,6 +395,9 @@ def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch
         repo: str,
         pr_number: int,
         prompt: str,
+        *,
+        command: str,
+        timeout_seconds: int,
     ) -> tuple[bool, str, str | None]:
         calls.append(workspace)
         return False, "openhands failed", "agent_openhands_failed"
@@ -408,6 +411,8 @@ def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch
         pr_number=1,
         prompt="fix this",
         modes=("openhands", "legacy"),
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
     )
     assert ok is True
     assert err_code is None
