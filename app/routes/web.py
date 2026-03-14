@@ -1,6 +1,13 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pathlib import Path
+
+from app.db import connect_db
+from app.services.feature_flags import (
+    build_feature_flag_context,
+    save_agent_feature_flags,
+)
 
 from app.db import connect_db
 from app.services.feature_flags import (
@@ -12,21 +19,40 @@ from app.services.feature_flags import (
 router = APIRouter(tags=["web"])
 
 
-def _sample_runs() -> list[dict[str, str]]:
+def _fetch_runs(limit: int = 20) -> list[dict[str, str]]:
+    with connect_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, repo, pr_number, status, created_at, updated_at
+            FROM autofix_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
     return [
         {
-            "id": "demo-run-001",
-            "status": "queued",
-            "created_at": "-",
-            "updated_at": "-",
-        },
-        {
-            "id": "demo-run-002",
-            "status": "running",
-            "created_at": "-",
-            "updated_at": "-",
-        },
+            "id": str(row["id"]),
+            "repo": str(row["repo"]),
+            "pr_number": str(row["pr_number"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
     ]
+
+
+def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
+    if not logs_path:
+        return "No log data yet."
+    path = Path(logs_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "No log data yet."
+    return text.strip()[:max_chars] or "No log data yet."
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -38,7 +64,7 @@ async def index(request: Request) -> HTMLResponse:
         context={
             "request": request,
             "title": "Software Factory",
-            "runs": _sample_runs(),
+            "runs": _fetch_runs(),
         },
     )
 
@@ -51,13 +77,36 @@ async def runs_page(request: Request) -> HTMLResponse:
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
+    try:
+        run_id_value = int(run_id)
+    except ValueError:
+        run_id_value = -1
+
+    with connect_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, status, created_at, updated_at, logs_path
+            FROM autofix_runs
+            WHERE id = ?
+            """,
+            (run_id_value,),
+        ).fetchone()
+
     run = {
         "id": run_id,
-        "status": "pending",
+        "status": "not_found",
         "created_at": "-",
         "updated_at": "-",
         "log_preview": "No log data yet.",
     }
+    if row is not None:
+        run = {
+            "id": str(row["id"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "log_preview": _read_log_preview(row["logs_path"]),
+        }
     return templates.TemplateResponse(
         request=request,
         name="run_detail.html",
