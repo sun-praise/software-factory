@@ -114,18 +114,18 @@ def resolve_agent_feature_flags(
     ).strip() or settings.openhands_worktree_base_dir
     claude_command = raw_flags.get(
         FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY,
-        settings.claude_agent_sdk_command,
-    ).strip() or settings.claude_agent_sdk_command
+        settings.claude_agent_command,
+    ).strip() or settings.claude_agent_command
     claude_timeout = _coerce_int(
         raw_flags.get(FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY),
-        settings.claude_agent_sdk_command_timeout_seconds,
+        settings.claude_agent_command_timeout_seconds,
     )
     if claude_timeout <= 0:
-        claude_timeout = settings.claude_agent_sdk_command_timeout_seconds
+        claude_timeout = settings.claude_agent_command_timeout_seconds
     claude_worktree_dir = raw_flags.get(
         FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
-        settings.claude_agent_sdk_worktree_base_dir,
-    ).strip() or settings.claude_agent_sdk_worktree_base_dir
+        settings.claude_agent_worktree_base_dir,
+    ).strip() or settings.claude_agent_worktree_base_dir
 
     return AgentFeatureFlags(
         agent_sdks=tuple(modes),

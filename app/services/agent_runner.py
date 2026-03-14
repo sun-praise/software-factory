@@ -50,12 +50,18 @@ _REDACTION_PATTERNS = (
 )
 
 
+def _noop(*_args: Any, **_kwargs: Any) -> Any:
+    return None
+
+
 @dataclass(frozen=True)
 class RunnerOps:
     checkout_branch: Callable[[str, str], tuple[bool, str]] = checkout_branch
     ensure_head_sha: Callable[[str, str], bool] = ensure_head_sha
     commit_and_push: Callable[..., dict[str, Any]] = commit_and_push
     post_pr_comment: Callable[[str, str, int, str], tuple[bool, str]] = post_pr_comment
+    generate_fix: Callable[..., Any] = _noop
+    apply_fix_plan: Callable[..., Any] = _noop
     build_autofix_prompt: Callable[..., str] = build_autofix_prompt
     collect_check_commands: Callable[[str | None], list[str]] = collect_check_commands
     summarize_check_results: Callable[[list[dict[str, Any]]], dict[str, Any]] = (
@@ -264,6 +270,12 @@ def run_once(
             log_lines.append(f"agent_error: {sdk_error_message}")
 
         if not sdk_ok:
+            failure_summary = (
+                f"{sdk_error_code}: {sdk_error_message}"
+                if sdk_error_code and sdk_error_message
+                and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
+                else sdk_error_message
+            )
             logs_path = _write_logs(
                 workspace_dir=workspace,
                 run_id=run_id,
@@ -272,7 +284,7 @@ def run_once(
             status, run_error_summary = _finish_failed_run(
                 conn=conn,
                 run_id=run_id,
-                error_summary=sdk_error_message or "agent_sdk_failed",
+                error_summary=failure_summary or "agent_sdk_failed",
                 logs_path=logs_path,
                 error_code=sdk_error_code or "agent_sdk_failed",
             )
