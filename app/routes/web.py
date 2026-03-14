@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 import sqlite3
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -64,47 +65,93 @@ def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
     return text.strip()[:max_chars] or "No log data yet."
 
 
-def _build_issue_normalized_review(payload: IssueSubmissionRequest) -> dict[str, Any]:
-    issue_text = f"{payload.title}\n\n{payload.body}".strip()
+def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "github.com":
+        raise ValueError("Only https GitHub links on github.com are supported.")
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) < 4:
+        raise ValueError(
+            "Expected a GitHub URL in the form https://github.com/<owner>/<repo>/pull/<number>."
+        )
+
+    owner, repo_name, section, number_part = path_parts[:4]
+    if section not in {"pull", "pulls"}:
+        raise ValueError(
+            "Only pull request links are supported. Example: https://github.com/<owner>/<repo>/pull/<number>."
+        )
+
+    try:
+        pr_number = int(number_part)
+    except ValueError as exc:
+        raise ValueError("PR number in URL must be a positive integer.") from exc
+
+    if pr_number <= 0:
+        raise ValueError("PR number in URL must be a positive integer.")
+
+    repo = f"{owner}/{repo_name}"
+    issue_number = None
+    if section == "pulls":
+        section = "pull"
+    issue_url = f"https://github.com/{repo}/{section}/{pr_number}"
+    return repo, pr_number, issue_number, issue_url
+
+
+def _build_issue_normalized_review(
+    *,
+    repo: str,
+    pr_number: int,
+    issue_number: int | None,
+    issue_url: str,
+) -> dict[str, Any]:
+    issue_text = f"Manual issue submission: {issue_url}"
+    if issue_number is not None:
+        issue_text = f"{issue_text}\n\nOriginal issue number: {issue_number}"
+
     item = {
         "source": "manual_issue",
         "path": None,
         "line": None,
         "text": issue_text,
-        "severity": payload.severity,
+        "severity": "P1",
     }
 
-    must_fix: list[dict[str, Any]] = []
+    must_fix: list[dict[str, Any]] = [item]
     should_fix: list[dict[str, Any]] = []
-    if payload.priority == "must_fix":
-        must_fix.append(item)
-    else:
-        should_fix.append(item)
 
     return {
-        "repo": payload.repo,
-        "pr_number": payload.pr_number,
-        "head_sha": payload.head_sha,
+        "repo": repo,
+        "pr_number": pr_number,
+        "head_sha": None,
         "must_fix": must_fix,
         "should_fix": should_fix,
         "ignore": [],
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
-        "project_type": payload.project_type or "python",
-        "issue_number": payload.issue_number,
+        "project_type": "python",
+        "issue_number": issue_number,
     }
 
 
-def _enqueue_issue_fix(payload: IssueSubmissionRequest) -> dict[str, Any]:
+def _enqueue_issue_fix(
+    *,
+    repo: str,
+    pr_number: int,
+    issue_number: int | None,
+    issue_url: str,
+) -> dict[str, Any]:
     run_id: int | None = None
     remaining_quota = None
     idempotency_key = None
     queue_status = "not_queued"
 
-    normalized_review = _build_issue_normalized_review(payload)
-    repo = payload.repo
-    pr_number = payload.pr_number
-    branch = payload.branch
-    head_sha = payload.head_sha
+    normalized_review = _build_issue_normalized_review(
+        repo=repo,
+        pr_number=pr_number,
+        issue_number=issue_number,
+        issue_url=issue_url,
+    )
+    head_sha = None
 
     review_batch_id = build_review_batch_id(normalized_review)
     normalized_review["review_batch_id"] = review_batch_id
@@ -127,7 +174,7 @@ def _enqueue_issue_fix(payload: IssueSubmissionRequest) -> dict[str, Any]:
             conn,
             repo,
             pr_number,
-            branch=branch,
+            branch=None,
             head_sha=head_sha,
         )
         remaining_quota = get_remaining_autofix_quota(conn, repo, pr_number)
@@ -151,7 +198,7 @@ def _enqueue_issue_fix(payload: IssueSubmissionRequest) -> dict[str, Any]:
         "message": "Issue submission accepted.",
         "repo": repo,
         "pr_number": pr_number,
-        "issue_number": payload.issue_number,
+        "issue_number": issue_number,
         "queue_status": queue_status,
         "queued_run_id": run_id,
         "idempotency_key": idempotency_key,
@@ -285,30 +332,7 @@ async def issue_entry_page(request: Request) -> HTMLResponse:
 async def submit_issue(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
     form = await request.form()
-
-    raw_issue_number = form.get("issue_number")
-    issue_number: int | None = None
-    if raw_issue_number not in (None, ""):
-        try:
-            issue_number = int(str(raw_issue_number))
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="issue_number must be a positive integer",
-            ) from exc
-
-    request_data = {
-        "repo": form.get("repo", "").strip(),
-        "pr_number": form.get("pr_number"),
-        "issue_number": issue_number,
-        "title": form.get("title", "").strip(),
-        "body": form.get("body", "").strip(),
-        "head_sha": (form.get("head_sha") or "").strip() or None,
-        "branch": (form.get("branch") or "").strip() or None,
-        "priority": form.get("priority", "must_fix"),
-        "severity": form.get("severity", "P1"),
-        "project_type": (form.get("project_type") or "").strip() or None,
-    }
+    request_data = {"url": str(form.get("url", "")).strip()}
 
     try:
         payload = IssueSubmissionRequest.model_validate(request_data)
@@ -327,7 +351,28 @@ async def submit_issue(request: Request) -> HTMLResponse:
         )
 
     try:
-        result = _enqueue_issue_fix(payload)
+        repo, pr_number, issue_number, issue_url = _parse_issue_url(payload.url)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="issue_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Manual Issue",
+                "message": str(exc),
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+
+    try:
+        result = _enqueue_issue_fix(
+            repo=repo,
+            pr_number=pr_number,
+            issue_number=issue_number,
+            issue_url=issue_url,
+        )
     except sqlite3.Error:
         result = {
             "ok": False,
@@ -350,7 +395,20 @@ async def submit_issue(request: Request) -> HTMLResponse:
 @router.post("/api/issues")
 async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
     try:
-        return _enqueue_issue_fix(payload)
+        repo, pr_number, issue_number, issue_url = _parse_issue_url(payload.url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    try:
+        return _enqueue_issue_fix(
+            repo=repo,
+            pr_number=pr_number,
+            issue_number=issue_number,
+            issue_url=issue_url,
+        )
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

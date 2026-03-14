@@ -23,14 +23,7 @@ def test_submit_issue_api_queues_autofix_run(tmp_path) -> None:
     db_path = _setup_db(tmp_path)
 
     payload = {
-        "repo": "acme/widgets",
-        "pr_number": 42,
-        "issue_number": 35,
-        "title": "Fix null pointer handling",
-        "body": "Please handle None when reading config.",
-        "head_sha": "abc123",
-        "branch": "feat/fix",
-        "project_type": "python",
+        "url": "https://github.com/acme/widgets/pull/42",
     }
 
     with TestClient(app) as client:
@@ -56,10 +49,7 @@ def test_submit_issue_api_duplicates_are_deduplicated(tmp_path) -> None:
     _setup_db(tmp_path)
 
     payload = {
-        "repo": "acme/widgets",
-        "pr_number": 42,
-        "title": "Missing test case",
-        "body": "Please add missing test case",
+        "url": "https://github.com/acme/widgets/pull/42",
     }
 
     with TestClient(app) as client:
@@ -87,10 +77,7 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
         conn.commit()
 
     payload = {
-        "repo": "acme/widgets",
-        "pr_number": 42,
-        "title": "Refactor error handling",
-        "body": "Please refactor error handling.",
+        "url": "https://github.com/acme/widgets/pull/42",
     }
 
     with TestClient(app) as client:
@@ -98,3 +85,14 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["queue_status"] == "autofix_limit_reached"
+
+
+def test_submit_issue_api_accepts_only_github_pull_links(tmp_path) -> None:
+    _setup_db(tmp_path)
+
+    payload = {"url": "https://github.com/acme/widgets/issues/99"}
+
+    with TestClient(app) as client:
+        response = client.post("/api/issues", json=payload)
+
+    assert response.status_code == 400
