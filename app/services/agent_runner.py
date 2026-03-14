@@ -109,6 +109,10 @@ def _noop(*_args: Any, **_kwargs: Any) -> Any:
     return None
 
 
+def _noop(*_args: Any, **_kwargs: Any) -> Any:
+    return None
+
+
 @dataclass(frozen=True)
 class RunnerOps:
     checkout_branch: Callable[[str, str], tuple[bool, str]] = checkout_branch
