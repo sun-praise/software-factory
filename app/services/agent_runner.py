@@ -165,7 +165,7 @@ def run_once(
         repo=repo,
         pr_number=pr_number,
         lock_owner=worker_id,
-        pr_lock_ttl_seconds=settings.pr_lock_ttl_seconds,
+        lock_ttl_seconds=settings.pr_lock_ttl_seconds,
         run_id=run_id,
     )
     if not lock_acquired:
