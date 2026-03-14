@@ -779,6 +779,61 @@ def _command_exists(command_name: str) -> bool:
     return shutil.which(command_name) is not None
 
 
+def _run_claude_agent(
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    *,
+    command: str,
+    timeout_seconds: int,
+) -> tuple[bool, str, str | None]:
+    normalized_command = command.strip()
+    if not normalized_command:
+        return (
+            False,
+            "Claude Agent SDK command is not configured",
+            CLAUDE_FAILURE_CODE_COMMAND,
+        )
+
+    env = os.environ.copy()
+    env["SOFTWARE_FACTORY_REPO"] = repo
+    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
+    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    try:
+        result = subprocess.run(
+            shlex.split(command),
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            input=prompt,
+            env=env,
+        )
+    except FileNotFoundError:
+        return (
+            False,
+            f"Claude Agent SDK command not found: {normalized_command}",
+            CLAUDE_FAILURE_CODE_COMMAND,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            False,
+            f"Claude Agent SDK command timed out after {timeout_seconds}s",
+            CLAUDE_FAILURE_CODE_COMMAND,
+        )
+
+    if result.returncode != 0:
+        std_err = result.stderr.strip()
+        std_out = result.stdout.strip()
+        message = std_err or std_out or "Claude Agent SDK command failed"
+        return False, message, CLAUDE_FAILURE_CODE_COMMAND
+
+    return True, result.stdout.strip() or "Claude Agent SDK completed", None
+
+
 def _prepare_openhands_workspace(
     *,
     base_repo_dir: str,
