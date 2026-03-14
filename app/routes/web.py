@@ -1,6 +1,8 @@
 from pathlib import Path
+import os
 from typing import Any
 import sqlite3
+import httpx
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -73,13 +75,16 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
     path_parts = [part for part in parsed.path.split("/") if part]
     if len(path_parts) < 4:
         raise ValueError(
-            "Expected a GitHub URL in the form https://github.com/<owner>/<repo>/pull/<number>."
+            "Expected a GitHub URL in the form https://github.com/<owner>/<repo>/pull/<number> "
+            "or https://github.com/<owner>/<repo>/issues/<number>."
         )
 
     owner, repo_name, section, number_part = path_parts[:4]
-    if section not in {"pull", "pulls"}:
+    if section not in {"pull", "pulls", "issues"}:
         raise ValueError(
-            "Only pull request links are supported. Example: https://github.com/<owner>/<repo>/pull/<number>."
+            "Only pull request or issue links are supported. "
+            "Example: https://github.com/<owner>/<repo>/pull/<number> "
+            "or https://github.com/<owner>/<repo>/issues/<number>."
         )
 
     try:
@@ -92,12 +97,63 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
 
     repo = f"{owner}/{repo_name}"
     issue_number = None
-    if section == "pulls":
-        section = "pull"
-    issue_url = f"https://github.com/{repo}/{section}/{pr_number}"
-    return repo, pr_number, issue_number, issue_url
+    if section in {"pull", "pulls"}:
+        if section == "pulls":
+            section = "pull"
+        issue_url = f"https://github.com/{repo}/{section}/{pr_number}"
+        return repo, pr_number, issue_number, issue_url
+
+    if section == "issues":
+        issue_number = pr_number
+        try:
+            resolved_pr_number = _resolve_pr_number_from_issue(repo, issue_number)
+        except ValueError:
+            resolved_pr_number = None
+        if resolved_pr_number is None:
+            return repo, issue_number, issue_number, f"https://github.com/{repo}/issues/{issue_number}"
+        pr_number = resolved_pr_number
+        issue_url = f"https://github.com/{repo}/pull/{pr_number}"
+        return repo, pr_number, issue_number, issue_url
 
 
+def _resolve_pr_number_from_issue(repo: str, issue_number: int) -> int | None:
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
+    headers = {"User-Agent": "software-factory"}
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=10.0)
+    except httpx.RequestError as exc:
+        raise ValueError(
+            "Failed to fetch issue details from GitHub. Please try again."
+        ) from exc
+
+    if response.status_code == 404:
+        raise ValueError("Issue not found or unavailable.")
+    if response.status_code == 403:
+        raise ValueError(
+            "GitHub API returned 403 while resolving issue. Please retry later or set GITHUB_TOKEN."
+        )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise ValueError("Failed to resolve issue to pull request.") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError("GitHub API returned invalid JSON while resolving issue.") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("Unexpected GitHub API response while resolving issue.")
+
+    pull_request = payload.get("pull_request")
+    if not isinstance(pull_request, dict):
+        return None
+
+    return issue_number
 def _build_issue_normalized_review(
     *,
     repo: str,

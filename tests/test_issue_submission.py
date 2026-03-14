@@ -87,7 +87,26 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
     assert response.json()["queue_status"] == "autofix_limit_reached"
 
 
-def test_submit_issue_api_accepts_only_github_pull_links(tmp_path) -> None:
+def test_submit_issue_api_supports_pull_and_issue_links(tmp_path, monkeypatch) -> None:
+    _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        "app.routes.web._resolve_pr_number_from_issue",
+        lambda _repo, _issue_number: 99,
+    )
+
+    payload = {"url": "https://github.com/acme/widgets/issues/99"}
+
+    with TestClient(app) as client:
+        response = client.post("/api/issues", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pr_number"] == 99
+    assert data["issue_number"] == 99
+
+
+def test_submit_issue_api_uses_non_pull_issue_as_task(tmp_path) -> None:
     _setup_db(tmp_path)
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
@@ -95,4 +114,7 @@ def test_submit_issue_api_accepts_only_github_pull_links(tmp_path) -> None:
     with TestClient(app) as client:
         response = client.post("/api/issues", json=payload)
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pr_number"] == 99
+    assert data["issue_number"] == 99

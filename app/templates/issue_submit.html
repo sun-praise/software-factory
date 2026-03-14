@@ -15,7 +15,7 @@
 
       <header>
         <h1>{{ title }}</h1>
-        <p class="muted">Paste one GitHub pull request URL and enqueue one autofix run.</p>
+        <p class="muted">Paste a GitHub pull request URL or PR issue URL and enqueue one autofix run.</p>
       </header>
 
       {% if message %}
@@ -30,8 +30,8 @@
       {% endif %}
 
       <form method="post" action="/issues" class="issue-form">
-        <label for="url">GitHub pull request URL</label>
-        <input type="url" id="url" name="url" required value="{{ form.url | default('') }}" placeholder="https://github.com/owner/repo/pull/123">
+        <label for="url">GitHub pull request / issue URL</label>
+        <input type="url" id="url" name="url" required value="{{ form.url | default('') }}" placeholder="https://github.com/owner/repo/pull/123 or .../issues/123">
 
         <div class="actions">
           <button type="submit">Enqueue autofix</button>
