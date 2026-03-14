@@ -95,11 +95,24 @@ CREATE TABLE IF NOT EXISTS autofix_runs (
 )
 
 
+APP_FEATURE_FLAGS_TABLE = TableDef(
+    name="app_feature_flags",
+    create_sql="""
+CREATE TABLE IF NOT EXISTS app_feature_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+""".strip(),
+)
+
+
 SCHEMA_STATEMENTS = [
     SESSIONS_TABLE.create_sql,
     PULL_REQUESTS_TABLE.create_sql,
     REVIEW_EVENTS_TABLE.create_sql,
     AUTOFIX_RUNS_TABLE.create_sql,
+    APP_FEATURE_FLAGS_TABLE.create_sql,
     "CREATE INDEX IF NOT EXISTS idx_sessions_repo_branch ON sessions(repo, branch);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_pull_requests_repo_pr_number ON pull_requests(repo, pr_number);",
     "CREATE INDEX IF NOT EXISTS idx_review_events_repo_pr_number ON review_events(repo, pr_number);",

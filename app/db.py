@@ -31,6 +31,7 @@ def init_db() -> None:
     with connect_db() as conn:
         conn.executescript(SCHEMA_SQL)
         _migrate_m6_columns(conn)
+        _migrate_app_feature_flags(conn)
 
 
 ALLOWED_TABLES = {"pull_requests", "autofix_runs"}
@@ -72,6 +73,19 @@ def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_autofix_runs_idempotency_key ON autofix_runs(idempotency_key);"
+    )
+    conn.commit()
+
+
+def _migrate_app_feature_flags(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_feature_flags (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
     conn.commit()
 

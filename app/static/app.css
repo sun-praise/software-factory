@@ -101,3 +101,77 @@ a:hover {
     grid-template-columns: 1fr;
   }
 }
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem;
+  margin: 0;
+}
+
+legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+
+.settings-form label {
+  display: block;
+  font-weight: 600;
+  margin-top: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.settings-form .switch {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 500;
+}
+
+.settings-form input[type="text"],
+.settings-form input[type="number"] {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-family: inherit;
+}
+
+.actions {
+  margin-top: 0.9rem;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  padding: 0.55rem 0.95rem;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(0.95);
+}
+
+.stacked-header {
+  margin-bottom: 1rem;
+}
+
+.status {
+  margin: 0 0 0.9rem;
+  border-radius: 6px;
+  padding: 0.45rem 0.75rem;
+}
+
+.status.ok {
+  color: #0f5132;
+  background: #dff5e7;
+  border: 1px solid #9ad8b3;
+}
+
+.tiny {
+  margin-top: 0.2rem;
+  font-size: 0.86rem;
+}
