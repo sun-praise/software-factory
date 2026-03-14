@@ -15,7 +15,9 @@ MAX_CONTEXT_FILES = 8
 MAX_FILE_CHARS = 12000
 MAX_PROMPT_CHARS = 50000
 
-_TRIPLE_BACKTICK_BLOCK_RE = re.compile(r"```(?:[\w+-]+)?\s*\n?(.*?)\n```", re.DOTALL)
+_TRIPLE_BACKTICK_BLOCK_RE = re.compile(
+    r"```(?:[^\n`]*)?\s*\n?(.*?)\s*```", re.DOTALL
+)
 _ERROR_REDACTION_PATTERNS = (
     re.compile(r"(?i)(authorization:\s*Bearer\s+)\S+"),
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)\S+"),
