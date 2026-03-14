@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from json import JSONDecodeError
 import os
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -147,3 +149,45 @@ def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(tmp_path,
     data = response.json()
     assert data["pr_number"] == 88
     assert data["issue_number"] == 99
+
+
+def test_resolve_pr_number_from_issue_rejects_invalid_json(monkeypatch) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            raise JSONDecodeError("bad json", "", 0)
+
+    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        web._resolve_pr_number_from_issue(
+            owner="acme",
+            repo_name="widgets",
+            issue_number=99,
+        )
+
+
+def test_resolve_pr_number_from_issue_returns_none_for_invalid_pull_request_url(
+    monkeypatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "pull_request": {
+                    "url": "https://api.github.com/repos/acme/widgets/pulls/not-a-number"
+                }
+            }
+
+    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+
+    assert (
+        web._resolve_pr_number_from_issue(
+            owner="acme",
+            repo_name="widgets",
+            issue_number=99,
+        )
+        is None
+    )

@@ -48,6 +48,57 @@ _REDACTION_PATTERNS = (
     re.compile(r"(?i)(token\s*[=:]\s*)([^\s]+)"),
     re.compile(r"(?i)(secret\s*[=:]\s*)([^\s]+)"),
 )
+_ALLOWED_AGENT_ENV_KEYS = {
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "NO_PROXY",
+    "PATH",
+    "PYTHONPATH",
+    "REQUESTS_CA_BUNDLE",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "VIRTUAL_ENV",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+}
+_ALLOWED_AGENT_ENV_PREFIXES = (
+    "ANTHROPIC_",
+    "AWS_",
+    "AZURE_OPENAI_",
+    "BIGMODEL_",
+    "CLAUDE_",
+    "DASHSCOPE_",
+    "DEEPSEEK_",
+    "GEMINI_",
+    "GITHUB_",
+    "GH_",
+    "GOOGLE_",
+    "LANGCHAIN_",
+    "LANGSMITH_",
+    "LITELLM_",
+    "MISTRAL_",
+    "MODEL_",
+    "MOONSHOT_",
+    "OPENAI_",
+    "OPENCODE_",
+    "OPENROUTER_",
+    "QWEN_",
+    "XAI_",
+    "ZHIPU_",
+)
+_DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> Any:
@@ -546,49 +597,17 @@ def _run_openhands_agent(
     command: str,
     timeout_seconds: int,
 ) -> tuple[bool, str, str | None]:
-    normalized_command = command.strip()
-    if not normalized_command:
-        return (
-            False,
-            "OpenHands command is not configured",
-            OPENHANDS_FAILURE_CODE_COMMAND,
-        )
-
-    env = os.environ.copy()
-    env["SOFTWARE_FACTORY_REPO"] = repo
-    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
-    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
-    try:
-        result = subprocess.run(
-            shlex.split(command),
-            cwd=workspace,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            input=prompt,
-            env=env,
-        )
-    except FileNotFoundError:
-        return (
-            False,
-            f"OpenHands command not found: {normalized_command}",
-            OPENHANDS_FAILURE_CODE_COMMAND,
-        )
-    except subprocess.TimeoutExpired:
-        return (
-            False,
-            f"OpenHands command timed out after {timeout_seconds}s",
-            OPENHANDS_FAILURE_CODE_COMMAND,
-        )
-
-    if result.returncode != 0:
-        std_err = result.stderr.strip()
-        std_out = result.stdout.strip()
-        message = std_err or std_out or "OpenHands command failed"
-        return False, message, OPENHANDS_FAILURE_CODE_COMMAND
-
-    return True, result.stdout.strip() or "OpenHands completed", None
+    return _run_agent_command(
+        workspace=workspace,
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        prompt=prompt,
+        command=command,
+        timeout_seconds=timeout_seconds,
+        agent_name="OpenHands",
+        failure_code=OPENHANDS_FAILURE_CODE_COMMAND,
+    )
 
 
 def _run_claude_agent(
@@ -601,49 +620,94 @@ def _run_claude_agent(
     command: str,
     timeout_seconds: int,
 ) -> tuple[bool, str, str | None]:
+    return _run_agent_command(
+        workspace=workspace,
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        prompt=prompt,
+        command=command,
+        timeout_seconds=timeout_seconds,
+        agent_name="Claude Agent SDK",
+        failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+    )
+
+
+def _run_agent_command(
+    *,
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    command: str,
+    timeout_seconds: int,
+    agent_name: str,
+    failure_code: str,
+) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
+        return False, f"{agent_name} command is not configured", failure_code
+
+    try:
+        argv = shlex.split(normalized_command)
+    except ValueError as exc:
+        return False, f"{agent_name} command is invalid: {exc}", failure_code
+    if not argv:
+        return False, f"{agent_name} command is not configured", failure_code
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv[1:]):
         return (
             False,
-            "Claude Agent SDK command is not configured",
-            CLAUDE_FAILURE_CODE_COMMAND,
+            f"{agent_name} command contains unsupported shell control operators",
+            failure_code,
         )
+    if not _command_exists(argv[0]):
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
 
-    env = os.environ.copy()
-    env["SOFTWARE_FACTORY_REPO"] = repo
-    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
-    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
     try:
         result = subprocess.run(
-            shlex.split(command),
+            argv,
             cwd=workspace,
             check=False,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             input=prompt,
-            env=env,
+            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
         )
     except FileNotFoundError:
-        return (
-            False,
-            f"Claude Agent SDK command not found: {normalized_command}",
-            CLAUDE_FAILURE_CODE_COMMAND,
-        )
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
     except subprocess.TimeoutExpired:
-        return (
-            False,
-            f"Claude Agent SDK command timed out after {timeout_seconds}s",
-            CLAUDE_FAILURE_CODE_COMMAND,
-        )
+        return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
 
     if result.returncode != 0:
         std_err = result.stderr.strip()
         std_out = result.stdout.strip()
-        message = std_err or std_out or "Claude Agent SDK command failed"
-        return False, message, CLAUDE_FAILURE_CODE_COMMAND
+        message = std_err or std_out or f"{agent_name} command failed"
+        return False, message, failure_code
 
-    return True, result.stdout.strip() or "Claude Agent SDK completed", None
+    return True, result.stdout.strip() or f"{agent_name} completed", None
+
+
+def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in _ALLOWED_AGENT_ENV_KEYS
+        or any(key.startswith(prefix) for prefix in _ALLOWED_AGENT_ENV_PREFIXES)
+    }
+    env["SOFTWARE_FACTORY_REPO"] = repo
+    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
+    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    return env
+
+
+def _command_exists(command_name: str) -> bool:
+    if not command_name:
+        return False
+    if os.path.sep in command_name:
+        return Path(command_name).expanduser().exists()
+    return shutil.which(command_name) is not None
 
 
 def _prepare_openhands_workspace(

@@ -1,10 +1,11 @@
+import os
+import sqlite3
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
-import sqlite3
-import os
-import httpx
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -109,12 +110,13 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
     if issue_number <= 0:
         raise ValueError("Issue number in URL must be a positive integer.")
 
-    pr_number = _resolve_pr_number_from_issue(
+    resolved_pr_number = _resolve_pr_number_from_issue(
         owner=owner,
         repo_name=repo_name,
         issue_number=issue_number,
-    ) or issue_number
-    if pr_number == issue_number:
+    )
+    pr_number = resolved_pr_number or issue_number
+    if resolved_pr_number is None:
         issue_url = f"https://github.com/{repo}/issues/{issue_number}"
     else:
         issue_url = f"https://github.com/{repo}/pull/{pr_number}"
@@ -152,7 +154,10 @@ def _resolve_pr_number_from_issue(
             f"GitHub API returned unexpected status: {response.status_code}."
         )
 
-    payload = response.json()
+    try:
+        payload = response.json()
+    except JSONDecodeError as exc:
+        raise ValueError("GitHub API returned invalid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Unexpected response from GitHub API.")
 
@@ -168,7 +173,7 @@ def _resolve_pr_number_from_issue(
     try:
         return int(pull_url_parts[-1])
     except (TypeError, ValueError):
-        return issue_number
+        return None
 
 
 def _build_issue_normalized_review(

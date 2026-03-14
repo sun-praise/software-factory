@@ -81,6 +81,8 @@ def resolve_agent_feature_flags(
         _feature_flag_default_enabled(CLAUDE_AGENT_MODE, settings.agent_sdks),
     )
     legacy_flag_present = "agent.legacy.enabled" in raw_flags
+    # Keep the legacy flag as a compatibility alias for Claude mode so older
+    # deployments keep their existing settings after the dual-SDK migration.
     legacy_enabled = _coerce_bool(
         raw_flags.get(FEATURE_FLAG_LEGACY_ENABLED_KEY, None if legacy_flag_present else "1"),
         _feature_flag_default_enabled(LEGACY_AGENT_MODE, settings.agent_sdks),

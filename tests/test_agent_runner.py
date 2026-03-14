@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.services.agent_runner import (
     RunnerOps,
     _default_executor,
     _execute_agent_sdks,
+    _run_claude_agent,
     _sanitize_log_text,
     _normalize_agent_modes,
     run_once,
@@ -481,6 +483,70 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
     assert err_message is None
     assert selected_mode == "claude_agent_sdk"
     assert calls == ["/tmp", "/tmp"]
+
+
+def test_run_claude_agent_uses_normalized_command_and_filtered_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Result:
+        returncode = 0
+        stdout = "done"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return _Result()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("UNRELATED_SECRET", "should-not-leak")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    ok, message, error_code = _run_claude_agent(
+        workspace=str(tmp_path),
+        run_id=9,
+        repo="acme/widgets",
+        pr_number=7,
+        prompt="fix this",
+        command="  claude --print  ",
+        timeout_seconds=42,
+    )
+
+    assert ok is True
+    assert message == "done"
+    assert error_code is None
+    assert captured["command"] == ["claude", "--print"]
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["timeout"] == 42
+    assert captured["input"] == "fix this"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "test-openai-key"
+    assert env["SOFTWARE_FACTORY_REPO"] == "acme/widgets"
+    assert env["SOFTWARE_FACTORY_PR_NUMBER"] == "7"
+    assert env["SOFTWARE_FACTORY_RUN_ID"] == "9"
+    assert "UNRELATED_SECRET" not in env
+
+
+def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
+    ok, message, error_code = _run_claude_agent(
+        workspace=str(tmp_path),
+        run_id=9,
+        repo="acme/widgets",
+        pr_number=7,
+        prompt="fix this",
+        command="claude && whoami",
+        timeout_seconds=42,
+    )
+
+    assert ok is False
+    assert error_code == "agent_claude_failed"
+    assert "unsupported shell control operators" in message
 
 
 def test_sanitize_log_text_redacts_tokens() -> None:
