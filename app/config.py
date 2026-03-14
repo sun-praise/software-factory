@@ -25,12 +25,26 @@ class Settings(BaseSettings):
         "unsupported_project_type",
         "checks_failed",
         "head_sha_mismatch",
+        "ai_not_configured",
+        "ai_invalid_response",
+        "ai_request_client_error",
+        "patch_apply_failed",
     )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"
     log_archive_subdir: str = "archive"
     log_retention_days: int = 7
     worker_id: str = "worker-default"
+    ai_provider: str = "anthropic"
+    ai_timeout_seconds: int = 120
+    ai_max_output_tokens: int = 6000
+    ai_temperature: float = 0.0
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-3-7-sonnet-latest"
+    anthropic_base_url: str = "https://api.anthropic.com"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4.1"
+    openai_base_url: str = "https://api.openai.com/v1"
 
     @field_validator(
         "bot_logins",

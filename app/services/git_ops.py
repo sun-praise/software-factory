@@ -62,7 +62,7 @@ def commit_and_push(
     remote: str = "origin",
     branch: str | None = None,
 ) -> dict:
-    add_result = _run_git(repo_dir, ["add", "-u"])
+    add_result = _run_git(repo_dir, ["add", "-A"])
     if add_result.returncode != 0:
         return {
             "success": False,

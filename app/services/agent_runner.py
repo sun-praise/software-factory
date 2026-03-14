@@ -10,6 +10,13 @@ import subprocess
 from typing import Any, Callable, Mapping
 
 from app.config import get_settings
+from app.services.ai_client import (
+    AIConfigError,
+    AIRequestError,
+    AIResponseError,
+    FixPlan,
+    generate_fix,
+)
 from app.services.agent_prompt import (
     build_autofix_prompt,
     collect_check_commands,
@@ -23,6 +30,7 @@ from app.services.git_ops import (
     post_pr_comment,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
+from app.services.patch_applier import ApplyResult, PatchApplyError, apply_fix_plan
 from app.services.policy import increment_autofix_count
 from app.services.queue import mark_run_finished
 from app.services.retry import RetryConfig, schedule_retry
@@ -50,6 +58,8 @@ class RunnerOps:
     summarize_check_results: Callable[[list[dict[str, Any]]], dict[str, Any]] = (
         summarize_check_results
     )
+    generate_fix: Callable[..., FixPlan] = generate_fix
+    apply_fix_plan: Callable[..., ApplyResult] = apply_fix_plan
 
 
 def run_once(
@@ -123,6 +133,12 @@ def run_once(
 
     execute = _default_executor if executor is None else executor
     check_results: list[dict[str, Any]] = []
+    checks_summary = {
+        "overall_status": "failed",
+        "passed_count": 0,
+        "failed_count": 0,
+        "failed_commands": [],
+    }
     log_lines = [
         f"run_id={run_id}",
         f"repo={repo}",
@@ -167,48 +183,94 @@ def run_once(
         }
 
     try:
-        for command in commands:
-            result = _coerce_result(execute(command, workspace))
-            check_results.append(
-                {
-                    "command": command,
-                    "exit_code": result["returncode"],
-                    "stdout": result["stdout"],
-                    "stderr": result["stderr"],
-                }
-            )
-            log_lines.extend(
-                [
-                    f"[check] {command}",
-                    f"exit_code={result['returncode']}",
-                    "stdout:",
-                    _sanitize_log_text(result["stdout"]),
-                    "stderr:",
-                    _sanitize_log_text(result["stderr"]),
-                    "",
-                ]
-            )
-
-        checks_summary = active_ops.summarize_check_results(check_results)
         status = "failed"
         run_error_summary = None
+        run_error_code: str | None = None
         commit_sha: str | None = None
 
-        if checks_summary["overall_status"] != "passed":
-            failed_commands = checks_summary.get("failed_commands") or []
-            run_error_summary = (
-                f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
-            )
-            log_lines.append(run_error_summary)
+        prepare_error = _prepare_workspace(
+            repo_dir=workspace,
+            branch=branch,
+            head_sha=head_sha,
+            active_ops=active_ops,
+            log_lines=log_lines,
+        )
+        if prepare_error is not None:
+            run_error_summary = prepare_error
         else:
-            status, commit_sha, run_error_summary = _finalize_git_changes(
-                repo_dir=workspace,
-                branch=branch,
-                head_sha=head_sha,
-                commit_message=commit_message,
-                active_ops=active_ops,
-                log_lines=log_lines,
-            )
+            try:
+                plan = active_ops.generate_fix(
+                    prompt=prompt,
+                    workspace_dir=workspace,
+                    normalized_review=payload,
+                )
+                apply_result = active_ops.apply_fix_plan(
+                    workspace_dir=workspace,
+                    plan=plan,
+                )
+                log_lines.extend(
+                    [
+                        f"ai_summary: {plan.summary}",
+                        f"ai_changed_files: {', '.join(apply_result.changed_files) if apply_result.changed_files else 'none'}",
+                        "",
+                    ]
+                )
+            except AIConfigError as exc:
+                run_error_summary = f"ai_not_configured: {exc}"
+                log_lines.append(run_error_summary)
+            except AIResponseError as exc:
+                run_error_summary = f"ai_invalid_response: {exc}"
+                log_lines.append(run_error_summary)
+            except AIRequestError as exc:
+                run_error_code = (
+                    "ai_request_client_error"
+                    if not getattr(exc, "retriable", True)
+                    else "ai_request_failed"
+                )
+                run_error_summary = f"{run_error_code}: {_sanitize_log_text(str(exc))}"
+                log_lines.append(run_error_summary)
+            except PatchApplyError as exc:
+                run_error_summary = f"patch_apply_failed: {exc}"
+                log_lines.append(run_error_summary)
+
+        if run_error_summary is None:
+            for command in commands:
+                result = _coerce_result(execute(command, workspace))
+                check_results.append(
+                    {
+                        "command": command,
+                        "exit_code": result["returncode"],
+                        "stdout": result["stdout"],
+                        "stderr": result["stderr"],
+                    }
+                )
+                log_lines.extend(
+                    [
+                        f"[check] {command}",
+                        f"exit_code={result['returncode']}",
+                        "stdout:",
+                        _sanitize_log_text(result["stdout"]),
+                        "stderr:",
+                        _sanitize_log_text(result["stderr"]),
+                        "",
+                    ]
+                )
+
+            checks_summary = active_ops.summarize_check_results(check_results)
+
+            if checks_summary["overall_status"] != "passed":
+                failed_commands = checks_summary.get("failed_commands") or []
+                run_error_summary = (
+                    f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
+                )
+                log_lines.append(run_error_summary)
+            else:
+                status, commit_sha, run_error_summary = _finalize_git_changes(
+                    repo_dir=workspace,
+                    commit_message=commit_message,
+                    active_ops=active_ops,
+                    log_lines=log_lines,
+                )
 
         logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
         if status == "success":
@@ -233,7 +295,7 @@ def run_once(
                 run_id,
                 run_error_summary or "unknown_failure",
                 logs_path,
-                error_code=_infer_error_code(run_error_summary),
+                error_code=run_error_code or _infer_error_code(run_error_summary),
             )
     finally:
         release_pr_lock(
@@ -297,26 +359,13 @@ def run_once(
 
 def _finalize_git_changes(
     repo_dir: str,
-    branch: str | None,
-    head_sha: str | None,
     commit_message: str,
     active_ops: RunnerOps,
     log_lines: list[str],
 ) -> tuple[str, str | None, str | None]:
-    if branch:
-        ok, checkout_message = active_ops.checkout_branch(repo_dir, branch)
-        log_lines.append(f"checkout: {checkout_message}")
-        if not ok:
-            return "failed", None, f"checkout_failed: {checkout_message}"
-
-    if head_sha and not active_ops.ensure_head_sha(repo_dir, head_sha):
-        log_lines.append("head_sha_check: mismatch")
-        return "failed", None, "head_sha_mismatch"
-
     commit_result = active_ops.commit_and_push(
         repo_dir=repo_dir,
         message=commit_message,
-        branch=branch,
     )
     if commit_result.get("success"):
         commit_sha = _safe_text(commit_result.get("commit_sha"))
@@ -330,6 +379,26 @@ def _finalize_git_changes(
 
     log_lines.append(f"git_push: failed error={error}")
     return "failed", _safe_text(commit_result.get("commit_sha")), f"git_failed: {error}"
+
+
+def _prepare_workspace(
+    repo_dir: str,
+    branch: str | None,
+    head_sha: str | None,
+    active_ops: RunnerOps,
+    log_lines: list[str],
+) -> str | None:
+    if branch:
+        ok, checkout_message = active_ops.checkout_branch(repo_dir, branch)
+        log_lines.append(f"checkout: {checkout_message}")
+        if not ok:
+            return f"checkout_failed: {checkout_message}"
+
+    if head_sha and not active_ops.ensure_head_sha(repo_dir, head_sha):
+        log_lines.append("head_sha_check: mismatch")
+        return "head_sha_mismatch"
+
+    return None
 
 
 def _write_logs(workspace_dir: str, run_id: int, lines: list[str]) -> str:
@@ -365,21 +434,45 @@ def _finish_failed_run(
     )
     status = "retry_scheduled" if plan.scheduled else "failed"
     if not plan.scheduled:
-        mark_run_finished(
-            conn=conn,
-            run_id=run_id,
-            status="failed",
-            error_summary=error_summary,
-            logs_path=logs_path,
-            last_error_code=error_code,
-        )
-        return status, error_summary
+        try:
+            mark_run_finished(
+                conn=conn,
+                run_id=run_id,
+                status="failed",
+                error_summary=error_summary,
+                logs_path=logs_path,
+                last_error_code=error_code,
+            )
+            return status, error_summary
+        except sqlite3.Error:
+            conn.rollback()
+            conn.execute(
+                """
+                UPDATE autofix_runs
+                SET status = 'failed',
+                    error_summary = ?,
+                    logs_path = ?,
+                    last_error_code = COALESCE(?, last_error_code),
+                    last_error_at = CURRENT_TIMESTAMP,
+                    finished_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (error_summary, logs_path, error_code, run_id),
+            )
+            conn.commit()
+            return status, error_summary
 
-    conn.execute(
-        "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (logs_path, run_id),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            "UPDATE autofix_runs SET logs_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (logs_path, run_id),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        return status, f"{error_summary}; db_update_failed_for_retry={run_id}"
+
     return status, f"{error_summary}; retry_after={plan.retry_after}"
 
 
