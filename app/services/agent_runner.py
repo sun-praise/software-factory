@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import re
 import shlex
 import sqlite3
+import shutil
 import subprocess
+import tempfile
 from typing import Any, Callable, Mapping
 
 from app.config import get_settings
@@ -38,6 +41,12 @@ from app.services.retry import RetryConfig, schedule_retry
 
 Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
+GIT_COMMAND_TIMEOUT_SECONDS = 30
+WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
+OPENHANDS_AGENT_MODE = "openhands"
+LEGACY_AGENT_MODE = "legacy"
+OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
+OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -132,6 +141,7 @@ def run_once(
         }
 
     execute = _default_executor if executor is None else executor
+    agent_modes = _normalize_agent_modes(settings.agent_sdks)
     check_results: list[dict[str, Any]] = []
     checks_summary = {
         "overall_status": "failed",
@@ -145,6 +155,7 @@ def run_once(
         f"pr_number={pr_number}",
         f"head_sha={head_sha or 'unknown'}",
         f"branch={branch or 'unknown'}",
+        f"agent_modes={','.join(agent_modes)}",
         "prompt:",
         prompt,
         "",
@@ -154,7 +165,7 @@ def run_once(
         repo=repo,
         pr_number=pr_number,
         lock_owner=worker_id,
-        lock_ttl_seconds=settings.pr_lock_ttl_seconds,
+        pr_lock_ttl_seconds=settings.pr_lock_ttl_seconds,
         run_id=run_id,
     )
     if not lock_acquired:
@@ -182,60 +193,146 @@ def run_once(
             "comment_posted": False,
         }
 
+    agent_workspace = workspace
+    agent_worktree: str | None = None
+    if OPENHANDS_AGENT_MODE in agent_modes:
+        try:
+            agent_workspace, agent_worktree = _prepare_openhands_workspace(
+                base_repo_dir=workspace,
+                run_id=run_id,
+                branch=branch,
+                head_sha=head_sha,
+            )
+            log_lines.append(f"agent_workspace={agent_workspace}")
+        except ValueError as exc:
+            workspace_error = f"agent workspace init failed: {exc}"
+            log_lines.append(workspace_error)
+            if LEGACY_AGENT_MODE not in agent_modes:
+                logs_path = _write_logs(
+                    workspace_dir=workspace,
+                    run_id=run_id,
+                    lines=log_lines,
+                )
+                status, scheduled_error = _finish_failed_run(
+                    conn=conn,
+                    run_id=run_id,
+                    error_summary=workspace_error,
+                    logs_path=logs_path,
+                    error_code=OPENHANDS_FAILURE_CODE_WORKTREE,
+                )
+                return {
+                    "run_id": run_id,
+                    "status": status,
+                    "error_summary": scheduled_error,
+                    "logs_path": logs_path,
+                    "commit_sha": None,
+                    "checks": {
+                        "overall_status": "failed",
+                        "passed_count": 0,
+                        "failed_count": 0,
+                        "failed_commands": [],
+                    },
+                    "comment_posted": False,
+                }
+
     try:
         status = "failed"
         run_error_summary = None
         run_error_code: str | None = None
         commit_sha: str | None = None
+        check_workspace = workspace
 
-        prepare_error = _prepare_workspace(
-            repo_dir=workspace,
-            branch=branch,
-            head_sha=head_sha,
-            active_ops=active_ops,
-            log_lines=log_lines,
+        sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = _execute_agent_sdks(
+            workspace=agent_workspace,
+            run_id=run_id,
+            repo=repo,
+            pr_number=pr_number,
+            prompt=prompt,
+            modes=agent_modes,
         )
-        if prepare_error is not None:
-            run_error_summary = prepare_error
-        else:
-            try:
-                plan = active_ops.generate_fix(
-                    prompt=prompt,
-                    workspace_dir=workspace,
-                    normalized_review=payload,
-                )
-                apply_result = active_ops.apply_fix_plan(
-                    workspace_dir=workspace,
-                    plan=plan,
-                )
-                log_lines.extend(
-                    [
-                        f"ai_summary: {plan.summary}",
-                        f"ai_changed_files: {', '.join(apply_result.changed_files) if apply_result.changed_files else 'none'}",
-                        "",
-                    ]
-                )
-            except AIConfigError as exc:
-                run_error_summary = f"ai_not_configured: {exc}"
-                log_lines.append(run_error_summary)
-            except AIResponseError as exc:
-                run_error_summary = f"ai_invalid_response: {exc}"
-                log_lines.append(run_error_summary)
-            except AIRequestError as exc:
-                run_error_code = (
-                    "ai_request_client_error"
-                    if not getattr(exc, "retriable", True)
-                    else "ai_request_failed"
-                )
-                run_error_summary = f"{run_error_code}: {_sanitize_log_text(str(exc))}"
-                log_lines.append(run_error_summary)
-            except PatchApplyError as exc:
-                run_error_summary = f"patch_apply_failed: {exc}"
-                log_lines.append(run_error_summary)
+        if used_agent_mode == OPENHANDS_AGENT_MODE:
+            check_workspace = agent_workspace
+        log_lines.append(f"agent_mode={used_agent_mode or 'unknown'}")
+        if sdk_error_message:
+            log_lines.append(f"agent_error: {sdk_error_message}")
+
+        if not sdk_ok:
+            logs_path = _write_logs(
+                workspace_dir=workspace,
+                run_id=run_id,
+                lines=log_lines,
+            )
+            status, run_error_summary = _finish_failed_run(
+                conn=conn,
+                run_id=run_id,
+                error_summary=sdk_error_message or "agent_sdk_failed",
+                logs_path=logs_path,
+                error_code=sdk_error_code or "agent_sdk_failed",
+            )
+            return {
+                "run_id": run_id,
+                "status": status,
+                "error_summary": run_error_summary,
+                "logs_path": logs_path,
+                "commit_sha": None,
+                "checks": {
+                    "overall_status": "failed",
+                    "passed_count": 0,
+                    "failed_count": 0,
+                    "failed_commands": [],
+                },
+                "comment_posted": False,
+            }
+
+        if used_agent_mode == LEGACY_AGENT_MODE:
+            prepare_error = _prepare_workspace(
+                repo_dir=workspace,
+                branch=branch,
+                head_sha=head_sha,
+                active_ops=active_ops,
+                log_lines=log_lines,
+            )
+            if prepare_error is not None:
+                run_error_summary = prepare_error
+            else:
+                try:
+                    plan = active_ops.generate_fix(
+                        prompt=prompt,
+                        workspace_dir=workspace,
+                        normalized_review=payload,
+                    )
+                    apply_result = active_ops.apply_fix_plan(
+                        workspace_dir=workspace,
+                        plan=plan,
+                    )
+                    log_lines.extend(
+                        [
+                            f"ai_summary: {plan.summary}",
+                            f"ai_changed_files: {', '.join(apply_result.changed_files) if apply_result.changed_files else 'none'}",
+                            "",
+                        ]
+                    )
+                except AIConfigError as exc:
+                    run_error_summary = f"ai_not_configured: {exc}"
+                    log_lines.append(run_error_summary)
+                except AIResponseError as exc:
+                    run_error_summary = f"ai_invalid_response: {exc}"
+                    log_lines.append(run_error_summary)
+                except AIRequestError as exc:
+                    run_error_code = (
+                        "ai_request_client_error"
+                        if not getattr(exc, "retriable", True)
+                        else "ai_request_failed"
+                    )
+                    run_error_summary = f"{run_error_code}: {_sanitize_log_text(str(exc))}"
+                    log_lines.append(run_error_summary)
+                except PatchApplyError as exc:
+                    run_error_summary = f"patch_apply_failed: {exc}"
+                    log_lines.append(run_error_summary)
 
         if run_error_summary is None:
             for command in commands:
-                result = _coerce_result(execute(command, workspace))
+                result = _coerce_result(execute(command, check_workspace))
                 check_results.append(
                     {
                         "command": command,
@@ -266,13 +363,17 @@ def run_once(
                 log_lines.append(run_error_summary)
             else:
                 status, commit_sha, run_error_summary = _finalize_git_changes(
-                    repo_dir=workspace,
+                    repo_dir=check_workspace,
                     commit_message=commit_message,
                     active_ops=active_ops,
                     log_lines=log_lines,
                 )
 
-        logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        logs_path = _write_logs(
+            workspace_dir=workspace,
+            run_id=run_id,
+            lines=log_lines,
+        )
         if status == "success":
             increment_autofix_count(
                 conn,
@@ -298,6 +399,11 @@ def run_once(
                 error_code=run_error_code or _infer_error_code(run_error_summary),
             )
     finally:
+        if agent_worktree is not None:
+            _cleanup_openhands_workspace(
+                base_repo_dir=workspace,
+                worktree_dir=agent_worktree,
+            )
         release_pr_lock(
             conn,
             repo,
@@ -379,6 +485,181 @@ def _finalize_git_changes(
 
     log_lines.append(f"git_push: failed error={error}")
     return "failed", _safe_text(commit_result.get("commit_sha")), f"git_failed: {error}"
+
+
+def _normalize_agent_modes(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
+    has_openhands = False
+    has_legacy = False
+    for mode in raw_modes:
+        value = mode.strip().lower()
+        if not value:
+            continue
+        if value not in {OPENHANDS_AGENT_MODE, LEGACY_AGENT_MODE}:
+            continue
+        if value == OPENHANDS_AGENT_MODE:
+            has_openhands = True
+        elif value == LEGACY_AGENT_MODE:
+            has_legacy = True
+    if not (has_openhands or has_legacy):
+        return (LEGACY_AGENT_MODE,)
+    normalized: list[str] = []
+    if has_openhands:
+        normalized.append(OPENHANDS_AGENT_MODE)
+    if has_legacy:
+        normalized.append(LEGACY_AGENT_MODE)
+    return tuple(normalized)
+
+
+def _execute_agent_sdks(
+    *,
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    modes: tuple[str, ...],
+) -> tuple[bool, str | None, str | None, str | None]:
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+    for mode in modes:
+        if mode == LEGACY_AGENT_MODE:
+            return True, None, None, LEGACY_AGENT_MODE
+
+        if mode == OPENHANDS_AGENT_MODE:
+            openhands_ok, openhands_message, openhands_error_code = _run_openhands_agent(
+                workspace=workspace,
+                run_id=run_id,
+                repo=repo,
+                pr_number=pr_number,
+                prompt=prompt,
+            )
+            if openhands_ok:
+                return True, None, None, OPENHANDS_AGENT_MODE
+
+            last_error_code = openhands_error_code
+            last_error_message = openhands_message
+            continue
+
+    return False, last_error_code, last_error_message, None
+
+
+def _run_openhands_agent(
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+) -> tuple[bool, str, str | None]:
+    settings = get_settings()
+    command = settings.openhands_command.strip()
+    if not command:
+        return (
+            False,
+            "OpenHands command is not configured",
+            OPENHANDS_FAILURE_CODE_COMMAND,
+        )
+
+    env = os.environ.copy()
+    env["SOFTWARE_FACTORY_REPO"] = repo
+    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
+    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    try:
+        result = subprocess.run(
+            shlex.split(command),
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=settings.openhands_command_timeout_seconds,
+            input=prompt,
+            env=env,
+        )
+    except FileNotFoundError:
+        return (
+            False,
+            f"OpenHands command not found: {command}",
+            OPENHANDS_FAILURE_CODE_COMMAND,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            False,
+            f"OpenHands command timed out after {settings.openhands_command_timeout_seconds}s",
+            OPENHANDS_FAILURE_CODE_COMMAND,
+        )
+
+    if result.returncode != 0:
+        std_err = result.stderr.strip()
+        std_out = result.stdout.strip()
+        message = std_err or std_out or "OpenHands command failed"
+        return False, message, OPENHANDS_FAILURE_CODE_COMMAND
+
+    return True, result.stdout.strip() or "OpenHands completed", None
+
+
+def _prepare_openhands_workspace(
+    *,
+    base_repo_dir: str,
+    run_id: int,
+    branch: str | None,
+    head_sha: str | None,
+) -> tuple[str, str]:
+    base_repo = Path(base_repo_dir)
+    if not (base_repo / ".git").exists():
+        raise ValueError("agent workspace requires a git repository")
+
+    git_ref = branch or head_sha or "HEAD"
+    settings = get_settings()
+    worktree_root = Path(settings.openhands_worktree_base_dir)
+    if not worktree_root.is_absolute():
+        worktree_root = base_repo / worktree_root
+
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    worktree_dir = tempfile.mkdtemp(
+        prefix=f"{WORKTREE_CMD_PREFIX}-{run_id}-", dir=str(worktree_root)
+    )
+    try:
+        result = _run_git_command(
+            repo_dir=base_repo_dir,
+            args=["worktree", "add", "--detach", worktree_dir, git_ref],
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        shutil.rmtree(worktree_dir)
+        raise ValueError(f"failed to create worktree: {exc}") from exc
+
+    if result.returncode != 0:
+        shutil.rmtree(worktree_dir)
+        details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+        raise ValueError(f"git worktree add failed: {details}")
+
+    return worktree_dir, worktree_dir
+
+
+def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
+    try:
+        _run_git_command(
+            repo_dir=base_repo_dir,
+            args=["worktree", "remove", "--force", worktree_dir],
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    finally:
+        shutil.rmtree(worktree_dir, ignore_errors=True)
+
+
+def _run_git_command(
+    repo_dir: str,
+    args: list[str],
+    *,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def _prepare_workspace(

@@ -45,12 +45,17 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1"
     openai_base_url: str = "https://api.openai.com/v1"
+    agent_sdks: tuple[str, ...] = ("legacy",)
+    openhands_command: str = "openhands"
+    openhands_command_timeout_seconds: int = 600
+    openhands_worktree_base_dir: str = ".software-factory-worktrees"
 
     @field_validator(
         "bot_logins",
         "noise_comment_patterns",
         "managed_repo_prefixes",
         "non_retryable_error_codes",
+        "agent_sdks",
         mode="before",
     )
     @classmethod

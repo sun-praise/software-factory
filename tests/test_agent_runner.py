@@ -3,17 +3,22 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from app.models import SCHEMA_SQL
 from app.services.ai_client import AIConfigError, AIRequestError, FixPlan
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
     _default_executor,
+    _execute_agent_sdks,
     _sanitize_log_text,
+    _normalize_agent_modes,
     run_once,
 )
 from app.services.patch_applier import ApplyResult
 from app.services.queue import claim_next_queued_run, enqueue_autofix_run
+from app.services import agent_runner
 
 
 def _make_conn() -> sqlite3.Connection:
@@ -268,15 +273,6 @@ def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
     assert row["logs_path"] == str(Path(result["logs_path"]))
 
 
-def test_sanitize_log_text_redacts_tokens() -> None:
-    raw = "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz"
-    masked = _sanitize_log_text(raw)
-    assert "abc123" not in masked
-    assert "xyz" not in masked
-    assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
-    assert "[REDACTED]" in masked
-
-
 def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
@@ -380,3 +376,50 @@ def test_run_once_schedules_retry_for_retryable_ai_request_error(tmp_path: Path)
     assert row is not None
     assert row["status"] == "retry_scheduled"
     assert row["last_error_code"] == "ai_request_failed"
+
+
+def test_normalize_agent_modes() -> None:
+    assert _normalize_agent_modes(("legacy", "OPENHANDS", "legacy", "")) == (
+        "openhands",
+        "legacy",
+    )
+    assert _normalize_agent_modes(("unknown", "", "other")) == ("legacy",)
+
+
+def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_openhands(
+        workspace: str,
+        run_id: int,
+        repo: str,
+        pr_number: int,
+        prompt: str,
+    ) -> tuple[bool, str, str | None]:
+        calls.append(workspace)
+        return False, "openhands failed", "agent_openhands_failed"
+
+    monkeypatch.setattr(agent_runner, "_run_openhands_agent", fake_openhands)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        modes=("openhands", "legacy"),
+    )
+    assert ok is True
+    assert err_code is None
+    assert err_message is None
+    assert selected_mode == "legacy"
+    assert calls == ["/tmp"]
+
+
+def test_sanitize_log_text_redacts_tokens() -> None:
+    raw = "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz"
+    masked = _sanitize_log_text(raw)
+    assert "abc123" not in masked
+    assert "xyz" not in masked
+    assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
+    assert "[REDACTED]" in masked
