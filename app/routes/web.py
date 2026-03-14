@@ -343,26 +343,42 @@ async def settings_page(request: Request) -> HTMLResponse:
 async def save_settings(request: Request) -> RedirectResponse:
     form = await request.form()
     openhands_enabled = "agent_openhands_enabled" in form
-    legacy_enabled = "agent_legacy_enabled" in form
+    claude_agent_enabled = "agent_claude_agent_enabled" in form
 
     openhands_command = str(form.get("openhands_command", "openhands")).strip()
+    claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
     openhands_worktree_base_dir = str(
         form.get("openhands_worktree_base_dir", ".software-factory-worktrees")
+    ).strip()
+    claude_agent_worktree_base_dir = str(
+        form.get("claude_agent_worktree_base_dir", ".software-factory-worktrees")
     ).strip()
     timeout_raw = str(form.get("openhands_command_timeout_seconds", "600"))
     try:
         openhands_command_timeout_seconds = max(1, int(timeout_raw.strip()))
     except (TypeError, ValueError):
         openhands_command_timeout_seconds = 600
+    claude_timeout_raw = str(
+        form.get("claude_agent_command_timeout_seconds", "600")
+    ).strip()
+    try:
+        claude_agent_command_timeout_seconds = max(1, int(claude_timeout_raw))
+    except (TypeError, ValueError):
+        claude_agent_command_timeout_seconds = 600
 
     with connect_db() as conn:
         save_agent_feature_flags(
             conn,
             openhands_enabled=openhands_enabled,
-            legacy_enabled=legacy_enabled,
+            claude_agent_enabled=claude_agent_enabled,
             openhands_command=openhands_command,
             openhands_command_timeout_seconds=openhands_command_timeout_seconds,
             openhands_worktree_base_dir=openhands_worktree_base_dir,
+            claude_agent_command=claude_agent_command,
+            claude_agent_command_timeout_seconds=(
+                claude_agent_command_timeout_seconds
+            ),
+            claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
         )
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)

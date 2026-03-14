@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from app.models import SCHEMA_SQL
-from app.services.ai_client import AIConfigError, AIRequestError, FixPlan
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
@@ -16,7 +15,6 @@ from app.services.agent_runner import (
     _normalize_agent_modes,
     run_once,
 )
-from app.services.patch_applier import ApplyResult
 from app.services.queue import claim_next_queued_run, enqueue_autofix_run
 from app.services import agent_runner
 
@@ -47,7 +45,10 @@ def _enqueue_and_claim(conn: sqlite3.Connection) -> dict:
     return run
 
 
-def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
+def test_run_once_success_writes_logs_and_marks_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -67,11 +68,11 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: FixPlan(
-            summary="updated file",
-            changes=(),
-        ),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
     )
 
     result = run_once(
@@ -89,7 +90,6 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
     logs_path = Path(result["logs_path"])
     assert logs_path.exists()
     logs_text = logs_path.read_text(encoding="utf-8")
-    assert "ai_summary: updated file" in logs_text
     assert "pytest -q" in logs_text
     assert "ruff check ." in logs_text
     assert "mypy ." in logs_text
@@ -108,7 +108,10 @@ def test_run_once_success_writes_logs_and_marks_success(tmp_path: Path) -> None:
     assert pr_row["autofix_count"] == 1
 
 
-def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None:
+def test_run_once_failure_marks_failed_and_records_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -126,8 +129,11 @@ def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: FixPlan(summary="attempted fix", changes=()),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
     )
 
     result = run_once(
@@ -154,7 +160,10 @@ def test_run_once_failure_marks_failed_and_records_error(tmp_path: Path) -> None
     assert "ruff check" in str(row["error_summary"])
 
 
-def test_run_once_records_comment_failure_in_db(tmp_path: Path) -> None:
+def test_run_once_records_comment_failure_in_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -167,8 +176,11 @@ def test_run_once_records_comment_failure_in_db(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (False, "api unavailable"),
-        generate_fix=lambda **_: FixPlan(summary="updated file", changes=()),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
     )
 
     result = run_once(
@@ -237,7 +249,10 @@ def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
     assert result["comment_posted"] is False
 
 
-def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
+def test_run_once_schedules_retry_for_git_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -250,8 +265,11 @@ def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
             "error": "push_rejected",
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: FixPlan(summary="updated file", changes=()),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
     )
 
     result = run_once(
@@ -273,7 +291,10 @@ def test_run_once_schedules_retry_for_git_failure(tmp_path: Path) -> None:
     assert row["logs_path"] == str(Path(result["logs_path"]))
 
 
-def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
+def test_run_once_fails_when_agent_sdk_not_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -286,8 +307,15 @@ def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: (_ for _ in ()).throw(
-            AIConfigError("missing API key")
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (
+            False,
+            "ai_not_configured",
+            "missing API key",
+            None,
         ),
     )
 
@@ -303,7 +331,10 @@ def test_run_once_fails_when_ai_is_not_configured(tmp_path: Path) -> None:
     assert "ai_not_configured" in str(result["error_summary"])
 
 
-def test_run_once_marks_ai_400_error_as_non_retryable(tmp_path: Path) -> None:
+def test_run_once_marks_agent_error_as_non_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -316,10 +347,16 @@ def test_run_once_marks_ai_400_error_as_non_retryable(tmp_path: Path) -> None:
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: (_ for _ in ()).throw(
-            AIRequestError("bad request", status_code=400, retriable=False)
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (
+            False,
+            "ai_request_client_error",
+            "bad request",
+            None,
         ),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -341,7 +378,10 @@ def test_run_once_marks_ai_400_error_as_non_retryable(tmp_path: Path) -> None:
     assert "ai_request_client_error" in str(result["error_summary"])
 
 
-def test_run_once_schedules_retry_for_retryable_ai_request_error(tmp_path: Path) -> None:
+def test_run_once_schedules_retry_for_retryable_agent_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
@@ -354,10 +394,16 @@ def test_run_once_schedules_retry_for_retryable_ai_request_error(tmp_path: Path)
             "error": None,
         },
         post_pr_comment=lambda *_: (True, "ok"),
-        generate_fix=lambda **_: (_ for _ in ()).throw(
-            AIRequestError("temporary failure", status_code=503, retriable=True)
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (
+            False,
+            "ai_request_failed",
+            "temporary failure",
+            None,
         ),
-        apply_fix_plan=lambda **_: ApplyResult(changed_files=("app/main.py",)),
     )
 
     result = run_once(
@@ -381,12 +427,12 @@ def test_run_once_schedules_retry_for_retryable_ai_request_error(tmp_path: Path)
 def test_normalize_agent_modes() -> None:
     assert _normalize_agent_modes(("legacy", "OPENHANDS", "legacy", "")) == (
         "openhands",
-        "legacy",
+        "claude_agent_sdk",
     )
-    assert _normalize_agent_modes(("unknown", "", "other")) == ("legacy",)
+    assert _normalize_agent_modes(("unknown", "", "other")) == ("openhands",)
 
 
-def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     def fake_openhands(
@@ -402,7 +448,21 @@ def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch
         calls.append(workspace)
         return False, "openhands failed", "agent_openhands_failed"
 
+    def fake_claude(
+        workspace: str,
+        run_id: int,
+        repo: str,
+        pr_number: int,
+        prompt: str,
+        *,
+        command: str,
+        timeout_seconds: int,
+    ) -> tuple[bool, str, str | None]:
+        calls.append(workspace)
+        return True, "claude succeeded", None
+
     monkeypatch.setattr(agent_runner, "_run_openhands_agent", fake_openhands)
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
 
     ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
         workspace="/tmp",
@@ -410,15 +470,17 @@ def test_execute_agent_sdks_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch
         repo="owner/repo",
         pr_number=1,
         prompt="fix this",
-        modes=("openhands", "legacy"),
+        modes=("openhands", "claude_agent_sdk"),
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_command_timeout_seconds=600,
     )
     assert ok is True
     assert err_code is None
     assert err_message is None
-    assert selected_mode == "legacy"
-    assert calls == ["/tmp"]
+    assert selected_mode == "claude_agent_sdk"
+    assert calls == ["/tmp", "/tmp"]
 
 
 def test_sanitize_log_text_redacts_tokens() -> None:
