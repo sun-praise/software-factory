@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
@@ -81,6 +81,62 @@ def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
     except OSError:
         return "No log data yet."
     return text.strip()[:max_chars] or "No log data yet."
+
+
+def _read_run_log(logs_path: str | None, max_chars: int = 24000) -> str:
+    if not logs_path:
+        return "No log data yet."
+    path = Path(logs_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "No log data yet."
+    trimmed = text.strip()
+    if not trimmed:
+        return "No log data yet."
+    if len(trimmed) <= max_chars:
+        return trimmed
+    return trimmed[-max_chars:]
+
+
+def _load_run_detail(run_id_value: int) -> dict[str, str]:
+    with connect_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path
+            FROM autofix_runs
+            WHERE id = ?
+            """,
+            (run_id_value,),
+        ).fetchone()
+
+    if row is None:
+        return {
+            "id": str(run_id_value),
+            "repo": "-",
+            "pr_number": "-",
+            "pr_url": "",
+            "status": "not_found",
+            "created_at": "-",
+            "updated_at": "-",
+            "log_preview": "No log data yet.",
+        }
+
+    repo = str(row["repo"])
+    pr_number = str(row["pr_number"])
+    pr_url = ""
+    if repo and pr_number and pr_number != "0":
+        pr_url = f"https://github.com/{repo}/pull/{pr_number}"
+    return {
+        "id": str(row["id"]),
+        "repo": repo,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "status": str(row["status"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "log_preview": _read_run_log(row["logs_path"]),
+    }
 
 
 def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
@@ -326,47 +382,24 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
         run_id_value = int(run_id)
     except ValueError:
         run_id_value = -1
-
-    with connect_db() as conn:
-        row = conn.execute(
-            """
-            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path
-            FROM autofix_runs
-            WHERE id = ?
-            """,
-            (run_id_value,),
-        ).fetchone()
-
-    run = {
-        "id": run_id,
-        "repo": "-",
-        "pr_number": "-",
-        "pr_url": None,
-        "status": "not_found",
-        "status_class": _status_class("not_found"),
-        "created_at": "-",
-        "updated_at": "-",
-        "log_preview": "No log data yet.",
-    }
-    if row is not None:
-        repo = str(row["repo"])
-        pr_number = str(row["pr_number"])
-        run = {
-            "id": str(row["id"]),
-            "repo": repo,
-            "pr_number": pr_number,
-            "pr_url": f"https://github.com/{repo}/pull/{pr_number}",
-            "status": str(row["status"]),
-            "status_class": _status_class(str(row["status"])),
-            "created_at": str(row["created_at"]),
-            "updated_at": str(row["updated_at"]),
-            "log_preview": _read_log_preview(row["logs_path"]),
-        }
+    run = _load_run_detail(run_id_value)
     return templates.TemplateResponse(
         request=request,
         name="run_detail.html",
         context={"request": request, "run": run},
     )
+
+
+@router.get("/api/runs/{run_id}")
+async def api_run_detail(run_id: str) -> JSONResponse:
+    try:
+        run_id_value = int(run_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="run_id must be an integer",
+        )
+    return JSONResponse(_load_run_detail(run_id_value))
 
 
 @router.get("/settings", response_class=HTMLResponse)
