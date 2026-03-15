@@ -26,6 +26,11 @@
       <section class="status-block">
         <h2>Submit result</h2>
         <pre class="log">{{ result | tojson(indent=2) }}</pre>
+        {% if result.queued_run_id %}
+        <p class="tiny">
+          <a href="/runs/{{ result.queued_run_id }}">Open live run page</a>
+        </p>
+        {% endif %}
       </section>
       {% endif %}
 
