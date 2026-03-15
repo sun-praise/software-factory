@@ -50,16 +50,4 @@ jobs:
           USE_GITHUB_TOKEN: "true"
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for attempt in 1 2 3; do
-            if timeout 8m opencode github run; then
-              exit 0
-            fi
-
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-
-            echo "OpenCode Review failed or timed out on attempt $attempt, retrying in 10s..."
-            sleep 10
-          done
+        run: timeout 8m opencode github run
