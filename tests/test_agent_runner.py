@@ -762,14 +762,15 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         "Bash,Read,Edit,Glob,Grep,LS,WebFetch",
         "--output-format",
         "stream-json",
+        "fix this",
     ]
     assert captured["cwd"] == str(tmp_path)
     assert captured["stdout"] == agent_runner.subprocess.PIPE
     assert captured["stderr"] == agent_runner.subprocess.PIPE
-    assert captured["stdin"] == agent_runner.subprocess.PIPE
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
     assert captured["text"] is True
     assert captured["timeout"] == 42
-    assert captured["input"] == "fix this"
+    assert captured["input"] is None
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["OPENAI_API_KEY"] == "test-openai-key"
@@ -838,9 +839,18 @@ def test_run_claude_agent_supports_docker_runtime(
         f"{tmp_path.resolve()}:/workspace",
     ]
     assert "ghcr.io/example/claude-code:latest" in captured["command"]
+    assert "--env" in captured["command"]
+    assert "OPENAI_API_KEY" in captured["command"]
+    assert "test-openai-key" not in captured["command"]
     assert "--allowed-tools" in captured["command"]
     assert captured["cwd"] == str(tmp_path)
-    assert captured["input"] == "fix this"
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
+    assert captured["input"] is None
+    assert captured["command"][-1] == "fix this"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "test-openai-key"
+    assert env["HOME"] == "/tmp/claude-home"
 
 
 def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
@@ -862,9 +872,13 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
 
 
 def test_sanitize_log_text_redacts_tokens() -> None:
-    raw = "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz"
+    raw = (
+        "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz "
+        "OPENAI_API_KEY=test-openai-key"
+    )
     masked = _sanitize_log_text(raw)
     assert "abc123" not in masked
     assert "xyz" not in masked
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
+    assert "test-openai-key" not in masked
     assert "[REDACTED]" in masked
