@@ -86,11 +86,11 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             "signature": signature_result.status,
         }
 
+    should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
     filter_reason = get_filter_reason(
         event.repo,
-        actor=event.actor,
+        actor=None if should_ignore_actor else event.actor,
         body=extract_event_body(event_type, payload),
-        bot_logins=() if event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS else None,
     )
     if filter_reason is not None:
         return {

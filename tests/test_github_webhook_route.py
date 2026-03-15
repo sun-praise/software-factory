@@ -157,7 +157,7 @@ def test_bot_pull_request_review_is_queued(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 200
-    assert response.json()["ignored"] is not True
+    assert response.json().get("ignored") is not True
     assert response.json()["insert_status"] == "inserted"
     assert response.json()["queue_status"] == "queued"
     assert isinstance(response.json()["queued_run_id"], int)
