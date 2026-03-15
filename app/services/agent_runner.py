@@ -57,6 +57,10 @@ _REDACTION_PATTERNS = (
     re.compile(r"(?i)(token\s*[=:]\s*)([^\s]+)"),
     re.compile(r"(?i)(secret\s*[=:]\s*)([^\s]+)"),
 )
+_ANSI_CSI_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+_ANSI_OSC_PATTERN = re.compile(r"\x1B\].*?(?:\x07|\x1B\\)")
+_ANSI_ESC_PATTERN = re.compile(r"\x1B[@-_]")
+_C0_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0B-\x1F\x7F]")
 _ALLOWED_AGENT_ENV_KEYS = {
     "HOME",
     "HTTPS_PROXY",
@@ -840,7 +844,7 @@ def _consume_process_stream(
     try:
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
-            rendered = raw_line.rstrip("\n")
+            rendered = _clean_terminal_log_line(raw_line.rstrip("\n"))
             if on_log_line is not None and rendered:
                 on_log_line(f"[agent][{stream_name}] {rendered}")
     finally:
@@ -1021,6 +1025,14 @@ def _append_logs(logs_path: str, lines: list[str]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(prefix)
         handle.write("\n".join(lines))
+
+
+def _clean_terminal_log_line(value: str) -> str:
+    text = _ANSI_OSC_PATTERN.sub("", value)
+    text = _ANSI_CSI_PATTERN.sub("", text)
+    text = _ANSI_ESC_PATTERN.sub("", text)
+    text = _C0_CONTROL_PATTERN.sub("", text)
+    return _sanitize_log_text(text).strip()
 
 
 def _finish_cancelled_run(
