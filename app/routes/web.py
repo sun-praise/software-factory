@@ -340,6 +340,7 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     run = {
         "id": run_id,
         "status": "not_found",
+        "status_class": _status_class("not_found"),
         "created_at": "-",
         "updated_at": "-",
         "log_preview": "No log data yet.",
@@ -348,6 +349,7 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
         run = {
             "id": str(row["id"]),
             "status": str(row["status"]),
+            "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
             "log_preview": _read_log_preview(row["logs_path"]),
