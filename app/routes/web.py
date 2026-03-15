@@ -423,6 +423,61 @@ async def api_cancel_run(run_id: str) -> JSONResponse:
     return JSONResponse(_load_run_detail(run_id_value))
 
 
+@router.delete("/api/runs/{run_id}")
+async def api_delete_run(run_id: str) -> JSONResponse:
+    try:
+        run_id_value = int(run_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="run_id must be an integer",
+        )
+
+    with connect_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, repo, pr_number, status
+            FROM autofix_runs
+            WHERE id = ?
+            """,
+            (run_id_value,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="run not found",
+            )
+
+        run_status = str(row["status"])
+        if run_status in {"queued", "running", "cancel_requested", "retry_scheduled"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="active runs must be stopped before deletion",
+            )
+
+        repo = str(row["repo"])
+        pr_number = int(row["pr_number"])
+
+        conn.execute("DELETE FROM autofix_runs WHERE id = ?", (run_id_value,))
+        remaining = conn.execute(
+            """
+            SELECT 1
+            FROM autofix_runs
+            WHERE repo = ? AND pr_number = ?
+            LIMIT 1
+            """,
+            (repo, pr_number),
+        ).fetchone()
+        if remaining is None:
+            conn.execute(
+                "DELETE FROM pull_requests WHERE repo = ? AND pr_number = ?",
+                (repo, pr_number),
+            )
+        conn.commit()
+
+    return JSONResponse({"ok": True, "deleted_run_id": run_id_value})
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
