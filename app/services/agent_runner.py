@@ -289,7 +289,7 @@ def run_once(
         workspace_dir=workspace,
         run_id=run_id,
         lines=log_lines,
-        on_progress=lambda logs_path: touch_run_progress(conn, run_id, logs_path=logs_path),
+        on_progress=_build_run_progress_callback(conn, run_id),
     )
     update_run_logs_path(conn, run_id, logger.logs_path)
     lock_acquired = acquire_pr_lock(
@@ -1357,9 +1357,16 @@ def _consume_claude_stream(
     try:
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
-            rendered_lines, result_text, error_text, saw_events = _render_claude_stream_record(
-                raw_line
-            )
+            try:
+                rendered_lines, result_text, error_text, saw_events = _render_claude_stream_record(
+                    raw_line
+                )
+            except Exception:
+                cleaned = _clean_terminal_log_line(raw_line.strip())
+                rendered_lines = [f"[agent][stdout] {cleaned}"] if cleaned else []
+                result_text = None
+                error_text = None
+                saw_events = False
             if result_text:
                 state["result_text"] = result_text
             if error_text:
@@ -1383,6 +1390,9 @@ def _render_claude_stream_record(
         payload = json.loads(stripped)
     except json.JSONDecodeError:
         cleaned = _clean_terminal_log_line(stripped)
+        return ([f"[agent][stdout] {cleaned}"] if cleaned else []), None, None, False
+    if not isinstance(payload, Mapping):
+        cleaned = _clean_terminal_log_line(str(payload))
         return ([f"[agent][stdout] {cleaned}"] if cleaned else []), None, None, False
 
     payload_type = _safe_text(payload.get("type")) or "unknown"
@@ -2138,3 +2148,39 @@ def _merge_error_summary(existing: str | None, new_error: str) -> str:
     if not existing:
         return new_error
     return f"{existing}; {new_error}"
+
+
+def _build_run_progress_callback(
+    conn: sqlite3.Connection,
+    run_id: int,
+) -> Callable[[str], None] | None:
+    db_path = _resolve_sqlite_database_path(conn)
+    if not db_path:
+        return None
+
+    def _callback(logs_path: str) -> None:
+        try:
+            progress_conn = sqlite3.connect(db_path)
+            try:
+                touch_run_progress(progress_conn, run_id, logs_path=logs_path)
+            finally:
+                progress_conn.close()
+        except sqlite3.Error:
+            return None
+
+    return _callback
+
+
+def _resolve_sqlite_database_path(conn: sqlite3.Connection) -> str | None:
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    if isinstance(row, sqlite3.Row):
+        value = row["file"]
+    else:
+        value = row[2]
+    path = _safe_text(value)
+    return path or None
