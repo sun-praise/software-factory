@@ -711,7 +711,7 @@ def _run_claude_agent(
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
-    return _run_agent_command(
+    return _run_claude_stream_command(
         workspace=workspace,
         run_id=run_id,
         repo=repo,
@@ -724,6 +724,132 @@ def _run_claude_agent(
         on_log_line=on_log_line,
         should_cancel=should_cancel,
     )
+
+
+def _run_claude_stream_command(
+    *,
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    command: str,
+    timeout_seconds: int,
+    agent_name: str,
+    failure_code: str,
+    on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[bool, str, str | None]:
+    normalized_command = command.strip()
+    if not normalized_command:
+        return False, f"{agent_name} command is not configured", failure_code
+
+    try:
+        argv = shlex.split(normalized_command)
+    except ValueError as exc:
+        return False, f"{agent_name} command is invalid: {exc}", failure_code
+    if not argv:
+        return False, f"{agent_name} command is not configured", failure_code
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv[1:]):
+        return (
+            False,
+            f"{agent_name} command contains unsupported shell control operators",
+            failure_code,
+        )
+    if not _command_exists(argv[0]):
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
+
+    argv = _build_claude_stream_command_argv(argv)
+
+    process: subprocess.Popen[str]
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            text=True,
+            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
+    except OSError as exc:
+        return False, f"{agent_name} command failed to start: {exc}", failure_code
+
+    state: dict[str, Any] = {
+        "result_text": None,
+        "error_text": None,
+        "saw_events": False,
+    }
+    _register_active_agent_process(process.pid)
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    if on_log_line is not None:
+        on_log_line(f"[agent] starting {agent_name}: {' '.join(argv)}")
+    stdout_thread = threading.Thread(
+        target=_consume_claude_stream,
+        args=(process.stdout, stdout_chunks, on_log_line, state),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_consume_process_stream,
+        args=(process.stderr, "stderr", stderr_chunks, on_log_line),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        if process.stdin is not None:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if should_cancel is not None and should_cancel():
+                if on_log_line is not None:
+                    on_log_line("[agent] cancellation requested; terminating process")
+                _terminate_agent_process_tree(process)
+                return False, f"{agent_name} command cancelled by user", RUN_CANCELLED_CODE
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= deadline:
+                _terminate_agent_process_tree(process)
+                return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+            time.sleep(1.0)
+    except OSError as exc:
+        return False, f"{agent_name} command failed while running: {exc}", failure_code
+    finally:
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        _unregister_active_agent_process(process.pid)
+
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    result_text = _safe_text(state.get("result_text"))
+    error_text = _safe_text(state.get("error_text"))
+
+    if process.returncode != 0:
+        message = error_text or (stderr or "").strip() or result_text or (stdout or "").strip()
+        return False, message or f"{agent_name} command failed", failure_code
+
+    if on_log_line is not None and state.get("saw_events"):
+        on_log_line("[agent] completed")
+    return True, result_text or f"{agent_name} completed", None
+
+
+def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:
+    expanded = list(argv)
+    if "-p" not in expanded and "--print" not in expanded:
+        expanded.append("--print")
+    if "--verbose" not in expanded:
+        expanded.append("--verbose")
+    if not any(
+        token == "--output-format" or token.startswith("--output-format=")
+        for token in expanded
+    ):
+        expanded.extend(["--output-format", "stream-json"])
+    return expanded
 
 
 def _run_agent_command(
@@ -849,6 +975,163 @@ def _consume_process_stream(
                 on_log_line(f"[agent][{stream_name}] {rendered}")
     finally:
         stream.close()
+
+
+def _consume_claude_stream(
+    stream: Any,
+    chunks: list[str],
+    on_log_line: Callable[[str], None] | None,
+    state: dict[str, Any],
+) -> None:
+    if stream is None:
+        return
+    try:
+        for raw_line in iter(stream.readline, ""):
+            chunks.append(raw_line)
+            rendered_lines, result_text, error_text, saw_events = _render_claude_stream_record(
+                raw_line
+            )
+            if result_text:
+                state["result_text"] = result_text
+            if error_text:
+                state["error_text"] = error_text
+            if saw_events:
+                state["saw_events"] = True
+            if on_log_line is not None:
+                for line in rendered_lines:
+                    on_log_line(line)
+    finally:
+        stream.close()
+
+
+def _render_claude_stream_record(
+    raw_line: str,
+) -> tuple[list[str], str | None, str | None, bool]:
+    stripped = raw_line.strip()
+    if not stripped:
+        return [], None, None, False
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        cleaned = _clean_terminal_log_line(stripped)
+        return ([f"[agent][stdout] {cleaned}"] if cleaned else []), None, None, False
+
+    payload_type = _safe_text(payload.get("type")) or "unknown"
+    if payload_type == "init":
+        session_id = _safe_text(payload.get("session_id"))
+        if session_id:
+            return [f"[session] {session_id}"], None, None, False
+        return [], None, None, False
+
+    if payload_type == "assistant":
+        return _render_claude_assistant_event(payload), None, None, True
+
+    if payload_type == "result":
+        result_text = _safe_text(payload.get("result"))
+        if payload.get("is_error"):
+            return (
+                [f"[agent][error] {result_text}"] if result_text else [],
+                result_text,
+                result_text or "Claude agent reported an error",
+                False,
+            )
+        return [], result_text, None, False
+
+    return [], None, None, False
+
+
+def _render_claude_assistant_event(payload: dict[str, Any]) -> list[str]:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return []
+    content = message.get("content")
+    if isinstance(content, str):
+        text = _clean_terminal_log_line(content)
+        return [f"[assistant] {text}"] if text else []
+    if not isinstance(content, list):
+        return []
+
+    lines: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        lines.extend(_render_claude_content_block(block))
+    return lines
+
+
+def _render_claude_content_block(block: dict[str, Any]) -> list[str]:
+    block_type = _safe_text(block.get("type")) or "unknown"
+    if block_type in {"thinking", "redacted_thinking"}:
+        return []
+    if block_type == "text":
+        text = _clean_terminal_log_line(_safe_text(block.get("text")) or "")
+        if not text:
+            return []
+        return [f"[assistant] {line}" for line in text.splitlines() if line.strip()]
+    if block_type == "tool_use":
+        name = _safe_text(block.get("name")) or "tool"
+        tool_input = block.get("input")
+        return [_render_claude_tool_use(name, tool_input)]
+    if block_type == "tool_result":
+        result = _summarize_tool_payload(block.get("content"))
+        return [f"[tool-result] {result}"] if result else []
+
+    fallback = _summarize_tool_payload(block)
+    return [f"[assistant:{block_type}] {fallback}"] if fallback else []
+
+
+def _render_claude_tool_use(name: str, tool_input: Any) -> str:
+    normalized = name.strip()
+    lower_name = normalized.lower()
+    if not isinstance(tool_input, Mapping):
+        summary = _summarize_tool_payload(tool_input)
+        return f"[tool] {normalized}: {summary}" if summary else f"[tool] {normalized}"
+
+    path = _safe_text(tool_input.get("file_path")) or _safe_text(tool_input.get("path"))
+    command = _safe_text(tool_input.get("command")) or _safe_text(tool_input.get("cmd"))
+    pattern = _safe_text(tool_input.get("pattern"))
+    url = _safe_text(tool_input.get("url"))
+
+    if "read" in lower_name and path:
+        return f"[read] {path}"
+    if any(token in lower_name for token in {"write", "edit", "multiedit"}) and path:
+        return f"[write] {path}"
+    if "bash" in lower_name and command:
+        return f"[bash] {command}"
+    if "grep" in lower_name and pattern:
+        return f"[grep] {pattern}"
+    if "glob" in lower_name and pattern:
+        return f"[glob] {pattern}"
+    if lower_name == "ls" and path:
+        return f"[ls] {path}"
+    if "web" in lower_name and url:
+        return f"[web] {url}"
+    if "todo" in lower_name:
+        items = tool_input.get("todos")
+        if isinstance(items, list):
+            return f"[todo] {len(items)} items"
+        return "[todo] update"
+
+    summary = _summarize_tool_payload(tool_input)
+    return f"[tool] {normalized}: {summary}" if summary else f"[tool] {normalized}"
+
+
+def _summarize_tool_payload(value: Any, limit: int = 180) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = _clean_terminal_log_line(value)
+        if len(text) > limit:
+            return f"{text[:limit].rstrip()}..."
+        return text
+    try:
+        rendered = json.dumps(value, ensure_ascii=True, sort_keys=True)
+    except TypeError:
+        rendered = str(value)
+    rendered = _clean_terminal_log_line(rendered)
+    if len(rendered) > limit:
+        return f"{rendered[:limit].rstrip()}..."
+    return rendered
 
 
 def _register_active_agent_process(pid: int | None) -> None:
