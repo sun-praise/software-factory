@@ -10,23 +10,42 @@
     <main class="container">
       <header>
         <h1>Runs</h1>
-        <p class="muted">Minimal server-rendered dashboard placeholder.</p>
+        <p class="muted">Recent and historical autofix runs.</p>
         <p><a href="/issues">Submit issue</a> · <a href="/settings">Settings</a></p>
       </header>
 
       <section>
-        <h2>Task List</h2>
+        <h2>Run History</h2>
         {% if runs and runs|length > 0 %}
-        <ul class="list">
+        <ul class="run-list">
           {% for run in runs %}
-          <li>
-            <a href="/runs/{{ run.id }}">{{ run.id }}</a>
-            <span class="muted">{{ run.status | default("pending") }}</span>
+          <li class="run-card">
+            <div class="run-card-head">
+              <div>
+                <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a>
+                <div class="tiny muted">{{ run.repo }}</div>
+              </div>
+              <span class="status-pill {{ run.status_class }}">
+                {{ run.status | default("pending") }}
+              </span>
+            </div>
+            <dl class="meta run-meta">
+              <dt>Pull Request</dt>
+              <dd>
+                <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">
+                  #{{ run.pr_number }}
+                </a>
+              </dd>
+              <dt>Created</dt>
+              <dd>{{ run.created_at }}</dd>
+              <dt>Updated</dt>
+              <dd>{{ run.updated_at }}</dd>
+            </dl>
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="empty">No runs yet. This is a placeholder for M1.</p>
+        <p class="empty">No runs yet.</p>
         {% endif %}
       </section>
     </main>
