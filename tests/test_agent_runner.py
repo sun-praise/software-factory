@@ -673,6 +673,9 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         prompt: str,
         *,
         command: str,
+        provider: str,
+        base_url: str,
+        model: str,
         runtime: str,
         container_image: str,
         timeout_seconds: int,
@@ -695,6 +698,9 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
         claude_agent_runtime="host",
         claude_agent_container_image="",
         claude_agent_command_timeout_seconds=600,
@@ -719,6 +725,9 @@ def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure
         prompt: str,
         *,
         command: str,
+        provider: str,
+        base_url: str,
+        model: str,
         runtime: str,
         container_image: str,
         timeout_seconds: int,
@@ -745,6 +754,9 @@ def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
         claude_agent_runtime="host",
         claude_agent_container_image="",
         claude_agent_command_timeout_seconds=600,
@@ -787,6 +799,7 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
             return f"<_FakeProcess returncode={self.returncode}>"
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     monkeypatch.setenv("UNRELATED_SECRET", "should-not-leak")
     monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
     monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
@@ -799,6 +812,9 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         pr_number=7,
         prompt="fix this",
         command="  claude --print  ",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api",
+        model="openrouter/hunter-alpha",
         runtime="host",
         container_image="",
         timeout_seconds=42,
@@ -829,6 +845,12 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["OPENAI_API_KEY"] == "test-openai-key"
+    assert env["OPENROUTER_API_KEY"] == "test-openrouter-key"
+    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "test-openrouter-key"
+    assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["ANTHROPIC_MODEL"] == "openrouter/hunter-alpha"
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "openrouter/hunter-alpha"
     assert env["SOFTWARE_FACTORY_REPO"] == "acme/widgets"
     assert env["SOFTWARE_FACTORY_PR_NUMBER"] == "7"
     assert env["SOFTWARE_FACTORY_RUN_ID"] == "9"
@@ -861,6 +883,7 @@ def test_run_claude_agent_supports_docker_runtime(
             return self.returncode
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
     monkeypatch.setattr(
         agent_runner.shutil,
@@ -881,6 +904,9 @@ def test_run_claude_agent_supports_docker_runtime(
         pr_number=7,
         prompt="fix this",
         command="claude",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api",
+        model="openrouter/hunter-alpha",
         runtime="docker",
         container_image="ghcr.io/example/claude-code:latest",
         timeout_seconds=42,
@@ -913,6 +939,10 @@ def test_run_claude_agent_supports_docker_runtime(
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["OPENAI_API_KEY"] == "test-openai-key"
+    assert env["OPENROUTER_API_KEY"] == "test-openrouter-key"
+    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "test-openrouter-key"
+    assert env["ANTHROPIC_API_KEY"] == ""
     assert env["HOME"] == "/tmp/claude-home"
 
 
@@ -928,6 +958,9 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
         pr_number=7,
         prompt="fix this",
         command="claude && whoami",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api",
+        model="openrouter/hunter-alpha",
         runtime="host",
         container_image="",
         timeout_seconds=42,

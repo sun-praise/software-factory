@@ -81,6 +81,31 @@
               autocomplete="off"
             >
 
+            <label for="claude_agent_provider">Claude Agent provider</label>
+            <select id="claude_agent_provider" name="claude_agent_provider">
+              <option value="openrouter" {% if claude_agent_provider == "openrouter" %}selected{% endif %}>OpenRouter</option>
+              <option value="deepseek" {% if claude_agent_provider == "deepseek" %}selected{% endif %}>DeepSeek</option>
+            </select>
+            <p class="muted tiny">Default provider is OpenRouter with Hunter Alpha.</p>
+
+            <label for="claude_agent_base_url">Claude Agent base URL</label>
+            <input
+              type="text"
+              id="claude_agent_base_url"
+              name="claude_agent_base_url"
+              value="{{ claude_agent_base_url }}"
+              autocomplete="off"
+            >
+
+            <label for="claude_agent_model">Claude Agent model</label>
+            <input
+              type="text"
+              id="claude_agent_model"
+              name="claude_agent_model"
+              value="{{ claude_agent_model }}"
+              autocomplete="off"
+            >
+
             <label for="claude_agent_runtime">Claude Agent runtime</label>
             <select id="claude_agent_runtime" name="claude_agent_runtime">
               <option value="host" {% if claude_agent_runtime == "host" %}selected{% endif %}>Host</option>

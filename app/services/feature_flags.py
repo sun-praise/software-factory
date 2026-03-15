@@ -12,6 +12,9 @@ FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY = "agent.openhands.command_timeout_seconds"
 FEATURE_FLAG_OPENHANDS_WORKTREE_DIR_KEY = "agent.openhands.worktree_base_dir"
 FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY = "agent.claude_agent.enabled"
 FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY = "agent.claude_agent.command"
+FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY = "agent.claude_agent.provider"
+FEATURE_FLAG_CLAUDE_AGENT_BASE_URL_KEY = "agent.claude_agent.base_url"
+FEATURE_FLAG_CLAUDE_AGENT_MODEL_KEY = "agent.claude_agent.model"
 FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY = "agent.claude_agent.runtime"
 FEATURE_FLAG_CLAUDE_AGENT_CONTAINER_IMAGE_KEY = "agent.claude_agent.container_image"
 FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seconds"
@@ -21,6 +24,8 @@ FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 OPENHANDS_AGENT_MODE = "openhands"
 CLAUDE_AGENT_MODE = "claude_agent_sdk"
 LEGACY_AGENT_MODE = "legacy"
+CLAUDE_AGENT_PROVIDER_OPENROUTER = "openrouter"
+CLAUDE_AGENT_PROVIDER_DEEPSEEK = "deepseek"
 CLAUDE_AGENT_RUNTIME_HOST = "host"
 CLAUDE_AGENT_RUNTIME_DOCKER = "docker"
 
@@ -32,6 +37,9 @@ class AgentFeatureFlags:
     openhands_command_timeout_seconds: int
     openhands_worktree_base_dir: str
     claude_agent_command: str
+    claude_agent_provider: str
+    claude_agent_base_url: str
+    claude_agent_model: str
     claude_agent_runtime: str
     claude_agent_container_image: str
     claude_agent_command_timeout_seconds: int
@@ -59,6 +67,9 @@ def get_default_agent_feature_flags() -> AgentFeatureFlags:
         ),
         openhands_command=settings.openhands_command.strip() or "openhands",
         claude_agent_command=settings.claude_agent_sdk_command.strip() or "claude",
+        claude_agent_provider=_normalize_provider(settings.claude_agent_sdk_provider),
+        claude_agent_base_url=settings.claude_agent_sdk_base_url.strip(),
+        claude_agent_model=settings.claude_agent_sdk_model.strip(),
         claude_agent_runtime=_normalize_runtime(settings.claude_agent_sdk_runtime),
         claude_agent_container_image=settings.claude_agent_sdk_container_image.strip(),
         openhands_command_timeout_seconds=settings.openhands_command_timeout_seconds,
@@ -126,6 +137,17 @@ def resolve_agent_feature_flags(
         FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY,
         settings.claude_agent_command,
     ).strip() or settings.claude_agent_command
+    claude_provider = _normalize_provider(
+        raw_flags.get(FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY, settings.claude_agent_provider)
+    )
+    claude_base_url = raw_flags.get(
+        FEATURE_FLAG_CLAUDE_AGENT_BASE_URL_KEY,
+        settings.claude_agent_base_url,
+    ).strip() or settings.claude_agent_base_url
+    claude_model = raw_flags.get(
+        FEATURE_FLAG_CLAUDE_AGENT_MODEL_KEY,
+        settings.claude_agent_model,
+    ).strip() or settings.claude_agent_model
     claude_runtime = _normalize_runtime(
         raw_flags.get(FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY, settings.claude_agent_runtime)
     )
@@ -150,6 +172,9 @@ def resolve_agent_feature_flags(
         openhands_command_timeout_seconds=openhands_timeout,
         openhands_worktree_base_dir=worktree_dir,
         claude_agent_command=claude_command,
+        claude_agent_provider=claude_provider,
+        claude_agent_base_url=claude_base_url,
+        claude_agent_model=claude_model,
         claude_agent_runtime=claude_runtime,
         claude_agent_container_image=claude_container_image,
         claude_agent_command_timeout_seconds=claude_timeout,
@@ -166,6 +191,9 @@ def save_agent_feature_flags(
     openhands_command_timeout_seconds: int,
     openhands_worktree_base_dir: str,
     claude_agent_command: str,
+    claude_agent_provider: str,
+    claude_agent_base_url: str,
+    claude_agent_model: str,
     claude_agent_runtime: str,
     claude_agent_container_image: str,
     claude_agent_command_timeout_seconds: int,
@@ -185,6 +213,18 @@ def save_agent_feature_flags(
             openhands_worktree_base_dir.strip() or ".software-factory-worktrees",
         ),
         (FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY, claude_agent_command.strip()),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY,
+            _normalize_provider(claude_agent_provider),
+        ),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_BASE_URL_KEY,
+            claude_agent_base_url.strip(),
+        ),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_MODEL_KEY,
+            claude_agent_model.strip(),
+        ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY,
             _normalize_runtime(claude_agent_runtime),
@@ -230,6 +270,9 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
         "openhands_command_timeout_seconds": str(flags.openhands_command_timeout_seconds),
         "openhands_worktree_base_dir": flags.openhands_worktree_base_dir,
         "claude_agent_command": flags.claude_agent_command,
+        "claude_agent_provider": flags.claude_agent_provider,
+        "claude_agent_base_url": flags.claude_agent_base_url,
+        "claude_agent_model": flags.claude_agent_model,
         "claude_agent_runtime": flags.claude_agent_runtime,
         "claude_agent_container_image": flags.claude_agent_container_image,
         "claude_agent_command_timeout_seconds": str(
@@ -300,3 +343,10 @@ def _normalize_runtime(value: str | None) -> str:
     if normalized == CLAUDE_AGENT_RUNTIME_DOCKER:
         return CLAUDE_AGENT_RUNTIME_DOCKER
     return CLAUDE_AGENT_RUNTIME_HOST
+
+
+def _normalize_provider(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == CLAUDE_AGENT_PROVIDER_DEEPSEEK:
+        return CLAUDE_AGENT_PROVIDER_DEEPSEEK
+    return CLAUDE_AGENT_PROVIDER_OPENROUTER
