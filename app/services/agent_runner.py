@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ from app.services.retry import RetryConfig, schedule_retry
 
 Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
+BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 600
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
@@ -53,6 +55,7 @@ OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
 RUN_CANCELLED_CODE = "cancelled"
+BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -137,6 +140,23 @@ class RunnerOps:
     summarize_check_results: Callable[[list[dict[str, Any]]], dict[str, Any]] = (
         summarize_check_results
     )
+
+
+@dataclass(frozen=True)
+class WorkspaceBootstrapPlan:
+    kind: str
+    manifest_paths: tuple[Path, ...]
+    commands: tuple[tuple[str, ...], ...]
+    ready_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceBootstrapResult:
+    ok: bool
+    skipped: bool
+    kind: str | None = None
+    details: tuple[dict[str, Any], ...] = ()
+    error_summary: str | None = None
 
 
 @dataclass
@@ -434,8 +454,51 @@ def run_once(
                     "comment_posted": False,
                 }
 
+            bootstrap_result = _bootstrap_workspace_runtime(check_workspace)
+            if bootstrap_result.kind:
+                logger.append(f"workspace_bootstrap={bootstrap_result.kind}")
+            if bootstrap_result.skipped and bootstrap_result.kind:
+                logger.append("workspace_bootstrap_status=ready")
+            for detail in bootstrap_result.details:
+                logger.extend(
+                    [
+                        f"[bootstrap] {detail['command']}",
+                        f"exit_code={detail['exit_code']}",
+                        "stdout:",
+                        _sanitize_log_text(detail["stdout"]),
+                        "stderr:",
+                        _sanitize_log_text(detail["stderr"]),
+                        "",
+                    ]
+                )
+
             check_results = []
+            bootstrap_failed = False
+            if not bootstrap_result.ok:
+                bootstrap_failed = True
+                if bootstrap_result.details:
+                    check_results.extend(
+                        {
+                            "command": f"[bootstrap] {detail['command']}",
+                            "exit_code": detail["exit_code"],
+                            "stdout": detail["stdout"],
+                            "stderr": detail["stderr"],
+                        }
+                        for detail in bootstrap_result.details
+                    )
+                else:
+                    check_results.append(
+                        {
+                            "command": "[bootstrap] workspace setup",
+                            "exit_code": 1,
+                            "stdout": "",
+                            "stderr": bootstrap_result.error_summary or "",
+                        }
+                    )
+
             for command in commands:
+                if bootstrap_failed:
+                    break
                 if is_run_cancel_requested(conn, run_id):
                     logger.append("cancel_requested: stopping run before checks")
                     logs_path = logger.flush()
@@ -1322,7 +1385,6 @@ def _prepare_openhands_workspace(
         details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
         raise ValueError(f"git worktree add failed: {details}")
 
-    _link_workspace_virtualenv(base_repo=base_repo, worktree_dir=Path(worktree_dir))
     return worktree_dir, worktree_dir
 
 
@@ -1334,24 +1396,7 @@ def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
     finally:
-        venv_link = Path(worktree_dir) / ".venv"
-        if venv_link.is_symlink():
-            try:
-                venv_link.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("failed to remove worktree .venv link: %s", exc)
         shutil.rmtree(worktree_dir, ignore_errors=True)
-
-
-def _link_workspace_virtualenv(*, base_repo: Path, worktree_dir: Path) -> None:
-    source_venv = base_repo / ".venv"
-    target_venv = worktree_dir / ".venv"
-    if not source_venv.exists() or target_venv.exists():
-        return
-    try:
-        target_venv.symlink_to(source_venv, target_is_directory=True)
-    except OSError as exc:
-        logger.warning("failed to link worktree .venv from %s: %s", source_venv, exc)
 
 
 def _run_git_command(
@@ -1605,6 +1650,218 @@ def _default_executor(
         timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
         env=env,
     )
+
+
+def _bootstrap_workspace_runtime(workspace_dir: str) -> WorkspaceBootstrapResult:
+    workspace = Path(workspace_dir)
+    plan = _build_workspace_bootstrap_plan(workspace)
+    if plan is None:
+        return WorkspaceBootstrapResult(ok=True, skipped=True)
+
+    state_file = workspace / BOOTSTRAP_STATE_FILENAME
+    signature = _compute_bootstrap_signature(plan.manifest_paths)
+    if _bootstrap_state_matches(state_file, kind=plan.kind, signature=signature) and (
+        _workspace_bootstrap_ready(plan)
+    ):
+        return WorkspaceBootstrapResult(ok=True, skipped=True, kind=plan.kind)
+
+    details: list[dict[str, Any]] = []
+    for command in plan.commands:
+        command_text = shlex.join(command)
+        try:
+            result = subprocess.run(
+                list(command),
+                cwd=workspace_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=BOOTSTRAP_COMMAND_TIMEOUT_SECONDS,
+            )
+        except FileNotFoundError as exc:
+            _clear_bootstrap_state(state_file)
+            details.append(
+                {
+                    "command": command_text,
+                    "exit_code": 127,
+                    "stdout": "",
+                    "stderr": str(exc),
+                }
+            )
+            return WorkspaceBootstrapResult(
+                ok=False,
+                skipped=False,
+                kind=plan.kind,
+                details=tuple(details),
+                error_summary=f"workspace_bootstrap_failed: {plan.kind}: {command_text}",
+            )
+
+        details.append(
+            {
+                "command": command_text,
+                "exit_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        )
+        if result.returncode != 0:
+            _clear_bootstrap_state(state_file)
+            return WorkspaceBootstrapResult(
+                ok=False,
+                skipped=False,
+                kind=plan.kind,
+                details=tuple(details),
+                error_summary=f"workspace_bootstrap_failed: {plan.kind}: {command_text}",
+            )
+
+    if not _workspace_bootstrap_ready(plan):
+        _clear_bootstrap_state(state_file)
+        return WorkspaceBootstrapResult(
+            ok=False,
+            skipped=False,
+            kind=plan.kind,
+            details=tuple(details),
+            error_summary=(
+                f"workspace_bootstrap_failed: {plan.kind}: "
+                "bootstrap output missing expected artifacts"
+            ),
+        )
+
+    _write_bootstrap_state(state_file, kind=plan.kind, signature=signature)
+    return WorkspaceBootstrapResult(
+        ok=True,
+        skipped=False,
+        kind=plan.kind,
+        details=tuple(details),
+    )
+
+
+def _build_workspace_bootstrap_plan(
+    workspace: Path,
+) -> WorkspaceBootstrapPlan | None:
+    package_json = workspace / "package.json"
+    if package_json.is_file():
+        return _build_node_bootstrap_plan(workspace)
+
+    python_manifests = [
+        path
+        for path in (
+            workspace / "requirements.txt",
+            workspace / "requirements-dev.txt",
+            workspace / "requirements-test.txt",
+            workspace / "pyproject.toml",
+            workspace / "setup.py",
+            workspace / "setup.cfg",
+        )
+        if path.is_file()
+    ]
+    if python_manifests:
+        return _build_python_bootstrap_plan(workspace, tuple(python_manifests))
+    return None
+
+
+def _build_python_bootstrap_plan(
+    workspace: Path,
+    manifests: tuple[Path, ...],
+) -> WorkspaceBootstrapPlan:
+    venv_dir = workspace / ".venv"
+    venv_python = venv_dir / "bin" / "python"
+    bootstrap_python = sys.executable or shutil.which("python3") or "python3"
+    commands: list[tuple[str, ...]] = []
+    if not (venv_python.exists() and os.access(venv_python, os.X_OK)):
+        commands.append((bootstrap_python, "-m", "venv", str(venv_dir)))
+
+    requirements_files = [
+        path
+        for path in manifests
+        if path.name in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt"}
+    ]
+    if requirements_files:
+        for requirements_file in requirements_files:
+            commands.append(
+                (
+                    str(venv_python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    str(requirements_file),
+                )
+            )
+    else:
+        commands.append((str(venv_python), "-m", "pip", "install", "-e", "."))
+
+    return WorkspaceBootstrapPlan(
+        kind="python",
+        manifest_paths=manifests,
+        commands=tuple(commands),
+        ready_paths=(venv_python,),
+    )
+
+
+def _build_node_bootstrap_plan(workspace: Path) -> WorkspaceBootstrapPlan:
+    package_json = workspace / "package.json"
+    manifest_paths = [package_json]
+    if (workspace / "pnpm-lock.yaml").is_file():
+        manifest_paths.append(workspace / "pnpm-lock.yaml")
+        commands = (("pnpm", "install", "--frozen-lockfile"),)
+    elif (workspace / "package-lock.json").is_file():
+        manifest_paths.append(workspace / "package-lock.json")
+        commands = (("npm", "ci"),)
+    elif (workspace / "yarn.lock").is_file():
+        manifest_paths.append(workspace / "yarn.lock")
+        commands = (("yarn", "install", "--frozen-lockfile"),)
+    else:
+        commands = (("npm", "install"),)
+
+    return WorkspaceBootstrapPlan(
+        kind="node",
+        manifest_paths=tuple(manifest_paths),
+        commands=commands,
+        ready_paths=(workspace / "node_modules",),
+    )
+
+
+def _workspace_bootstrap_ready(plan: WorkspaceBootstrapPlan) -> bool:
+    for path in plan.ready_paths:
+        if path.is_dir():
+            return True
+        if path.exists() and os.access(path, os.X_OK):
+            return True
+    return False
+
+
+def _compute_bootstrap_signature(manifest_paths: tuple[Path, ...]) -> str:
+    hasher = hashlib.sha256()
+    for path in sorted(manifest_paths, key=lambda item: str(item)):
+        hasher.update(str(path.name).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def _bootstrap_state_matches(state_file: Path, *, kind: str, signature: str) -> bool:
+    if not state_file.is_file():
+        return False
+    try:
+        payload = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("kind") == kind and payload.get("signature") == signature
+
+
+def _write_bootstrap_state(state_file: Path, *, kind: str, signature: str) -> None:
+    payload = {"kind": kind, "signature": signature}
+    state_file.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _clear_bootstrap_state(state_file: Path) -> None:
+    try:
+        state_file.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 def _coerce_result(result: Any) -> dict[str, Any]:

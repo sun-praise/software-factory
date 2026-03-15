@@ -212,6 +212,74 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
     assert "lint failed" in prompts[1]
 
 
+def test_run_once_returns_bootstrap_failures_to_agent_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    prompts: list[str] = []
+    bootstrap_calls = {"count": 0}
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m ruff check ."],
+    )
+
+    def fake_execute_agent_sdks(**kwargs):
+        prompts.append(str(kwargs["prompt"]))
+        return True, None, None, "claude_agent_sdk"
+
+    def fake_bootstrap(_workspace_dir: str):
+        bootstrap_calls["count"] += 1
+        if bootstrap_calls["count"] == 1:
+            return agent_runner.WorkspaceBootstrapResult(
+                ok=False,
+                skipped=False,
+                kind="python",
+                details=(
+                    {
+                        "command": ".venv/bin/python -m pip install -r requirements.txt",
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "No module named pip",
+                    },
+                ),
+                error_summary="workspace_bootstrap_failed: python",
+            )
+        return agent_runner.WorkspaceBootstrapResult(
+            ok=True,
+            skipped=True,
+            kind="python",
+        )
+
+    monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
+    monkeypatch.setattr(agent_runner, "_bootstrap_workspace_runtime", fake_bootstrap)
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert len(prompts) == 2
+    assert (
+        "[failed-check] [bootstrap] .venv/bin/python -m pip install -r requirements.txt"
+        in prompts[1]
+    )
+    assert "No module named pip" in prompts[1]
+
+
 def test_run_once_records_comment_failure_in_db(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -340,6 +408,53 @@ def test_default_executor_prefers_workspace_venv_python(
     assert env["VIRTUAL_ENV"] == str(tmp_path / ".venv")
     assert str(venv_bin) == str(env["PATH"]).split(os.pathsep)[0]
     assert result.returncode == 0
+
+
+def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("fastapi\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        argv = list(command)
+        calls.append(argv)
+        if argv[1:3] == ["-m", "venv"]:
+            venv_python = tmp_path / ".venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True, exist_ok=True)
+            venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+            venv_python.chmod(0o755)
+
+        class _Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(agent_runner.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    first = agent_runner._bootstrap_workspace_runtime(str(tmp_path))
+    second = agent_runner._bootstrap_workspace_runtime(str(tmp_path))
+
+    assert first.ok is True
+    assert first.skipped is False
+    assert second.ok is True
+    assert second.skipped is True
+    assert calls == [
+        ["/usr/bin/python3", "-m", "venv", str(tmp_path / ".venv")],
+        [
+            str(tmp_path / ".venv" / "bin" / "python"),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements),
+        ],
+    ]
 
 
 def test_run_once_schedules_retry_for_git_failure(
