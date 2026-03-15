@@ -12,6 +12,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 from typing import Any, Callable, Mapping
 
 from app.config import get_settings
@@ -30,7 +31,7 @@ from app.services.git_ops import (
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.feature_flags import resolve_agent_feature_flags
 from app.services.policy import increment_autofix_count
-from app.services.queue import mark_run_finished
+from app.services.queue import get_run_status, is_run_cancel_requested, mark_run_finished
 from app.services.retry import RetryConfig, schedule_retry
 
 
@@ -43,6 +44,7 @@ CLAUDE_AGENT_MODE = "claude_agent_sdk"
 OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
+RUN_CANCELLED_CODE = "cancelled"
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -273,6 +275,24 @@ def run_once(
             "comment_posted": False,
         }
 
+    if is_run_cancel_requested(conn, run_id):
+        logger.append("cancel_requested: stopping run before execution")
+        logs_path = logger.flush()
+        status, run_error_summary = _finish_cancelled_run(
+            conn,
+            run_id,
+            logs_path,
+        )
+        return {
+            "run_id": run_id,
+            "status": status,
+            "error_summary": run_error_summary,
+            "logs_path": logs_path,
+            "commit_sha": None,
+            "checks": checks_summary,
+            "comment_posted": False,
+        }
+
     agent_workspace = workspace
     agent_worktree: str | None = None
     if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
@@ -340,6 +360,7 @@ def run_once(
                 feature_flags.claude_agent_command_timeout_seconds
             ),
             on_log_line=logger.append,
+            should_cancel=lambda: is_run_cancel_requested(conn, run_id),
         )
         if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
             check_workspace = agent_workspace
@@ -348,6 +369,22 @@ def run_once(
             logger.append(f"agent_error: {sdk_error_message}")
 
         if not sdk_ok:
+            if sdk_error_code == RUN_CANCELLED_CODE:
+                logs_path = logger.flush()
+                status, run_error_summary = _finish_cancelled_run(
+                    conn,
+                    run_id,
+                    logs_path,
+                )
+                return {
+                    "run_id": run_id,
+                    "status": status,
+                    "error_summary": run_error_summary,
+                    "logs_path": logs_path,
+                    "commit_sha": None,
+                    "checks": checks_summary,
+                    "comment_posted": False,
+                }
             failure_summary = (
                 f"{sdk_error_code}: {sdk_error_message}"
                 if sdk_error_code and sdk_error_message
@@ -379,6 +416,23 @@ def run_once(
 
         if run_error_summary is None:
             for command in commands:
+                if is_run_cancel_requested(conn, run_id):
+                    logger.append("cancel_requested: stopping run before checks")
+                    logs_path = logger.flush()
+                    status, run_error_summary = _finish_cancelled_run(
+                        conn,
+                        run_id,
+                        logs_path,
+                    )
+                    return {
+                        "run_id": run_id,
+                        "status": status,
+                        "error_summary": run_error_summary,
+                        "logs_path": logs_path,
+                        "commit_sha": None,
+                        "checks": checks_summary,
+                        "comment_posted": False,
+                    }
                 result = _coerce_result(execute(command, check_workspace))
                 check_results.append(
                     {
@@ -566,6 +620,7 @@ def _execute_agent_sdks(
     claude_agent_command: str,
     claude_agent_command_timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
@@ -580,6 +635,7 @@ def _execute_agent_sdks(
                 command=openhands_command,
                 timeout_seconds=openhands_command_timeout_seconds,
                 on_log_line=on_log_line,
+                should_cancel=should_cancel,
             )
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
@@ -598,6 +654,7 @@ def _execute_agent_sdks(
                 command=claude_agent_command,
                 timeout_seconds=claude_agent_command_timeout_seconds,
                 on_log_line=on_log_line,
+                should_cancel=should_cancel,
             )
             if claude_ok:
                 return True, None, None, CLAUDE_AGENT_MODE
@@ -619,6 +676,7 @@ def _run_openhands_agent(
     command: str,
     timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
     return _run_agent_command(
         workspace=workspace,
@@ -631,6 +689,7 @@ def _run_openhands_agent(
         agent_name="OpenHands",
         failure_code=OPENHANDS_FAILURE_CODE_COMMAND,
         on_log_line=on_log_line,
+        should_cancel=should_cancel,
     )
 
 
@@ -644,6 +703,7 @@ def _run_claude_agent(
     command: str,
     timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
     return _run_agent_command(
         workspace=workspace,
@@ -656,6 +716,7 @@ def _run_claude_agent(
         agent_name="Claude Agent SDK",
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
         on_log_line=on_log_line,
+        should_cancel=should_cancel,
     )
 
 
@@ -671,6 +732,7 @@ def _run_agent_command(
     agent_name: str,
     failure_code: str,
     on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
@@ -733,10 +795,19 @@ def _run_agent_command(
         if process.stdin is not None:
             process.stdin.write(prompt)
             process.stdin.close()
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        _terminate_agent_process_tree(process)
-        return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if should_cancel is not None and should_cancel():
+                if on_log_line is not None:
+                    on_log_line("[agent] cancellation requested; terminating process")
+                _terminate_agent_process_tree(process)
+                return False, f"{agent_name} command cancelled by user", RUN_CANCELLED_CODE
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= deadline:
+                _terminate_agent_process_tree(process)
+                return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+            time.sleep(1.0)
     except OSError as exc:
         return False, f"{agent_name} command failed while running: {exc}", failure_code
     finally:
@@ -948,6 +1019,28 @@ def _append_logs(logs_path: str, lines: list[str]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(prefix)
         handle.write("\n".join(lines))
+
+
+def _finish_cancelled_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    logs_path: str,
+) -> tuple[str, str]:
+    current_status = get_run_status(conn, run_id) or "cancelled"
+    error_summary = (
+        "cancel_requested_by_user"
+        if current_status == "cancel_requested"
+        else "cancelled_by_user"
+    )
+    mark_run_finished(
+        conn=conn,
+        run_id=run_id,
+        status="cancelled",
+        error_summary=error_summary,
+        logs_path=logs_path,
+        last_error_code=RUN_CANCELLED_CODE,
+    )
+    return "cancelled", error_summary
 
 
 def _finish_failed_run(

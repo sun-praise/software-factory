@@ -56,6 +56,9 @@
           </div>
           <div class="log-toolbar-meta">
             <span id="polling-indicator" class="live-indicator">Live</span>
+            <button id="stop-run-button" type="button" class="button-danger run-action-button" hidden>
+              Stop run
+            </button>
           </div>
         </div>
         <pre id="run-log" class="log log-live">{{ run.log_preview | default("No log data yet.") }}</pre>
@@ -77,13 +80,34 @@
         const updatedAt = document.getElementById("run-updated-at");
         const logNode = document.getElementById("run-log");
         const pollingIndicator = document.getElementById("polling-indicator");
-        const activeStatuses = new Set(["queued", "running"]);
+        const stopButton = document.getElementById("stop-run-button");
+        const activeStatuses = new Set(["queued", "running", "cancel_requested"]);
         let pollHandle = null;
 
         const setStatus = (status) => {
           statusPill.textContent = status;
           statusText.textContent = status;
           statusPill.className = `status-pill status-pill--${status}`;
+        };
+
+        const updateStopButton = (status) => {
+          if (!stopButton) {
+            return;
+          }
+          if (status === "cancel_requested") {
+            stopButton.hidden = false;
+            stopButton.disabled = true;
+            stopButton.textContent = "Stopping...";
+            return;
+          }
+          if (status === "queued" || status === "running") {
+            stopButton.hidden = false;
+            stopButton.disabled = false;
+            stopButton.textContent = "Stop run";
+            return;
+          }
+          stopButton.hidden = true;
+          stopButton.disabled = true;
         };
 
         const setPrUrl = (url, prNumber) => {
@@ -104,6 +128,7 @@
           repoText.textContent = run.repo || "-";
           setPrUrl(run.pr_url || "", run.pr_number || "");
           setStatus(run.status || "not_found");
+          updateStopButton(run.status || "not_found");
           createdAt.textContent = run.created_at || "-";
           updatedAt.textContent = run.updated_at || "-";
           logNode.textContent = run.log_preview || "No log data yet.";
@@ -115,6 +140,25 @@
             window.clearInterval(pollHandle);
             pollHandle = null;
           }
+        };
+
+        const cancelRun = async () => {
+          if (!stopButton) {
+            return;
+          }
+          stopButton.disabled = true;
+          stopButton.textContent = "Stopping...";
+          const response = await fetch(`/api/runs/${runId}/cancel`, {
+            method: "POST",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            stopButton.disabled = false;
+            stopButton.textContent = "Stop failed";
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          updateView(await response.json());
         };
 
         const fetchRun = async () => {
@@ -131,6 +175,9 @@
           pollHandle = window.setInterval(fetchRun, 2000);
         } else {
           pollingIndicator.textContent = "Final";
+        }
+        if (stopButton) {
+          stopButton.addEventListener("click", cancelRun);
         }
       })();
     </script>
