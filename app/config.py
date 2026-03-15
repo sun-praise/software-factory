@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     agent_sdks: tuple[str, ...] = ("claude_agent_sdk", "openhands")
     openhands_command: str = "openhands"
     claude_agent_sdk_command: str = "claude"
+    claude_agent_sdk_runtime: str = "host"
+    claude_agent_sdk_container_image: str = ""
     openhands_command_timeout_seconds: int = 600
     claude_agent_sdk_command_timeout_seconds: int = 600
     openhands_worktree_base_dir: str = ".software-factory-worktrees"

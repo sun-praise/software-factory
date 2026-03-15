@@ -503,6 +503,10 @@ async def save_settings(request: Request) -> RedirectResponse:
 
     openhands_command = str(form.get("openhands_command", "openhands")).strip()
     claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
+    claude_agent_runtime = str(form.get("claude_agent_runtime", "host")).strip()
+    claude_agent_container_image = str(
+        form.get("claude_agent_container_image", "")
+    ).strip()
     openhands_worktree_base_dir = str(
         form.get("openhands_worktree_base_dir", ".software-factory-worktrees")
     ).strip()
@@ -531,6 +535,8 @@ async def save_settings(request: Request) -> RedirectResponse:
             openhands_command_timeout_seconds=openhands_command_timeout_seconds,
             openhands_worktree_base_dir=openhands_worktree_base_dir,
             claude_agent_command=claude_agent_command,
+            claude_agent_runtime=claude_agent_runtime,
+            claude_agent_container_image=claude_agent_container_image,
             claude_agent_command_timeout_seconds=(
                 claude_agent_command_timeout_seconds
             ),
