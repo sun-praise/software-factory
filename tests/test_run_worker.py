@@ -68,3 +68,34 @@ def test_stop_signal_invokes_agent_cleanup(monkeypatch) -> None:
 
     assert run_worker._STOP_WORKER is True
     assert calls["count"] == 1
+
+
+def test_recover_stale_runs_uses_worker_settings(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class _ConnContext:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Settings:
+        stale_run_timeout_seconds = 123
+        worker_id = "worker-a"
+
+    monkeypatch.setattr(run_worker, "connect_db", lambda: _ConnContext())
+    monkeypatch.setattr(run_worker, "get_settings", lambda: _Settings())
+
+    def _recover(conn, *, stale_after_seconds, worker_id):
+        calls["stale_after_seconds"] = stale_after_seconds
+        calls["worker_id"] = worker_id
+        return 2
+
+    monkeypatch.setattr(run_worker, "recover_stale_runs", _recover)
+
+    recovered = run_worker._recover_stale_runs()
+
+    assert recovered == 2
+    assert calls["stale_after_seconds"] == 123
+    assert calls["worker_id"] == "worker-a"

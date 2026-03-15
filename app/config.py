@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     github_webhook_debounce_seconds: int = 60
     max_autofix_per_pr: int = 3
     max_concurrent_runs: int = 3
+    stale_run_timeout_seconds: int = 900
     pr_lock_ttl_seconds: int = 900
     max_retry_attempts: int = 3
     retry_backoff_base_seconds: int = 30

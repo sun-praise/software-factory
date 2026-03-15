@@ -20,6 +20,7 @@ from app.services.agent_runner import (
     run_once,
 )
 from app.services.queue import claim_next_queued_run, mark_run_finished
+from app.services.queue import recover_stale_runs
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.logging_config import get_run_log_path
 
@@ -85,6 +86,16 @@ def _process_one(workspace_dir: str) -> bool:
     return True
 
 
+def _recover_stale_runs() -> int:
+    settings = get_settings()
+    with connect_db() as conn:
+        return recover_stale_runs(
+            conn,
+            stale_after_seconds=settings.stale_run_timeout_seconds,
+            worker_id=settings.worker_id,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run autofix queue worker")
     group = parser.add_mutually_exclusive_group()
@@ -96,6 +107,9 @@ def main() -> int:
     args = parser.parse_args()
 
     init_db()
+    recovered_count = _recover_stale_runs()
+    if recovered_count:
+        print(f"recovered stale runs={recovered_count}")
     atexit.register(cleanup_active_agent_processes)
     signal.signal(signal.SIGINT, _handle_stop_signal)
     signal.signal(signal.SIGTERM, _handle_stop_signal)

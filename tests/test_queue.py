@@ -7,6 +7,7 @@ from app.services.queue import (
     claim_next_queued_run,
     enqueue_autofix_run,
     mark_run_finished,
+    recover_stale_runs,
 )
 
 
@@ -92,3 +93,34 @@ def test_claim_next_queued_run_promotes_due_retry() -> None:
     assert claimed is not None
     assert claimed["status"] == "running"
     assert claimed["worker_id"] == "worker-a"
+
+
+def test_recover_stale_runs_marks_old_running_rows_failed() -> None:
+    conn = _make_conn()
+    conn.execute(
+        """
+        INSERT INTO autofix_runs (repo, pr_number, status, worker_id, updated_at)
+        VALUES
+            (?, ?, 'running', 'worker-a', '2000-01-01 00:00:00'),
+            (?, ?, 'cancel_requested', 'worker-a', '2000-01-01 00:00:00'),
+            (?, ?, 'running', 'worker-b', CURRENT_TIMESTAMP)
+        """,
+        ("acme/widgets", 1, "acme/widgets", 2, "acme/widgets", 3),
+    )
+    conn.commit()
+
+    recovered = recover_stale_runs(
+        conn,
+        stale_after_seconds=60,
+        worker_id="worker-a",
+    )
+
+    assert recovered == 2
+    rows = conn.execute(
+        "SELECT pr_number, status, error_summary, last_error_code FROM autofix_runs ORDER BY pr_number ASC"
+    ).fetchall()
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["error_summary"] == "stale_run_recovered"
+    assert rows[0]["last_error_code"] == "stale_run_recovered"
+    assert rows[1]["status"] == "failed"
+    assert rows[2]["status"] == "running"
