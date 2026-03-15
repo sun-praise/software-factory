@@ -32,6 +32,7 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "Enable OpenHands agent mode" in html
     assert "Enable Claude Agent SDK mode" in html
     assert "Claude Agent runtime" in html
+    assert "software-factory/claude-agent:latest" in html
 
 
 def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
