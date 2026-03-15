@@ -103,8 +103,6 @@ _ALLOWED_AGENT_ENV_PREFIXES = (
 _DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
 _ACTIVE_AGENT_PIDS_LOCK = threading.Lock()
 _ACTIVE_AGENT_PIDS: set[int] = set()
-_ACTIVE_AGENT_PIDS_LOCK = threading.Lock()
-_ACTIVE_AGENT_PIDS: set[int] = set()
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> Any:
