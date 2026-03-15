@@ -8,6 +8,7 @@ jobs:
   review:
     name: AI Code Review
     if: github.event.pull_request.draft == false
+    timeout-minutes: 15
     runs-on: [self-hosted, Linux, X64]
     permissions:
       id-token: write
@@ -51,7 +52,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for attempt in 1 2 3; do
-            if opencode github run; then
+            if timeout 8m opencode github run; then
               exit 0
             fi
 
@@ -59,6 +60,6 @@ jobs:
               exit 1
             fi
 
-            echo "OpenCode Review failed on attempt $attempt, retrying in 10s..."
+            echo "OpenCode Review failed or timed out on attempt $attempt, retrying in 10s..."
             sleep 10
           done

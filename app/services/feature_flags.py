@@ -7,12 +7,17 @@ from typing import Any, Mapping
 from app.config import get_settings
 
 FEATURE_FLAG_OPENHANDS_ENABLED_KEY = "agent.openhands.enabled"
-FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 FEATURE_FLAG_OPENHANDS_COMMAND_KEY = "agent.openhands.command"
 FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY = "agent.openhands.command_timeout_seconds"
 FEATURE_FLAG_OPENHANDS_WORKTREE_DIR_KEY = "agent.openhands.worktree_base_dir"
+FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY = "agent.claude_agent.enabled"
+FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY = "agent.claude_agent.command"
+FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seconds"
+FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY = "agent.claude_agent.worktree_base_dir"
+FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 
 OPENHANDS_AGENT_MODE = "openhands"
+CLAUDE_AGENT_MODE = "claude_agent_sdk"
 LEGACY_AGENT_MODE = "legacy"
 
 
@@ -22,6 +27,9 @@ class AgentFeatureFlags:
     openhands_command: str
     openhands_command_timeout_seconds: int
     openhands_worktree_base_dir: str
+    claude_agent_command: str
+    claude_agent_command_timeout_seconds: int
+    claude_agent_worktree_base_dir: str
 
 
 def load_agent_feature_flags(
@@ -44,9 +52,17 @@ def get_default_agent_feature_flags() -> AgentFeatureFlags:
             str(mode).strip().lower() for mode in settings.agent_sdks if str(mode).strip()
         ),
         openhands_command=settings.openhands_command.strip() or "openhands",
+        claude_agent_command=settings.claude_agent_sdk_command.strip() or "claude",
         openhands_command_timeout_seconds=settings.openhands_command_timeout_seconds,
         openhands_worktree_base_dir=
         settings.openhands_worktree_base_dir.strip() or ".software-factory-worktrees",
+        claude_agent_command_timeout_seconds=(
+            settings.claude_agent_sdk_command_timeout_seconds
+        ),
+        claude_agent_worktree_base_dir=(
+            settings.claude_agent_sdk_worktree_base_dir.strip()
+            or ".software-factory-worktrees"
+        ),
     )
 
 
@@ -60,19 +76,28 @@ def resolve_agent_feature_flags(
         raw_flags.get(FEATURE_FLAG_OPENHANDS_ENABLED_KEY),
         _feature_flag_default_enabled(OPENHANDS_AGENT_MODE, settings.agent_sdks),
     )
+    claude_enabled = _coerce_bool(
+        raw_flags.get(FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY),
+        _feature_flag_default_enabled(CLAUDE_AGENT_MODE, settings.agent_sdks),
+    )
+    legacy_flag_present = "agent.legacy.enabled" in raw_flags
+    # Keep the legacy flag as a compatibility alias for Claude mode so older
+    # deployments keep their existing settings after the dual-SDK migration.
     legacy_enabled = _coerce_bool(
-        raw_flags.get(FEATURE_FLAG_LEGACY_ENABLED_KEY),
+        raw_flags.get(FEATURE_FLAG_LEGACY_ENABLED_KEY, None if legacy_flag_present else "1"),
         _feature_flag_default_enabled(LEGACY_AGENT_MODE, settings.agent_sdks),
     )
+    if legacy_flag_present:
+        claude_enabled = legacy_enabled
 
-    if not openhands_enabled and not legacy_enabled:
-        legacy_enabled = True
+    if not openhands_enabled and not claude_enabled:
+        openhands_enabled = True
 
     modes: list[str] = []
     if openhands_enabled:
         modes.append(OPENHANDS_AGENT_MODE)
-    if legacy_enabled:
-        modes.append(LEGACY_AGENT_MODE)
+    if claude_enabled:
+        modes.append(CLAUDE_AGENT_MODE)
 
     openhands_command = raw_flags.get(
         FEATURE_FLAG_OPENHANDS_COMMAND_KEY,
@@ -89,12 +114,29 @@ def resolve_agent_feature_flags(
         FEATURE_FLAG_OPENHANDS_WORKTREE_DIR_KEY,
         settings.openhands_worktree_base_dir,
     ).strip() or settings.openhands_worktree_base_dir
+    claude_command = raw_flags.get(
+        FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY,
+        settings.claude_agent_command,
+    ).strip() or settings.claude_agent_command
+    claude_timeout = _coerce_int(
+        raw_flags.get(FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY),
+        settings.claude_agent_command_timeout_seconds,
+    )
+    if claude_timeout <= 0:
+        claude_timeout = settings.claude_agent_command_timeout_seconds
+    claude_worktree_dir = raw_flags.get(
+        FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
+        settings.claude_agent_worktree_base_dir,
+    ).strip() or settings.claude_agent_worktree_base_dir
 
     return AgentFeatureFlags(
         agent_sdks=tuple(modes),
         openhands_command=openhands_command,
         openhands_command_timeout_seconds=openhands_timeout,
         openhands_worktree_base_dir=worktree_dir,
+        claude_agent_command=claude_command,
+        claude_agent_command_timeout_seconds=claude_timeout,
+        claude_agent_worktree_base_dir=claude_worktree_dir,
     )
 
 
@@ -102,14 +144,18 @@ def save_agent_feature_flags(
     conn: sqlite3.Connection,
     *,
     openhands_enabled: bool,
-    legacy_enabled: bool,
+    claude_agent_enabled: bool,
     openhands_command: str,
     openhands_command_timeout_seconds: int,
     openhands_worktree_base_dir: str,
+    claude_agent_command: str,
+    claude_agent_command_timeout_seconds: int,
+    claude_agent_worktree_base_dir: str,
+    legacy_enabled: bool | None = None,
 ) -> None:
     values: list[tuple[str, str]] = [
         (FEATURE_FLAG_OPENHANDS_ENABLED_KEY, "1" if openhands_enabled else "0"),
-        (FEATURE_FLAG_LEGACY_ENABLED_KEY, "1" if legacy_enabled else "0"),
+        (FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY, "1" if claude_agent_enabled else "0"),
         (FEATURE_FLAG_OPENHANDS_COMMAND_KEY, openhands_command.strip()),
         (
             FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY,
@@ -119,7 +165,20 @@ def save_agent_feature_flags(
             FEATURE_FLAG_OPENHANDS_WORKTREE_DIR_KEY,
             openhands_worktree_base_dir.strip() or ".software-factory-worktrees",
         ),
+        (FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY, claude_agent_command.strip()),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY,
+            str(max(1, int(claude_agent_command_timeout_seconds))),
+        ),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
+            claude_agent_worktree_base_dir.strip() or ".software-factory-worktrees",
+        ),
     ]
+    legacy_write_value = claude_agent_enabled if legacy_enabled is None else legacy_enabled
+    values.append(
+        (FEATURE_FLAG_LEGACY_ENABLED_KEY, "1" if legacy_write_value else "0"),
+    )
 
     for key, value in values:
         conn.execute(
@@ -139,10 +198,15 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
 
     return {
         "agent_openhands_enabled": OPENHANDS_AGENT_MODE in flags.agent_sdks,
-        "agent_legacy_enabled": LEGACY_AGENT_MODE in flags.agent_sdks,
+        "agent_claude_agent_enabled": CLAUDE_AGENT_MODE in flags.agent_sdks,
         "openhands_command": flags.openhands_command,
         "openhands_command_timeout_seconds": str(flags.openhands_command_timeout_seconds),
         "openhands_worktree_base_dir": flags.openhands_worktree_base_dir,
+        "claude_agent_command": flags.claude_agent_command,
+        "claude_agent_command_timeout_seconds": str(
+            flags.claude_agent_command_timeout_seconds
+        ),
+        "claude_agent_worktree_base_dir": flags.claude_agent_worktree_base_dir,
         "default_agent_sdks": ",".join(default_flags.agent_sdks),
     }
 

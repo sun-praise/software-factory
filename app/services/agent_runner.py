@@ -13,13 +13,6 @@ import tempfile
 from typing import Any, Callable, Mapping
 
 from app.config import get_settings
-from app.services.ai_client import (
-    AIConfigError,
-    AIRequestError,
-    AIResponseError,
-    FixPlan,
-    generate_fix,
-)
 from app.services.agent_prompt import (
     build_autofix_prompt,
     collect_check_commands,
@@ -34,7 +27,6 @@ from app.services.git_ops import (
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.feature_flags import resolve_agent_feature_flags
-from app.services.patch_applier import ApplyResult, PatchApplyError, apply_fix_plan
 from app.services.policy import increment_autofix_count
 from app.services.queue import mark_run_finished
 from app.services.retry import RetryConfig, schedule_retry
@@ -45,9 +37,10 @@ CHECK_COMMAND_TIMEOUT_SECONDS = 300
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
 OPENHANDS_AGENT_MODE = "openhands"
-LEGACY_AGENT_MODE = "legacy"
+CLAUDE_AGENT_MODE = "claude_agent_sdk"
 OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
+CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -55,6 +48,61 @@ _REDACTION_PATTERNS = (
     re.compile(r"(?i)(token\s*[=:]\s*)([^\s]+)"),
     re.compile(r"(?i)(secret\s*[=:]\s*)([^\s]+)"),
 )
+_ALLOWED_AGENT_ENV_KEYS = {
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "NO_PROXY",
+    "PATH",
+    "PYTHONPATH",
+    "REQUESTS_CA_BUNDLE",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "VIRTUAL_ENV",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+}
+_ALLOWED_AGENT_ENV_PREFIXES = (
+    "ANTHROPIC_",
+    "AWS_",
+    "AZURE_OPENAI_",
+    "BIGMODEL_",
+    "CLAUDE_",
+    "DASHSCOPE_",
+    "DEEPSEEK_",
+    "GEMINI_",
+    "GITHUB_",
+    "GH_",
+    "GOOGLE_",
+    "LANGCHAIN_",
+    "LANGSMITH_",
+    "LITELLM_",
+    "MISTRAL_",
+    "MODEL_",
+    "MOONSHOT_",
+    "OPENAI_",
+    "OPENCODE_",
+    "OPENROUTER_",
+    "QWEN_",
+    "XAI_",
+    "ZHIPU_",
+)
+_DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
+
+
+def _noop(*_args: Any, **_kwargs: Any) -> Any:
+    return None
 
 
 @dataclass(frozen=True)
@@ -63,13 +111,13 @@ class RunnerOps:
     ensure_head_sha: Callable[[str, str], bool] = ensure_head_sha
     commit_and_push: Callable[..., dict[str, Any]] = commit_and_push
     post_pr_comment: Callable[[str, str, int, str], tuple[bool, str]] = post_pr_comment
+    generate_fix: Callable[..., Any] = _noop
+    apply_fix_plan: Callable[..., Any] = _noop
     build_autofix_prompt: Callable[..., str] = build_autofix_prompt
     collect_check_commands: Callable[[str | None], list[str]] = collect_check_commands
     summarize_check_results: Callable[[list[dict[str, Any]]], dict[str, Any]] = (
         summarize_check_results
     )
-    generate_fix: Callable[..., FixPlan] = generate_fix
-    apply_fix_plan: Callable[..., ApplyResult] = apply_fix_plan
 
 
 def run_once(
@@ -197,20 +245,25 @@ def run_once(
 
     agent_workspace = workspace
     agent_worktree: str | None = None
-    if OPENHANDS_AGENT_MODE in agent_modes:
+    if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
+        worktree_base_dir = (
+            feature_flags.openhands_worktree_base_dir
+            if OPENHANDS_AGENT_MODE in agent_modes
+            else feature_flags.claude_agent_worktree_base_dir
+        )
         try:
             agent_workspace, agent_worktree = _prepare_openhands_workspace(
                 base_repo_dir=workspace,
                 run_id=run_id,
                 branch=branch,
                 head_sha=head_sha,
-                worktree_base_dir=feature_flags.openhands_worktree_base_dir,
+                worktree_base_dir=worktree_base_dir,
             )
             log_lines.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
             workspace_error = f"agent workspace init failed: {exc}"
             log_lines.append(workspace_error)
-            if LEGACY_AGENT_MODE not in agent_modes:
+            if CLAUDE_AGENT_MODE not in agent_modes:
                 logs_path = _write_logs(
                     workspace_dir=workspace,
                     run_id=run_id,
@@ -256,14 +309,24 @@ def run_once(
             openhands_command_timeout_seconds=(
                 feature_flags.openhands_command_timeout_seconds
             ),
+            claude_agent_command=feature_flags.claude_agent_command,
+            claude_agent_command_timeout_seconds=(
+                feature_flags.claude_agent_command_timeout_seconds
+            ),
         )
-        if used_agent_mode == OPENHANDS_AGENT_MODE:
+        if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
             check_workspace = agent_workspace
         log_lines.append(f"agent_mode={used_agent_mode or 'unknown'}")
         if sdk_error_message:
             log_lines.append(f"agent_error: {sdk_error_message}")
 
         if not sdk_ok:
+            failure_summary = (
+                f"{sdk_error_code}: {sdk_error_message}"
+                if sdk_error_code and sdk_error_message
+                and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
+                else sdk_error_message
+            )
             logs_path = _write_logs(
                 workspace_dir=workspace,
                 run_id=run_id,
@@ -272,7 +335,7 @@ def run_once(
             status, run_error_summary = _finish_failed_run(
                 conn=conn,
                 run_id=run_id,
-                error_summary=sdk_error_message or "agent_sdk_failed",
+                error_summary=failure_summary or "agent_sdk_failed",
                 logs_path=logs_path,
                 error_code=sdk_error_code or "agent_sdk_failed",
             )
@@ -290,52 +353,6 @@ def run_once(
                 },
                 "comment_posted": False,
             }
-
-        if used_agent_mode == LEGACY_AGENT_MODE:
-            prepare_error = _prepare_workspace(
-                repo_dir=workspace,
-                branch=branch,
-                head_sha=head_sha,
-                active_ops=active_ops,
-                log_lines=log_lines,
-            )
-            if prepare_error is not None:
-                run_error_summary = prepare_error
-            else:
-                try:
-                    plan = active_ops.generate_fix(
-                        prompt=prompt,
-                        workspace_dir=workspace,
-                        normalized_review=payload,
-                    )
-                    apply_result = active_ops.apply_fix_plan(
-                        workspace_dir=workspace,
-                        plan=plan,
-                    )
-                    log_lines.extend(
-                        [
-                            f"ai_summary: {plan.summary}",
-                            f"ai_changed_files: {', '.join(apply_result.changed_files) if apply_result.changed_files else 'none'}",
-                            "",
-                        ]
-                    )
-                except AIConfigError as exc:
-                    run_error_summary = f"ai_not_configured: {exc}"
-                    log_lines.append(run_error_summary)
-                except AIResponseError as exc:
-                    run_error_summary = f"ai_invalid_response: {exc}"
-                    log_lines.append(run_error_summary)
-                except AIRequestError as exc:
-                    run_error_code = (
-                        "ai_request_client_error"
-                        if not getattr(exc, "retriable", True)
-                        else "ai_request_failed"
-                    )
-                    run_error_summary = f"{run_error_code}: {_sanitize_log_text(str(exc))}"
-                    log_lines.append(run_error_summary)
-                except PatchApplyError as exc:
-                    run_error_summary = f"patch_apply_failed: {exc}"
-                    log_lines.append(run_error_summary)
 
         if run_error_summary is None:
             for command in commands:
@@ -496,24 +513,24 @@ def _finalize_git_changes(
 
 def _normalize_agent_modes(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
     has_openhands = False
-    has_legacy = False
+    has_claude = False
     for mode in raw_modes:
         value = mode.strip().lower()
         if not value:
             continue
-        if value not in {OPENHANDS_AGENT_MODE, LEGACY_AGENT_MODE}:
+        if value not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE, "legacy"}:
             continue
         if value == OPENHANDS_AGENT_MODE:
             has_openhands = True
-        elif value == LEGACY_AGENT_MODE:
-            has_legacy = True
-    if not (has_openhands or has_legacy):
-        return (LEGACY_AGENT_MODE,)
+        elif value in {CLAUDE_AGENT_MODE, "legacy"}:
+            has_claude = True
+    if not (has_openhands or has_claude):
+        return (OPENHANDS_AGENT_MODE,)
     normalized: list[str] = []
     if has_openhands:
         normalized.append(OPENHANDS_AGENT_MODE)
-    if has_legacy:
-        normalized.append(LEGACY_AGENT_MODE)
+    if has_claude:
+        normalized.append(CLAUDE_AGENT_MODE)
     return tuple(normalized)
 
 
@@ -527,13 +544,12 @@ def _execute_agent_sdks(
     modes: tuple[str, ...],
     openhands_command: str,
     openhands_command_timeout_seconds: int,
+    claude_agent_command: str,
+    claude_agent_command_timeout_seconds: int,
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
     for mode in modes:
-        if mode == LEGACY_AGENT_MODE:
-            return True, None, None, LEGACY_AGENT_MODE
-
         if mode == OPENHANDS_AGENT_MODE:
             openhands_ok, openhands_message, openhands_error_code = _run_openhands_agent(
                 workspace=workspace,
@@ -551,6 +567,23 @@ def _execute_agent_sdks(
             last_error_message = openhands_message
             continue
 
+        if mode == CLAUDE_AGENT_MODE:
+            claude_ok, claude_message, claude_error_code = _run_claude_agent(
+                workspace=workspace,
+                run_id=run_id,
+                repo=repo,
+                pr_number=pr_number,
+                prompt=prompt,
+                command=claude_agent_command,
+                timeout_seconds=claude_agent_command_timeout_seconds,
+            )
+            if claude_ok:
+                return True, None, None, CLAUDE_AGENT_MODE
+
+            last_error_code = claude_error_code
+            last_error_message = claude_message
+            continue
+
     return False, last_error_code, last_error_message, None
 
 
@@ -564,49 +597,117 @@ def _run_openhands_agent(
     command: str,
     timeout_seconds: int,
 ) -> tuple[bool, str, str | None]:
+    return _run_agent_command(
+        workspace=workspace,
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        prompt=prompt,
+        command=command,
+        timeout_seconds=timeout_seconds,
+        agent_name="OpenHands",
+        failure_code=OPENHANDS_FAILURE_CODE_COMMAND,
+    )
+
+
+def _run_claude_agent(
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    *,
+    command: str,
+    timeout_seconds: int,
+) -> tuple[bool, str, str | None]:
+    return _run_agent_command(
+        workspace=workspace,
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        prompt=prompt,
+        command=command,
+        timeout_seconds=timeout_seconds,
+        agent_name="Claude Agent SDK",
+        failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+    )
+
+
+def _run_agent_command(
+    *,
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    command: str,
+    timeout_seconds: int,
+    agent_name: str,
+    failure_code: str,
+) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
+        return False, f"{agent_name} command is not configured", failure_code
+
+    try:
+        argv = shlex.split(normalized_command)
+    except ValueError as exc:
+        return False, f"{agent_name} command is invalid: {exc}", failure_code
+    if not argv:
+        return False, f"{agent_name} command is not configured", failure_code
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv[1:]):
         return (
             False,
-            "OpenHands command is not configured",
-            OPENHANDS_FAILURE_CODE_COMMAND,
+            f"{agent_name} command contains unsupported shell control operators",
+            failure_code,
         )
+    if not _command_exists(argv[0]):
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
 
-    env = os.environ.copy()
-    env["SOFTWARE_FACTORY_REPO"] = repo
-    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
-    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
     try:
         result = subprocess.run(
-            shlex.split(command),
+            argv,
             cwd=workspace,
             check=False,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             input=prompt,
-            env=env,
+            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
         )
     except FileNotFoundError:
-        return (
-            False,
-            f"OpenHands command not found: {normalized_command}",
-            OPENHANDS_FAILURE_CODE_COMMAND,
-        )
+        return False, f"{agent_name} command not found: {argv[0]}", failure_code
     except subprocess.TimeoutExpired:
-        return (
-            False,
-            f"OpenHands command timed out after {timeout_seconds}s",
-            OPENHANDS_FAILURE_CODE_COMMAND,
-        )
+        return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
 
     if result.returncode != 0:
         std_err = result.stderr.strip()
         std_out = result.stdout.strip()
-        message = std_err or std_out or "OpenHands command failed"
-        return False, message, OPENHANDS_FAILURE_CODE_COMMAND
+        message = std_err or std_out or f"{agent_name} command failed"
+        return False, message, failure_code
 
-    return True, result.stdout.strip() or "OpenHands completed", None
+    return True, result.stdout.strip() or f"{agent_name} completed", None
+
+
+def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in _ALLOWED_AGENT_ENV_KEYS
+        or any(key.startswith(prefix) for prefix in _ALLOWED_AGENT_ENV_PREFIXES)
+    }
+    env["SOFTWARE_FACTORY_REPO"] = repo
+    env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
+    env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    return env
+
+
+def _command_exists(command_name: str) -> bool:
+    if not command_name:
+        return False
+    if os.path.sep in command_name:
+        return Path(command_name).expanduser().exists()
+    return shutil.which(command_name) is not None
 
 
 def _prepare_openhands_workspace(

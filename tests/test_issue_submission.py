@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from json import JSONDecodeError
 import os
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.db import init_db
 from app.main import app
+from app.routes import web
 
 
 def _setup_db(tmp_path):
@@ -87,12 +90,24 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
     assert response.json()["queue_status"] == "autofix_limit_reached"
 
 
-def test_submit_issue_api_supports_pull_and_issue_links(tmp_path, monkeypatch) -> None:
+def test_submit_issue_api_rejects_invalid_links(tmp_path) -> None:
     _setup_db(tmp_path)
 
+    payload = {"url": "https://github.com/acme/widgets/commit/abcdef"}
+
+    with TestClient(app) as client:
+        response = client.post("/api/issues", json=payload)
+
+    assert response.status_code == 400
+
+
+def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
+    db_path = _setup_db(tmp_path)
+
     monkeypatch.setattr(
-        "app.routes.web._resolve_pr_number_from_issue",
-        lambda _repo, _issue_number: 99,
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
     )
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
@@ -102,12 +117,28 @@ def test_submit_issue_api_supports_pull_and_issue_links(tmp_path, monkeypatch) -
 
     assert response.status_code == 200
     data = response.json()
+    assert data["queue_status"] == "queued"
     assert data["pr_number"] == 99
     assert data["issue_number"] == 99
 
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT trigger_source, normalized_review_json FROM autofix_runs ORDER BY id DESC LIMIT 1",
+        ).fetchone()
 
-def test_submit_issue_api_uses_non_pull_issue_as_task(tmp_path) -> None:
+    assert row is not None
+    assert str(row["trigger_source"]) == "manual_issue"
+
+
+def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(tmp_path, monkeypatch) -> None:
     _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: 88,
+    )
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
 
@@ -116,5 +147,47 @@ def test_submit_issue_api_uses_non_pull_issue_as_task(tmp_path) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["pr_number"] == 99
+    assert data["pr_number"] == 88
     assert data["issue_number"] == 99
+
+
+def test_resolve_pr_number_from_issue_rejects_invalid_json(monkeypatch) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            raise JSONDecodeError("bad json", "", 0)
+
+    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        web._resolve_pr_number_from_issue(
+            owner="acme",
+            repo_name="widgets",
+            issue_number=99,
+        )
+
+
+def test_resolve_pr_number_from_issue_returns_none_for_invalid_pull_request_url(
+    monkeypatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "pull_request": {
+                    "url": "https://api.github.com/repos/acme/widgets/pulls/not-a-number"
+                }
+            }
+
+    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+
+    assert (
+        web._resolve_pr_number_from_issue(
+            owner="acme",
+            repo_name="widgets",
+            issue_number=99,
+        )
+        is None
+    )
