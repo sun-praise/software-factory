@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,6 +116,7 @@ _ALLOWED_AGENT_ENV_PREFIXES = (
 _DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
 _ACTIVE_AGENT_PIDS_LOCK = threading.Lock()
 _ACTIVE_AGENT_PIDS: set[int] = set()
+logger = logging.getLogger(__name__)
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> Any:
@@ -1280,6 +1282,12 @@ def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
     finally:
+        venv_link = Path(worktree_dir) / ".venv"
+        if venv_link.is_symlink():
+            try:
+                venv_link.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("failed to remove worktree .venv link: %s", exc)
         shutil.rmtree(worktree_dir, ignore_errors=True)
 
 
@@ -1290,8 +1298,8 @@ def _link_workspace_virtualenv(*, base_repo: Path, worktree_dir: Path) -> None:
         return
     try:
         target_venv.symlink_to(source_venv, target_is_directory=True)
-    except OSError:
-        return
+    except OSError as exc:
+        logger.warning("failed to link worktree .venv from %s: %s", source_venv, exc)
 
 
 def _run_git_command(
