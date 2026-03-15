@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1"
     openai_base_url: str = "https://api.openai.com/v1"
-    agent_sdks: tuple[str, ...] = ("openhands", "claude_agent_sdk")
+    agent_sdks: tuple[str, ...] = ("claude_agent_sdk", "openhands")
     openhands_command: str = "openhands"
     claude_agent_sdk_command: str = "claude"
     openhands_command_timeout_seconds: int = 600

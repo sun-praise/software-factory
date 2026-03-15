@@ -31,7 +31,12 @@ from app.services.git_ops import (
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.feature_flags import resolve_agent_feature_flags
 from app.services.policy import increment_autofix_count
-from app.services.queue import get_run_status, is_run_cancel_requested, mark_run_finished
+from app.services.queue import (
+    get_run_status,
+    is_run_cancel_requested,
+    mark_run_finished,
+    update_run_logs_path,
+)
 from app.services.retry import RetryConfig, schedule_retry
 
 
@@ -242,6 +247,7 @@ def run_once(
         "",
     ]
     logger = RunLogger(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+    update_run_logs_path(conn, run_id, logger.logs_path)
     lock_acquired = acquire_pr_lock(
         conn=conn,
         repo=repo,
@@ -296,9 +302,10 @@ def run_once(
     agent_workspace = workspace
     agent_worktree: str | None = None
     if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
+        primary_agent_mode = agent_modes[0]
         worktree_base_dir = (
             feature_flags.openhands_worktree_base_dir
-            if OPENHANDS_AGENT_MODE in agent_modes
+            if primary_agent_mode == OPENHANDS_AGENT_MODE
             else feature_flags.claude_agent_worktree_base_dir
         )
         try:
@@ -585,25 +592,20 @@ def _finalize_git_changes(
 
 
 def _normalize_agent_modes(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
-    has_openhands = False
-    has_claude = False
+    normalized: list[str] = []
     for mode in raw_modes:
         value = mode.strip().lower()
         if not value:
             continue
-        if value not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE, "legacy"}:
+        if value == "legacy":
+            value = CLAUDE_AGENT_MODE
+        if value not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
             continue
-        if value == OPENHANDS_AGENT_MODE:
-            has_openhands = True
-        elif value in {CLAUDE_AGENT_MODE, "legacy"}:
-            has_claude = True
-    if not (has_openhands or has_claude):
-        return (OPENHANDS_AGENT_MODE,)
-    normalized: list[str] = []
-    if has_openhands:
-        normalized.append(OPENHANDS_AGENT_MODE)
-    if has_claude:
-        normalized.append(CLAUDE_AGENT_MODE)
+        if value in normalized:
+            continue
+        normalized.append(value)
+    if not normalized:
+        return (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
     return tuple(normalized)
 
 
