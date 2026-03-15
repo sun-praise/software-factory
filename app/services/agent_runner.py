@@ -45,6 +45,7 @@ from app.services.retry import RetryConfig, schedule_retry
 Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
 GIT_COMMAND_TIMEOUT_SECONDS = 30
+MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
 OPENHANDS_AGENT_MODE = "openhands"
 CLAUDE_AGENT_MODE = "claude_agent_sdk"
@@ -358,37 +359,65 @@ def run_once(
         commit_sha: str | None = None
         check_workspace = workspace
 
-        sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = _execute_agent_sdks(
-            workspace=agent_workspace,
-            run_id=run_id,
-            repo=repo,
-            pr_number=pr_number,
-            prompt=prompt,
-            modes=agent_modes,
-            openhands_command=feature_flags.openhands_command,
-            openhands_command_timeout_seconds=(
-                feature_flags.openhands_command_timeout_seconds
-            ),
-            claude_agent_command=feature_flags.claude_agent_command,
-            claude_agent_command_timeout_seconds=(
-                feature_flags.claude_agent_command_timeout_seconds
-            ),
-            on_log_line=logger.append,
-            should_cancel=lambda: is_run_cancel_requested(conn, run_id),
-        )
-        if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
-            check_workspace = agent_workspace
-        logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
-        if sdk_error_message:
-            logger.append(f"agent_error: {sdk_error_message}")
+        prompt_for_attempt = prompt
+        for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
+            logger.append(
+                f"agent_attempt={attempt}/{MAX_CHECK_FEEDBACK_ATTEMPTS}"
+            )
+            sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = _execute_agent_sdks(
+                workspace=agent_workspace,
+                run_id=run_id,
+                repo=repo,
+                pr_number=pr_number,
+                prompt=prompt_for_attempt,
+                modes=agent_modes,
+                openhands_command=feature_flags.openhands_command,
+                openhands_command_timeout_seconds=(
+                    feature_flags.openhands_command_timeout_seconds
+                ),
+                claude_agent_command=feature_flags.claude_agent_command,
+                claude_agent_command_timeout_seconds=(
+                    feature_flags.claude_agent_command_timeout_seconds
+                ),
+                on_log_line=logger.append,
+                should_cancel=lambda: is_run_cancel_requested(conn, run_id),
+            )
+            if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
+                check_workspace = agent_workspace
+            logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
+            if sdk_error_message:
+                logger.append(f"agent_error: {sdk_error_message}")
 
-        if not sdk_ok:
-            if sdk_error_code == RUN_CANCELLED_CODE:
-                logs_path = logger.flush()
-                status, run_error_summary = _finish_cancelled_run(
-                    conn,
-                    run_id,
-                    logs_path,
+            if not sdk_ok:
+                if sdk_error_code == RUN_CANCELLED_CODE:
+                    logs_path = logger.flush()
+                    status, run_error_summary = _finish_cancelled_run(
+                        conn,
+                        run_id,
+                        logs_path,
+                    )
+                    return {
+                        "run_id": run_id,
+                        "status": status,
+                        "error_summary": run_error_summary,
+                        "logs_path": logs_path,
+                        "commit_sha": None,
+                        "checks": checks_summary,
+                        "comment_posted": False,
+                    }
+                failure_summary = (
+                    f"{sdk_error_code}: {sdk_error_message}"
+                    if sdk_error_code and sdk_error_message
+                    and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
+                    else sdk_error_message
+                )
+                logs_path = logger.logs_path
+                status, run_error_summary = _finish_failed_run(
+                    conn=conn,
+                    run_id=run_id,
+                    error_summary=failure_summary or "agent_sdk_failed",
+                    logs_path=logs_path,
+                    error_code=sdk_error_code or "agent_sdk_failed",
                 )
                 return {
                     "run_id": run_id,
@@ -396,39 +425,16 @@ def run_once(
                     "error_summary": run_error_summary,
                     "logs_path": logs_path,
                     "commit_sha": None,
-                    "checks": checks_summary,
+                    "checks": {
+                        "overall_status": "failed",
+                        "passed_count": 0,
+                        "failed_count": 0,
+                        "failed_commands": [],
+                    },
                     "comment_posted": False,
                 }
-            failure_summary = (
-                f"{sdk_error_code}: {sdk_error_message}"
-                if sdk_error_code and sdk_error_message
-                and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
-                else sdk_error_message
-            )
-            logs_path = logger.logs_path
-            status, run_error_summary = _finish_failed_run(
-                conn=conn,
-                run_id=run_id,
-                error_summary=failure_summary or "agent_sdk_failed",
-                logs_path=logs_path,
-                error_code=sdk_error_code or "agent_sdk_failed",
-            )
-            return {
-                "run_id": run_id,
-                "status": status,
-                "error_summary": run_error_summary,
-                "logs_path": logs_path,
-                "commit_sha": None,
-                "checks": {
-                    "overall_status": "failed",
-                    "passed_count": 0,
-                    "failed_count": 0,
-                    "failed_commands": [],
-                },
-                "comment_posted": False,
-            }
 
-        if run_error_summary is None:
+            check_results = []
             for command in commands:
                 if is_run_cancel_requested(conn, run_id):
                     logger.append("cancel_requested: stopping run before checks")
@@ -469,14 +475,7 @@ def run_once(
                 )
 
             checks_summary = active_ops.summarize_check_results(check_results)
-
-            if checks_summary["overall_status"] != "passed":
-                failed_commands = checks_summary.get("failed_commands") or []
-                run_error_summary = (
-                    f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
-                )
-                logger.append(run_error_summary)
-            else:
+            if checks_summary["overall_status"] == "passed":
                 status, commit_sha, run_error_summary = _finalize_git_changes(
                     repo_dir=check_workspace,
                     commit_message=commit_message,
@@ -484,6 +483,20 @@ def run_once(
                     log_lines=log_lines,
                 )
                 logger.flush()
+                break
+
+            failed_commands = checks_summary.get("failed_commands") or []
+            run_error_summary = (
+                f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
+            )
+            logger.append(run_error_summary)
+            if attempt >= MAX_CHECK_FEEDBACK_ATTEMPTS:
+                break
+            prompt_for_attempt = _build_check_feedback_prompt(
+                base_prompt=prompt,
+                check_results=check_results,
+            )
+            logger.append("agent_feedback: rerunning agent with failed check output")
 
         logs_path = logger.flush()
         if status == "success":
@@ -596,6 +609,45 @@ def _finalize_git_changes(
 
     log_lines.append(f"git_push: failed error={error}")
     return "failed", _safe_text(commit_result.get("commit_sha")), f"git_failed: {error}"
+
+
+def _build_check_feedback_prompt(
+    *,
+    base_prompt: str,
+    check_results: list[dict[str, Any]],
+) -> str:
+    lines = [
+        base_prompt,
+        "",
+        "Validation feedback from the previous attempt:",
+        "- The last changes did not pass the required checks.",
+        "- Fix the failed checks below and rerun the same validation commands.",
+        "",
+    ]
+    for result in check_results:
+        exit_code = int(result.get("exit_code", 0))
+        if exit_code == 0:
+            continue
+        command = str(result.get("command", "")).strip() or "unknown command"
+        lines.extend(
+            [
+                f"[failed-check] {command}",
+                f"exit_code={exit_code}",
+                "stdout:",
+                _truncate_check_feedback_text(str(result.get("stdout", ""))),
+                "stderr:",
+                _truncate_check_feedback_text(str(result.get("stderr", ""))),
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _truncate_check_feedback_text(text: str, limit: int = 1200) -> str:
+    sanitized = _sanitize_log_text(text)
+    if len(sanitized) <= limit:
+        return sanitized
+    return f"{sanitized[:limit].rstrip()}..."
 
 
 def _normalize_agent_modes(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
