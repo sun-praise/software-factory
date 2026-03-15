@@ -49,12 +49,27 @@ def _fetch_runs(limit: int = 20) -> list[dict[str, str]]:
             "id": str(row["id"]),
             "repo": str(row["repo"]),
             "pr_number": str(row["pr_number"]),
+            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
             "status": str(row["status"]),
+            "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
         }
         for row in rows
     ]
+
+
+def _status_class(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized in {"success", "completed"}:
+        return "success"
+    if normalized in {"failed", "cancelled"}:
+        return "failed"
+    if normalized in {"running"}:
+        return "running"
+    if normalized in {"retry_scheduled"}:
+        return "retry"
+    return "queued"
 
 
 def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
