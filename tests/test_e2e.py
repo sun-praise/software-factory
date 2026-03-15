@@ -8,6 +8,7 @@ from app.main import app
 from app.db import connect_db
 from app.services.queue import claim_next_queued_run
 from app.services.agent_runner import run_once
+from app.services import agent_runner
 from tests.fixtures.e2e_fixtures import (
     setup_e2e_env,
     make_pull_request_review_payload,
@@ -23,13 +24,22 @@ from tests.fixtures.e2e_fixtures import (
 
 
 class TestE2ESuccessPath:
-    def test_full_success_flow_from_webhook_to_runner(self, tmp_path: Path):
+    def test_full_success_flow_from_webhook_to_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ):
         db_path = setup_e2e_env(tmp_path)
         mock_executor = MagicMock(
             return_value={"returncode": 0, "stdout": "ok", "stderr": ""}
         )
         mock_ops = make_mock_runner_ops()
         payload = make_pull_request_review_payload()
+        monkeypatch.setattr(
+            agent_runner,
+            "_execute_agent_sdks",
+            lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+        )
         with TestClient(app) as client:
             resp = post_webhook(
                 client=client,
