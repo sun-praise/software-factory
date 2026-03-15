@@ -59,6 +59,9 @@
             <button id="stop-run-button" type="button" class="button-danger run-action-button" hidden>
               Stop run
             </button>
+            <button id="delete-run-button" type="button" class="run-action-button" hidden>
+              Delete run
+            </button>
           </div>
         </div>
         <pre id="run-log" class="log log-live">{{ run.log_preview | default("No log data yet.") }}</pre>
@@ -81,6 +84,7 @@
         const logNode = document.getElementById("run-log");
         const pollingIndicator = document.getElementById("polling-indicator");
         const stopButton = document.getElementById("stop-run-button");
+        const deleteButton = document.getElementById("delete-run-button");
         const activeStatuses = new Set(["queued", "running", "cancel_requested"]);
         let pollHandle = null;
 
@@ -110,6 +114,25 @@
           stopButton.disabled = true;
         };
 
+        const updateDeleteButton = (status) => {
+          if (!deleteButton) {
+            return;
+          }
+          if (activeStatuses.has(status)) {
+            deleteButton.hidden = true;
+            deleteButton.disabled = true;
+            return;
+          }
+          if (status === "not_found") {
+            deleteButton.hidden = true;
+            deleteButton.disabled = true;
+            return;
+          }
+          deleteButton.hidden = false;
+          deleteButton.disabled = false;
+          deleteButton.textContent = "Delete run";
+        };
+
         const setPrUrl = (url, prNumber) => {
           if (!url) {
             prText.textContent = "-";
@@ -129,6 +152,7 @@
           setPrUrl(run.pr_url || "", run.pr_number || "");
           setStatus(run.status || "not_found");
           updateStopButton(run.status || "not_found");
+          updateDeleteButton(run.status || "not_found");
           createdAt.textContent = run.created_at || "-";
           updatedAt.textContent = run.updated_at || "-";
           logNode.textContent = run.log_preview || "No log data yet.";
@@ -140,6 +164,25 @@
             window.clearInterval(pollHandle);
             pollHandle = null;
           }
+        };
+
+        const deleteRun = async () => {
+          if (!deleteButton) {
+            return;
+          }
+          deleteButton.disabled = true;
+          deleteButton.textContent = "Deleting...";
+          const response = await fetch(`/api/runs/${runId}`, {
+            method: "DELETE",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            deleteButton.disabled = false;
+            deleteButton.textContent = "Delete failed";
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          window.location.href = "/";
         };
 
         const cancelRun = async () => {
@@ -178,6 +221,9 @@
         }
         if (stopButton) {
           stopButton.addEventListener("click", cancelRun);
+        }
+        if (deleteButton) {
+          deleteButton.addEventListener("click", deleteRun);
         }
       })();
     </script>
