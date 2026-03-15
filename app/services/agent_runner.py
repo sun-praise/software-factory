@@ -10,6 +10,7 @@ import sqlite3
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -632,16 +633,21 @@ def _execute_agent_sdks(
     last_error_message: str | None = None
     for mode in modes:
         if mode == OPENHANDS_AGENT_MODE:
+            openhands_kwargs: dict[str, Any] = {
+                "workspace": workspace,
+                "run_id": run_id,
+                "repo": repo,
+                "pr_number": pr_number,
+                "prompt": prompt,
+                "command": openhands_command,
+                "timeout_seconds": openhands_command_timeout_seconds,
+            }
+            if on_log_line is not None:
+                openhands_kwargs["on_log_line"] = on_log_line
+            if should_cancel is not None:
+                openhands_kwargs["should_cancel"] = should_cancel
             openhands_ok, openhands_message, openhands_error_code = _run_openhands_agent(
-                workspace=workspace,
-                run_id=run_id,
-                repo=repo,
-                pr_number=pr_number,
-                prompt=prompt,
-                command=openhands_command,
-                timeout_seconds=openhands_command_timeout_seconds,
-                on_log_line=on_log_line,
-                should_cancel=should_cancel,
+                **openhands_kwargs,
             )
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
@@ -651,16 +657,21 @@ def _execute_agent_sdks(
             continue
 
         if mode == CLAUDE_AGENT_MODE:
+            claude_kwargs: dict[str, Any] = {
+                "workspace": workspace,
+                "run_id": run_id,
+                "repo": repo,
+                "pr_number": pr_number,
+                "prompt": prompt,
+                "command": claude_agent_command,
+                "timeout_seconds": claude_agent_command_timeout_seconds,
+            }
+            if on_log_line is not None:
+                claude_kwargs["on_log_line"] = on_log_line
+            if should_cancel is not None:
+                claude_kwargs["should_cancel"] = should_cancel
             claude_ok, claude_message, claude_error_code = _run_claude_agent(
-                workspace=workspace,
-                run_id=run_id,
-                repo=repo,
-                pr_number=pr_number,
-                prompt=prompt,
-                command=claude_agent_command,
-                timeout_seconds=claude_agent_command_timeout_seconds,
-                on_log_line=on_log_line,
-                should_cancel=should_cancel,
+                **claude_kwargs,
             )
             if claude_ok:
                 return True, None, None, CLAUDE_AGENT_MODE
@@ -788,14 +799,31 @@ def _run_claude_stream_command(
     stderr_chunks: list[str] = []
     if on_log_line is not None:
         on_log_line(f"[agent] starting {agent_name}: {' '.join(argv)}")
+    stdout_stream = getattr(process, "stdout", None)
+    stderr_stream = getattr(process, "stderr", None)
+    if stdout_stream is None or stderr_stream is None:
+        try:
+            stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _terminate_agent_process_tree(process)
+            _unregister_active_agent_process(process.pid)
+            return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+        except OSError as exc:
+            _unregister_active_agent_process(process.pid)
+            return False, f"{agent_name} command failed while running: {exc}", failure_code
+        _unregister_active_agent_process(process.pid)
+        if process.returncode != 0:
+            message = (stderr or "").strip() or (stdout or "").strip()
+            return False, message or f"{agent_name} command failed", failure_code
+        return True, (stdout or "").strip() or f"{agent_name} completed", None
     stdout_thread = threading.Thread(
         target=_consume_claude_stream,
-        args=(process.stdout, stdout_chunks, on_log_line, state),
+        args=(stdout_stream, stdout_chunks, on_log_line, state),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=_consume_process_stream,
-        args=(process.stderr, "stderr", stderr_chunks, on_log_line),
+        args=(stderr_stream, "stderr", stderr_chunks, on_log_line),
         daemon=True,
     )
     stdout_thread.start()
@@ -1475,8 +1503,13 @@ def _parse_payload(value: Any) -> dict[str, Any]:
 def _default_executor(
     command: str, workspace_dir: str
 ) -> subprocess.CompletedProcess[str]:
+    argv = shlex.split(command)
+    if argv and argv[0] == "python" and shutil.which("python") is None:
+        fallback_python = sys.executable or shutil.which("python3")
+        if fallback_python:
+            argv[0] = fallback_python
     return subprocess.run(
-        shlex.split(command),
+        argv,
         cwd=workspace_dir,
         check=False,
         capture_output=True,

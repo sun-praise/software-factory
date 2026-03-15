@@ -428,10 +428,13 @@ def test_run_once_schedules_retry_for_retryable_agent_error(
 
 def test_normalize_agent_modes() -> None:
     assert _normalize_agent_modes(("legacy", "OPENHANDS", "legacy", "")) == (
-        "openhands",
         "claude_agent_sdk",
+        "openhands",
     )
-    assert _normalize_agent_modes(("unknown", "", "other")) == ("openhands",)
+    assert _normalize_agent_modes(("unknown", "", "other")) == (
+        "claude_agent_sdk",
+        "openhands",
+    )
 
 
 def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -446,6 +449,8 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         *,
         command: str,
         timeout_seconds: int,
+        on_log_line: object | None = None,
+        should_cancel: object | None = None,
     ) -> tuple[bool, str, str | None]:
         calls.append(workspace)
         return False, "openhands failed", "agent_openhands_failed"
@@ -459,6 +464,8 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         *,
         command: str,
         timeout_seconds: int,
+        on_log_line: object | None = None,
+        should_cancel: object | None = None,
     ) -> tuple[bool, str, str | None]:
         calls.append(workspace)
         return True, "claude succeeded", None
@@ -533,7 +540,13 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     assert ok is True
     assert message == "done"
     assert error_code is None
-    assert captured["command"] == ["claude", "--print"]
+    assert captured["command"] == [
+        "claude",
+        "--print",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+    ]
     assert captured["cwd"] == str(tmp_path)
     assert captured["stdout"] == agent_runner.subprocess.PIPE
     assert captured["stderr"] == agent_runner.subprocess.PIPE
