@@ -139,6 +139,30 @@ def test_bot_comment_is_filtered(tmp_path: Path) -> None:
     assert response.json()["reason"] == "noise_actor"
 
 
+def test_bot_pull_request_review_is_queued(tmp_path: Path) -> None:
+    _set_env(tmp_path, secret="")
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123"}},
+        "review": {"id": 1003, "body": "Please fix this"},
+        "sender": {"login": "github-actions[bot]"},
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={"X-GitHub-Event": "pull_request_review"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ignored"] is not True
+    assert response.json()["insert_status"] == "inserted"
+    assert response.json()["queue_status"] == "queued"
+    assert isinstance(response.json()["queued_run_id"], int)
+
+
 def test_autofix_limit_prevents_queueing_new_run(tmp_path: Path) -> None:
     _set_env(tmp_path, secret="")
     db_path = tmp_path / "software_factory.db"

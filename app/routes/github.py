@@ -32,6 +32,10 @@ from app.services.github_signature import (
 
 
 router = APIRouter(prefix="/github", tags=["github"])
+_REVIEW_EVENTS_ALLOWING_BOT_ACTORS = {
+    "pull_request_review",
+    "pull_request_review_comment",
+}
 
 
 async def _read_payload(request: Request) -> dict[str, Any]:
@@ -86,6 +90,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
         event.repo,
         actor=event.actor,
         body=extract_event_body(event_type, payload),
+        bot_logins=() if event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS else None,
     )
     if filter_reason is not None:
         return {
