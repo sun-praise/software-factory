@@ -491,21 +491,34 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
 ) -> None:
     captured: dict[str, object] = {}
 
-    class _Result:
-        returncode = 0
-        stdout = "done"
-        stderr = ""
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.returncode = 0
+            self.pid = 999
+            captured["command"] = list(args[0]) if args else []
+            captured.update(kwargs)
+            captured["pid"] = self.pid
 
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured.update(kwargs)
-        return _Result()
+        def communicate(
+            self,
+            input: str | None = None,
+            timeout: int | float | None = None,
+        ) -> tuple[str, str]:
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return "done", ""
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def __repr__(self) -> str:  # pragma: no cover - debug helper only
+            return f"<_FakeProcess returncode={self.returncode}>"
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("UNRELATED_SECRET", "should-not-leak")
     monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
     monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
 
     ok, message, error_code = _run_claude_agent(
         workspace=str(tmp_path),
@@ -522,6 +535,10 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     assert error_code is None
     assert captured["command"] == ["claude", "--print"]
     assert captured["cwd"] == str(tmp_path)
+    assert captured["stdout"] == agent_runner.subprocess.PIPE
+    assert captured["stderr"] == agent_runner.subprocess.PIPE
+    assert captured["stdin"] == agent_runner.subprocess.PIPE
+    assert captured["text"] is True
     assert captured["timeout"] == 42
     assert captured["input"] == "fix this"
     env = captured["env"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import signal
 import sys
 import time
@@ -14,7 +15,10 @@ if str(ROOT) not in sys.path:
 
 from app.db import connect_db, init_db
 from app.config import get_settings
-from app.services.agent_runner import run_once
+from app.services.agent_runner import (
+    cleanup_active_agent_processes,
+    run_once,
+)
 from app.services.queue import claim_next_queued_run, mark_run_finished
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.logging_config import get_run_log_path
@@ -26,6 +30,7 @@ _STOP_WORKER = False
 def _handle_stop_signal(signum: int, _frame: object) -> None:
     global _STOP_WORKER
     _STOP_WORKER = True
+    cleanup_active_agent_processes()
     print(f"received signal={signum}, stopping worker loop")
 
 
@@ -91,6 +96,7 @@ def main() -> int:
     args = parser.parse_args()
 
     init_db()
+    atexit.register(cleanup_active_agent_processes)
     signal.signal(signal.SIGINT, _handle_stop_signal)
     signal.signal(signal.SIGTERM, _handle_stop_signal)
 

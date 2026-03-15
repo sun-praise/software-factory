@@ -54,3 +54,17 @@ def test_stop_signal_sets_loop_flag() -> None:
     run_worker._STOP_WORKER = False
     run_worker._handle_stop_signal(15, None)
     assert run_worker._STOP_WORKER is True
+
+
+def test_stop_signal_invokes_agent_cleanup(monkeypatch) -> None:
+    run_worker._STOP_WORKER = False
+    calls: dict[str, int] = {"count": 0}
+
+    def _fake_cleanup() -> None:
+        calls["count"] += 1
+
+    monkeypatch.setattr(run_worker, "cleanup_active_agent_processes", _fake_cleanup)
+    run_worker._handle_stop_signal(15, None)
+
+    assert run_worker._STOP_WORKER is True
+    assert calls["count"] == 1

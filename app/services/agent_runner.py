@@ -8,8 +8,10 @@ import re
 import shlex
 import sqlite3
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 from typing import Any, Callable, Mapping
 
 from app.config import get_settings
@@ -99,6 +101,8 @@ _ALLOWED_AGENT_ENV_PREFIXES = (
     "ZHIPU_",
 )
 _DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
+_ACTIVE_AGENT_PIDS_LOCK = threading.Lock()
+_ACTIVE_AGENT_PIDS: set[int] = set()
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> Any:
@@ -664,29 +668,94 @@ def _run_agent_command(
     if not _command_exists(argv[0]):
         return False, f"{agent_name} command not found: {argv[0]}", failure_code
 
+    process: subprocess.Popen[str]
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             argv,
             cwd=workspace,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
-            input=prompt,
             env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+            start_new_session=True,
         )
     except FileNotFoundError:
         return False, f"{agent_name} command not found: {argv[0]}", failure_code
-    except subprocess.TimeoutExpired:
-        return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+    except OSError as exc:
+        return (
+            False,
+            f"{agent_name} command failed to start: {exc}",
+            failure_code,
+        )
 
-    if result.returncode != 0:
-        std_err = result.stderr.strip()
-        std_out = result.stdout.strip()
+    _register_active_agent_process(process.pid)
+    stdout: str | None = None
+    stderr: str | None = None
+    try:
+        stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _terminate_agent_process_tree(process)
+        return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+    finally:
+        _unregister_active_agent_process(process.pid)
+
+    if process.returncode != 0:
+        std_err = (stderr or "").strip()
+        std_out = (stdout or "").strip()
         message = std_err or std_out or f"{agent_name} command failed"
         return False, message, failure_code
 
-    return True, result.stdout.strip() or f"{agent_name} completed", None
+    return True, (stdout or "").strip() or f"{agent_name} completed", None
+
+
+def _register_active_agent_process(pid: int | None) -> None:
+    if pid is None:
+        return
+    with _ACTIVE_AGENT_PIDS_LOCK:
+        _ACTIVE_AGENT_PIDS.add(int(pid))
+
+
+def _unregister_active_agent_process(pid: int | None) -> None:
+    if pid is None:
+        return
+    with _ACTIVE_AGENT_PIDS_LOCK:
+        _ACTIVE_AGENT_PIDS.discard(int(pid))
+
+
+def cleanup_active_agent_processes() -> None:
+    with _ACTIVE_AGENT_PIDS_LOCK:
+        pids = tuple(_ACTIVE_AGENT_PIDS)
+
+    for pid in pids:
+        _terminate_agent_process_tree_by_pid(pid)
+
+
+def _terminate_agent_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.pid is None:
+        return
+    _terminate_agent_process_tree_by_pid(process.pid)
+
+
+def _terminate_agent_process_tree_by_pid(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        with _ACTIVE_AGENT_PIDS_LOCK:
+            _ACTIVE_AGENT_PIDS.discard(pid)
+        return
+    except OSError:
+        return
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        pass
+
+    with _ACTIVE_AGENT_PIDS_LOCK:
+        _ACTIVE_AGENT_PIDS.discard(pid)
 
 
 def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[str, str]:
