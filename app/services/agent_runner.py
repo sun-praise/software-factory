@@ -1508,7 +1508,8 @@ def _default_executor(
         fallback_python = sys.executable or shutil.which("python3")
         if fallback_python:
             argv[0] = fallback_python
-    return subprocess.run(
+
+    result = subprocess.run(
         argv,
         cwd=workspace_dir,
         check=False,
@@ -1516,6 +1517,25 @@ def _default_executor(
         text=True,
         timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
     )
+    missing_module_match = re.search(r"No module named ([A-Za-z0-9_.-]+)", result.stderr or "")
+    if (
+        result.returncode != 0
+        and len(argv) >= 3
+        and argv[1] == "-m"
+        and missing_module_match is not None
+    ):
+        cli_name = missing_module_match.group(1)
+        cli_path = shutil.which(cli_name)
+        if cli_path:
+            return subprocess.run(
+                [cli_name, *argv[3:]],
+                cwd=workspace_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
+            )
+    return result
 
 
 def _coerce_result(result: Any) -> dict[str, Any]:
