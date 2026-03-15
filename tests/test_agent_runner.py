@@ -812,6 +812,12 @@ def test_run_claude_agent_supports_docker_runtime(
         "which",
         lambda value: "/usr/bin/docker" if value == "docker" else f"/usr/bin/{value}",
     )
+    gitdir = tmp_path / ".git-dir"
+    gitdir.mkdir()
+    (tmp_path / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    (gitdir / "commondir").write_text("../.git-common\n", encoding="utf-8")
+    git_common = tmp_path / ".git-common"
+    git_common.mkdir()
 
     ok, message, error_code = _run_claude_agent(
         workspace=str(tmp_path),
@@ -839,6 +845,8 @@ def test_run_claude_agent_supports_docker_runtime(
         f"{tmp_path.resolve()}:/workspace",
     ]
     assert "ghcr.io/example/claude-code:latest" in captured["command"]
+    assert f"{gitdir}:{gitdir}" in captured["command"]
+    assert f"{git_common.resolve()}:{git_common.resolve()}" in captured["command"]
     assert "--env" in captured["command"]
     assert "OPENAI_API_KEY" in captured["command"]
     assert "test-openai-key" not in captured["command"]
@@ -851,6 +859,10 @@ def test_run_claude_agent_supports_docker_runtime(
     assert isinstance(env, dict)
     assert env["OPENAI_API_KEY"] == "test-openai-key"
     assert env["HOME"] == "/tmp/claude-home"
+
+
+def test_build_workspace_git_mounts_ignores_missing_git_metadata(tmp_path: Path) -> None:
+    assert agent_runner._build_workspace_git_mounts(str(tmp_path)) == []
 
 
 def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:

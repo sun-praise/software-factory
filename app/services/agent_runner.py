@@ -1120,6 +1120,8 @@ def _build_claude_container_command_argv(
         "--volume",
         f"{Path(workspace).resolve()}:{container_workspace}",
     ]
+    for host_path, container_path in _build_workspace_git_mounts(workspace):
+        argv.extend(["--volume", f"{host_path}:{container_path}"])
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
         argv.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
     for key in sorted(container_env):
@@ -1129,6 +1131,36 @@ def _build_claude_container_command_argv(
     if prompt:
         argv.append(prompt)
     return argv
+
+
+def _build_workspace_git_mounts(workspace: str) -> list[tuple[str, str]]:
+    workspace_path = Path(workspace).resolve()
+    git_entry = workspace_path / ".git"
+    if not git_entry.is_file():
+        return []
+
+    try:
+        git_text = git_entry.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    if not git_text.startswith("gitdir: "):
+        return []
+
+    gitdir = Path(git_text.split("gitdir: ", 1)[1]).expanduser()
+    if not gitdir.exists():
+        return []
+
+    mounts: list[tuple[str, str]] = [(str(gitdir), str(gitdir))]
+    commondir_file = gitdir / "commondir"
+    try:
+        commondir_text = commondir_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        commondir_text = ""
+    if commondir_text:
+        commondir = (gitdir / commondir_text).resolve()
+        if commondir.exists() and str(commondir) != str(gitdir):
+            mounts.append((str(commondir), str(commondir)))
+    return mounts
 
 
 def _build_claude_container_environment(
