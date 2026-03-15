@@ -18,6 +18,28 @@
 
 非目标：不做重型多租户后台、不做复杂审批和权限中心。
 
+## 项目定位与命名
+
+本项目不追求做成通用 CI/CD 平台，也不追求覆盖完整 DevOps 生命周期。更准确地说，它是一个围绕 GitHub PR 审查反馈闭环构建的轻量编排系统。
+
+可以把它理解为：
+
+- `AI-native PR Autofix Orchestrator`
+- `GitHub Review Autofix Harness`
+
+它的关注点是：
+
+- 由 Hook 和 Webhook 决定何时触发
+- 由 Normalizer 把 review/comment 变成结构化修复输入
+- 由 Agent Worker 执行修改、验证、提交和回写
+
+如果拿常见开源系统做类比，它更接近：
+
+- `OpenHands` / `SWE-agent` 这类 AI 执行代理
+- `Prow` / `Zuul` 这类事件驱动的 review/CI 编排系统
+
+而不是 `Harness`、`GitLab` 这类覆盖范围更大的通用 DevOps 平台。
+
 ## 核心架构
 
 ```text
