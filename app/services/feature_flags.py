@@ -91,13 +91,13 @@ def resolve_agent_feature_flags(
         claude_enabled = legacy_enabled
 
     if not openhands_enabled and not claude_enabled:
-        openhands_enabled = True
+        claude_enabled = True
 
-    modes: list[str] = []
-    if openhands_enabled:
-        modes.append(OPENHANDS_AGENT_MODE)
-    if claude_enabled:
-        modes.append(CLAUDE_AGENT_MODE)
+    modes = _resolve_enabled_modes(
+        preferred_modes=settings.agent_sdks,
+        openhands_enabled=openhands_enabled,
+        claude_enabled=claude_enabled,
+    )
 
     openhands_command = raw_flags.get(
         FEATURE_FLAG_OPENHANDS_COMMAND_KEY,
@@ -213,6 +213,37 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
 
 def _feature_flag_default_enabled(mode: str, current_modes: tuple[str, ...]) -> bool:
     return mode in {value.strip().lower() for value in current_modes}
+
+
+def _resolve_enabled_modes(
+    *,
+    preferred_modes: tuple[str, ...],
+    openhands_enabled: bool,
+    claude_enabled: bool,
+) -> list[str]:
+    ordered_modes: list[str] = []
+    for raw_mode in preferred_modes:
+        normalized = str(raw_mode).strip().lower()
+        if normalized == LEGACY_AGENT_MODE:
+            normalized = CLAUDE_AGENT_MODE
+        if normalized not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
+            continue
+        if normalized in ordered_modes:
+            continue
+        ordered_modes.append(normalized)
+
+    if CLAUDE_AGENT_MODE not in ordered_modes:
+        ordered_modes.append(CLAUDE_AGENT_MODE)
+    if OPENHANDS_AGENT_MODE not in ordered_modes:
+        ordered_modes.append(OPENHANDS_AGENT_MODE)
+
+    resolved: list[str] = []
+    for mode in ordered_modes:
+        if mode == CLAUDE_AGENT_MODE and claude_enabled:
+            resolved.append(mode)
+        if mode == OPENHANDS_AGENT_MODE and openhands_enabled:
+            resolved.append(mode)
+    return resolved
 
 
 def _coerce_bool(value: str | None, default: bool) -> bool:
