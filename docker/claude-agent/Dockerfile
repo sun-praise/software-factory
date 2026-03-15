@@ -7,6 +7,7 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        gh \
         git \
         jq \
         openssh-client \
