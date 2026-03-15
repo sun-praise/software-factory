@@ -38,6 +38,7 @@ from app.services.queue import (
     get_run_status,
     is_run_cancel_requested,
     mark_run_finished,
+    touch_run_progress,
     update_run_logs_path,
 )
 from app.services.retry import RetryConfig, schedule_retry
@@ -164,24 +165,33 @@ class RunLogger:
     workspace_dir: str
     run_id: int
     lines: list[str]
+    on_progress: Callable[[str], None] | None = None
     logs_path: str = field(init=False)
 
     def __post_init__(self) -> None:
         self.logs_path = _write_logs(self.workspace_dir, self.run_id, self.lines)
+        self._notify_progress()
 
     def append(self, line: str) -> None:
         self.lines.append(line)
         _append_logs(self.logs_path, [line])
+        self._notify_progress()
 
     def extend(self, new_lines: list[str]) -> None:
         if not new_lines:
             return
         self.lines.extend(new_lines)
         _append_logs(self.logs_path, new_lines)
+        self._notify_progress()
 
     def flush(self) -> str:
         self.logs_path = _write_logs(self.workspace_dir, self.run_id, self.lines)
+        self._notify_progress()
         return self.logs_path
+
+    def _notify_progress(self) -> None:
+        if self.on_progress is not None:
+            self.on_progress(self.logs_path)
 
 
 def run_once(
@@ -274,7 +284,12 @@ def run_once(
         prompt,
         "",
     ]
-    logger = RunLogger(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+    logger = RunLogger(
+        workspace_dir=workspace,
+        run_id=run_id,
+        lines=log_lines,
+        on_progress=lambda logs_path: touch_run_progress(conn, run_id, logs_path=logs_path),
+    )
     update_run_logs_path(conn, run_id, logger.logs_path)
     lock_acquired = acquire_pr_lock(
         conn=conn,

@@ -191,6 +191,34 @@ def update_run_logs_path(conn: sqlite3.Connection, run_id: int, logs_path: str) 
     conn.commit()
 
 
+def touch_run_progress(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    logs_path: str | None = None,
+) -> None:
+    if logs_path is None:
+        conn.execute(
+            """
+            UPDATE autofix_runs
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE autofix_runs
+            SET logs_path = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (logs_path, run_id),
+        )
+    conn.commit()
+
+
 def get_run_status(conn: sqlite3.Connection, run_id: int) -> str | None:
     row = conn.execute(
         "SELECT status FROM autofix_runs WHERE id = ?",

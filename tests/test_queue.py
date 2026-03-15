@@ -8,6 +8,7 @@ from app.services.queue import (
     enqueue_autofix_run,
     mark_run_finished,
     recover_stale_runs,
+    touch_run_progress,
 )
 
 
@@ -124,3 +125,34 @@ def test_recover_stale_runs_marks_old_running_rows_failed() -> None:
     assert rows[0]["last_error_code"] == "stale_run_recovered"
     assert rows[1]["status"] == "failed"
     assert rows[2]["status"] == "running"
+
+
+def test_touch_run_progress_updates_timestamp_and_logs_path() -> None:
+    conn = _make_conn()
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha="abc123",
+        normalized_review_json={"summary": "1 blocking issue"},
+    )
+    assert run_id is not None
+
+    before = conn.execute(
+        "SELECT updated_at, logs_path FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert before is not None
+
+    conn.execute("UPDATE autofix_runs SET updated_at = '2000-01-01 00:00:00' WHERE id = ?", (run_id,))
+    conn.commit()
+
+    touch_run_progress(conn, run_id, logs_path="logs/autofix-run-42.log")
+
+    after = conn.execute(
+        "SELECT updated_at, logs_path FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert after is not None
+    assert after["logs_path"] == "logs/autofix-run-42.log"
+    assert after["updated_at"] != "2000-01-01 00:00:00"
