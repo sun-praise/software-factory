@@ -412,6 +412,9 @@ def run_once(
                     feature_flags.openhands_command_timeout_seconds
                 ),
                 claude_agent_command=feature_flags.claude_agent_command,
+                claude_agent_provider=feature_flags.claude_agent_provider,
+                claude_agent_base_url=feature_flags.claude_agent_base_url,
+                claude_agent_model=feature_flags.claude_agent_model,
                 claude_agent_runtime=feature_flags.claude_agent_runtime,
                 claude_agent_container_image=(
                     feature_flags.claude_agent_container_image
@@ -762,6 +765,9 @@ def _execute_agent_sdks(
     openhands_command: str,
     openhands_command_timeout_seconds: int,
     claude_agent_command: str,
+    claude_agent_provider: str,
+    claude_agent_base_url: str,
+    claude_agent_model: str,
     claude_agent_runtime: str,
     claude_agent_container_image: str,
     claude_agent_command_timeout_seconds: int,
@@ -803,6 +809,9 @@ def _execute_agent_sdks(
                 "pr_number": pr_number,
                 "prompt": prompt,
                 "command": claude_agent_command,
+                "provider": claude_agent_provider,
+                "base_url": claude_agent_base_url,
+                "model": claude_agent_model,
                 "runtime": claude_agent_runtime,
                 "container_image": claude_agent_container_image,
                 "timeout_seconds": claude_agent_command_timeout_seconds,
@@ -857,6 +866,9 @@ def _run_claude_agent(
     prompt: str,
     *,
     command: str,
+    provider: str,
+    base_url: str,
+    model: str,
     runtime: str,
     container_image: str,
     timeout_seconds: int,
@@ -871,6 +883,9 @@ def _run_claude_agent(
             pr_number=pr_number,
             prompt=prompt,
             command=command,
+            provider=provider,
+            base_url=base_url,
+            model=model,
             container_image=container_image,
             timeout_seconds=timeout_seconds,
             agent_name="Claude Agent SDK",
@@ -885,6 +900,9 @@ def _run_claude_agent(
         pr_number=pr_number,
         prompt=prompt,
         command=command,
+        provider=provider,
+        base_url=base_url,
+        model=model,
         timeout_seconds=timeout_seconds,
         agent_name="Claude Agent SDK",
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
@@ -901,6 +919,9 @@ def _run_claude_container_command(
     pr_number: int,
     prompt: str,
     command: str,
+    provider: str,
+    base_url: str,
+    model: str,
     container_image: str,
     timeout_seconds: int,
     agent_name: str,
@@ -933,6 +954,9 @@ def _run_claude_container_command(
         repo=repo,
         pr_number=pr_number,
         run_id=run_id,
+        provider=provider,
+        base_url=base_url,
+        model=model,
     )
     argv = _build_claude_container_command_argv(
         workspace=workspace,
@@ -968,6 +992,9 @@ def _run_claude_stream_command(
     pr_number: int,
     prompt: str,
     command: str,
+    provider: str,
+    base_url: str,
+    model: str,
     timeout_seconds: int,
     agent_name: str,
     failure_code: str,
@@ -1003,7 +1030,14 @@ def _run_claude_stream_command(
         failure_code=failure_code,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
-        process_env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+        process_env=_build_claude_agent_environment(
+            repo=repo,
+            pr_number=pr_number,
+            run_id=run_id,
+            provider=provider,
+            base_url=base_url,
+            model=model,
+        ),
     )
 
 
@@ -1181,8 +1215,18 @@ def _build_claude_container_environment(
     repo: str,
     pr_number: int,
     run_id: int,
+    provider: str,
+    base_url: str,
+    model: str,
 ) -> dict[str, str]:
-    env = _build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id)
+    env = _build_claude_agent_environment(
+        repo=repo,
+        pr_number=pr_number,
+        run_id=run_id,
+        provider=provider,
+        base_url=base_url,
+        model=model,
+    )
     env["HOME"] = "/tmp/claude-home"
     env["XDG_CONFIG_HOME"] = "/tmp/claude-home/.config"
     env["XDG_CACHE_HOME"] = "/tmp/claude-home/.cache"
@@ -1549,6 +1593,18 @@ def _terminate_agent_process_tree_by_pid(pid: int) -> None:
     except OSError:
         return
 
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            with _ACTIVE_AGENT_PIDS_LOCK:
+                _ACTIVE_AGENT_PIDS.discard(pid)
+            return
+        except OSError:
+            break
+        time.sleep(0.1)
+
     try:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1570,6 +1626,39 @@ def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[
     env["SOFTWARE_FACTORY_REPO"] = repo
     env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
     env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    return env
+
+
+def _build_claude_agent_environment(
+    *,
+    repo: str,
+    pr_number: int,
+    run_id: int,
+    provider: str,
+    base_url: str,
+    model: str,
+) -> dict[str, str]:
+    env = _build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id)
+    normalized_provider = str(provider).strip().lower()
+    normalized_base_url = str(base_url).strip()
+    normalized_model = str(model).strip()
+
+    if normalized_provider == "deepseek":
+        deepseek_key = str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
+        if deepseek_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = deepseek_key
+            env["ANTHROPIC_API_KEY"] = deepseek_key
+    else:
+        openrouter_key = str(os.environ.get("OPENROUTER_API_KEY", "")).strip()
+        if openrouter_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = openrouter_key
+        env["ANTHROPIC_API_KEY"] = ""
+
+    if normalized_base_url:
+        env["ANTHROPIC_BASE_URL"] = normalized_base_url
+    if normalized_model:
+        env["ANTHROPIC_MODEL"] = normalized_model
+        env["ANTHROPIC_SMALL_FAST_MODEL"] = normalized_model
     return env
 
 

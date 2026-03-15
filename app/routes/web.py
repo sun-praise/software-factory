@@ -503,6 +503,13 @@ async def save_settings(request: Request) -> RedirectResponse:
 
     openhands_command = str(form.get("openhands_command", "openhands")).strip()
     claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
+    claude_agent_provider = str(form.get("claude_agent_provider", "openrouter")).strip()
+    claude_agent_base_url = str(
+        form.get("claude_agent_base_url", "https://openrouter.ai/api")
+    ).strip()
+    claude_agent_model = str(
+        form.get("claude_agent_model", "openrouter/hunter-alpha")
+    ).strip()
     claude_agent_runtime = str(form.get("claude_agent_runtime", "host")).strip()
     claude_agent_container_image = str(
         form.get("claude_agent_container_image", "")
@@ -519,12 +526,12 @@ async def save_settings(request: Request) -> RedirectResponse:
     except (TypeError, ValueError):
         openhands_command_timeout_seconds = 600
     claude_timeout_raw = str(
-        form.get("claude_agent_command_timeout_seconds", "600")
+        form.get("claude_agent_command_timeout_seconds", "1800")
     ).strip()
     try:
         claude_agent_command_timeout_seconds = max(1, int(claude_timeout_raw))
     except (TypeError, ValueError):
-        claude_agent_command_timeout_seconds = 600
+        claude_agent_command_timeout_seconds = 1800
 
     with connect_db() as conn:
         save_agent_feature_flags(
@@ -535,6 +542,9 @@ async def save_settings(request: Request) -> RedirectResponse:
             openhands_command_timeout_seconds=openhands_command_timeout_seconds,
             openhands_worktree_base_dir=openhands_worktree_base_dir,
             claude_agent_command=claude_agent_command,
+            claude_agent_provider=claude_agent_provider,
+            claude_agent_base_url=claude_agent_base_url,
+            claude_agent_model=claude_agent_model,
             claude_agent_runtime=claude_agent_runtime,
             claude_agent_container_image=claude_agent_container_image,
             claude_agent_command_timeout_seconds=(
