@@ -706,6 +706,57 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
     assert calls == ["/tmp", "/tmp"]
 
 
+def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_claude(
+        workspace: str,
+        run_id: int,
+        repo: str,
+        pr_number: int,
+        prompt: str,
+        *,
+        command: str,
+        runtime: str,
+        container_image: str,
+        timeout_seconds: int,
+        on_log_line: object | None = None,
+        should_cancel: object | None = None,
+    ) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return False, "claude failed", "agent_claude_failed"
+
+    def fake_openhands(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("openhands")
+        return True, "openhands succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+    monkeypatch.setattr(agent_runner, "_run_openhands_agent", fake_openhands)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        modes=("claude_agent_sdk", "openhands"),
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
+    assert ok is False
+    assert err_code == "agent_claude_failed"
+    assert err_message == "claude failed"
+    assert selected_mode == "claude_agent_sdk"
+    assert calls == ["claude"]
+
+
 def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

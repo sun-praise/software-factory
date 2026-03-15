@@ -817,9 +817,7 @@ def _execute_agent_sdks(
             if claude_ok:
                 return True, None, None, CLAUDE_AGENT_MODE
 
-            last_error_code = claude_error_code
-            last_error_message = claude_message
-            continue
+            return False, claude_error_code, claude_message, CLAUDE_AGENT_MODE
 
     return False, last_error_code, last_error_message, None
 
