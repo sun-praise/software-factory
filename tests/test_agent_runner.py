@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,11 @@ from app.models import SCHEMA_SQL
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
+    _consume_claude_stream,
     _default_executor,
+    _build_run_progress_callback,
     _execute_agent_sdks,
+    _render_claude_stream_record,
     _run_claude_agent,
     _sanitize_log_text,
     _normalize_agent_modes,
@@ -702,6 +706,57 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
     assert calls == ["/tmp", "/tmp"]
 
 
+def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_claude(
+        workspace: str,
+        run_id: int,
+        repo: str,
+        pr_number: int,
+        prompt: str,
+        *,
+        command: str,
+        runtime: str,
+        container_image: str,
+        timeout_seconds: int,
+        on_log_line: object | None = None,
+        should_cancel: object | None = None,
+    ) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return False, "claude failed", "agent_claude_failed"
+
+    def fake_openhands(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("openhands")
+        return True, "openhands succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+    monkeypatch.setattr(agent_runner, "_run_openhands_agent", fake_openhands)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        modes=("claude_agent_sdk", "openhands"),
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
+    assert ok is False
+    assert err_code == "agent_claude_failed"
+    assert err_message == "claude failed"
+    assert selected_mode == "claude_agent_sdk"
+    assert calls == ["claude"]
+
+
 def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -894,3 +949,79 @@ def test_sanitize_log_text_redacts_tokens() -> None:
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
     assert "test-openai-key" not in masked
     assert "[REDACTED]" in masked
+
+
+def test_render_claude_stream_record_handles_non_object_json() -> None:
+    lines, result_text, error_text, saw_events = _render_claude_stream_record('["a", "b"]\n')
+
+    assert lines == ["[agent][stdout] ['a', 'b']"]
+    assert result_text is None
+    assert error_text is None
+    assert saw_events is False
+
+
+def test_consume_claude_stream_falls_back_when_renderer_raises() -> None:
+    class _Stream:
+        def __init__(self) -> None:
+            self._lines = iter(['{"type":"assistant"}\n', ""])
+            self.closed = False
+
+        def readline(self) -> str:
+            return next(self._lines)
+
+        def close(self) -> None:
+            self.closed = True
+
+    lines: list[str] = []
+    chunks: list[str] = []
+    state: dict[str, object] = {}
+    stream = _Stream()
+
+    original = agent_runner._render_claude_stream_record
+
+    def _boom(raw_line: str):
+        raise RuntimeError(f"boom: {raw_line}")
+
+    try:
+        agent_runner._render_claude_stream_record = _boom
+        _consume_claude_stream(stream, chunks, lines.append, state)
+    finally:
+        agent_runner._render_claude_stream_record = original
+
+    assert chunks == ['{"type":"assistant"}\n']
+    assert lines == ['[agent][stdout] {"type":"assistant"}']
+    assert state == {}
+    assert stream.closed is True
+
+
+def test_build_run_progress_callback_updates_file_database_from_worker_thread(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "app.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha="abc123",
+        normalized_review_json={"summary": "1 blocking issue"},
+    )
+    assert run_id is not None
+
+    callback = _build_run_progress_callback(conn, run_id)
+    assert callback is not None
+
+    worker = threading.Thread(
+        target=lambda: callback("logs/autofix-run-42.log"),
+    )
+    worker.start()
+    worker.join()
+
+    row = conn.execute(
+        "SELECT logs_path FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row is not None
+    assert row["logs_path"] == "logs/autofix-run-42.log"
