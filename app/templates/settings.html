@@ -81,6 +81,23 @@
               autocomplete="off"
             >
 
+            <label for="claude_agent_runtime">Claude Agent runtime</label>
+            <select id="claude_agent_runtime" name="claude_agent_runtime">
+              <option value="host" {% if claude_agent_runtime == "host" %}selected{% endif %}>Host</option>
+              <option value="docker" {% if claude_agent_runtime == "docker" %}selected{% endif %}>Docker</option>
+            </select>
+            <p class="muted tiny">Use Docker to isolate Claude execution from the host worker environment.</p>
+
+            <label for="claude_agent_container_image">Claude Agent container image</label>
+            <input
+              type="text"
+              id="claude_agent_container_image"
+              name="claude_agent_container_image"
+              value="{{ claude_agent_container_image }}"
+              autocomplete="off"
+            >
+            <p class="muted tiny">Required only when Claude Agent runtime is set to Docker.</p>
+
             <label for="claude_agent_command_timeout_seconds">Claude Agent command timeout (seconds)</label>
             <input
               type="number"

@@ -669,6 +669,8 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         prompt: str,
         *,
         command: str,
+        runtime: str,
+        container_image: str,
         timeout_seconds: int,
         on_log_line: object | None = None,
         should_cancel: object | None = None,
@@ -689,6 +691,8 @@ def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
         claude_agent_command_timeout_seconds=600,
     )
     assert ok is True
@@ -740,6 +744,8 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         pr_number=7,
         prompt="fix this",
         command="  claude --print  ",
+        runtime="host",
+        container_image="",
         timeout_seconds=42,
     )
 
@@ -773,6 +779,70 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     assert "UNRELATED_SECRET" not in env
 
 
+def test_run_claude_agent_supports_docker_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.returncode = 0
+            self.pid = 1001
+            captured["command"] = list(args[0]) if args else []
+            captured.update(kwargs)
+
+        def communicate(
+            self,
+            input: str | None = None,
+            timeout: int | float | None = None,
+        ) -> tuple[str, str]:
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return "done", ""
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(
+        agent_runner.shutil,
+        "which",
+        lambda value: "/usr/bin/docker" if value == "docker" else f"/usr/bin/{value}",
+    )
+
+    ok, message, error_code = _run_claude_agent(
+        workspace=str(tmp_path),
+        run_id=9,
+        repo="acme/widgets",
+        pr_number=7,
+        prompt="fix this",
+        command="claude",
+        runtime="docker",
+        container_image="ghcr.io/example/claude-code:latest",
+        timeout_seconds=42,
+    )
+
+    assert ok is True
+    assert message == "done"
+    assert error_code is None
+    assert captured["command"][:8] == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--workdir",
+        "/workspace",
+        "--volume",
+        f"{tmp_path.resolve()}:/workspace",
+    ]
+    assert "ghcr.io/example/claude-code:latest" in captured["command"]
+    assert "--allowed-tools" in captured["command"]
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["input"] == "fix this"
+
+
 def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
     ok, message, error_code = _run_claude_agent(
         workspace=str(tmp_path),
@@ -781,6 +851,8 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
         pr_number=7,
         prompt="fix this",
         command="claude && whoami",
+        runtime="host",
+        container_image="",
         timeout_seconds=42,
     )
 

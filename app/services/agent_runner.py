@@ -396,6 +396,10 @@ def run_once(
                     feature_flags.openhands_command_timeout_seconds
                 ),
                 claude_agent_command=feature_flags.claude_agent_command,
+                claude_agent_runtime=feature_flags.claude_agent_runtime,
+                claude_agent_container_image=(
+                    feature_flags.claude_agent_container_image
+                ),
                 claude_agent_command_timeout_seconds=(
                     feature_flags.claude_agent_command_timeout_seconds
                 ),
@@ -742,6 +746,8 @@ def _execute_agent_sdks(
     openhands_command: str,
     openhands_command_timeout_seconds: int,
     claude_agent_command: str,
+    claude_agent_runtime: str,
+    claude_agent_container_image: str,
     claude_agent_command_timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -781,6 +787,8 @@ def _execute_agent_sdks(
                 "pr_number": pr_number,
                 "prompt": prompt,
                 "command": claude_agent_command,
+                "runtime": claude_agent_runtime,
+                "container_image": claude_agent_container_image,
                 "timeout_seconds": claude_agent_command_timeout_seconds,
             }
             if on_log_line is not None:
@@ -835,10 +843,27 @@ def _run_claude_agent(
     prompt: str,
     *,
     command: str,
+    runtime: str,
+    container_image: str,
     timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
+    if runtime == "docker":
+        return _run_claude_container_command(
+            workspace=workspace,
+            run_id=run_id,
+            repo=repo,
+            pr_number=pr_number,
+            prompt=prompt,
+            command=command,
+            container_image=container_image,
+            timeout_seconds=timeout_seconds,
+            agent_name="Claude Agent SDK",
+            failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+            on_log_line=on_log_line,
+            should_cancel=should_cancel,
+        )
     return _run_claude_stream_command(
         workspace=workspace,
         run_id=run_id,
@@ -849,6 +874,60 @@ def _run_claude_agent(
         timeout_seconds=timeout_seconds,
         agent_name="Claude Agent SDK",
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+        on_log_line=on_log_line,
+        should_cancel=should_cancel,
+    )
+
+
+def _run_claude_container_command(
+    *,
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    command: str,
+    container_image: str,
+    timeout_seconds: int,
+    agent_name: str,
+    failure_code: str,
+    on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[bool, str, str | None]:
+    normalized_command = command.strip()
+    if not normalized_command:
+        return False, f"{agent_name} command is not configured", failure_code
+    if not container_image.strip():
+        return False, f"{agent_name} container image is not configured", failure_code
+
+    try:
+        inner_argv = shlex.split(normalized_command)
+    except ValueError as exc:
+        return False, f"{agent_name} command is invalid: {exc}", failure_code
+    if not inner_argv:
+        return False, f"{agent_name} command is not configured", failure_code
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in inner_argv[1:]):
+        return (
+            False,
+            f"{agent_name} command contains unsupported shell control operators",
+            failure_code,
+        )
+    if not _command_exists("docker"):
+        return False, f"{agent_name} container runtime not found: docker", failure_code
+
+    argv = _build_claude_container_command_argv(
+        workspace=workspace,
+        container_image=container_image,
+        inner_argv=inner_argv,
+        container_env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+    )
+    return _run_claude_stream_subprocess(
+        workspace=workspace,
+        prompt=prompt,
+        argv=argv,
+        timeout_seconds=timeout_seconds,
+        agent_name=agent_name,
+        failure_code=failure_code,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
     )
@@ -888,6 +967,31 @@ def _run_claude_stream_command(
         return False, f"{agent_name} command not found: {argv[0]}", failure_code
 
     argv = _build_claude_stream_command_argv(argv)
+    return _run_claude_stream_subprocess(
+        workspace=workspace,
+        prompt=prompt,
+        argv=argv,
+        timeout_seconds=timeout_seconds,
+        agent_name=agent_name,
+        failure_code=failure_code,
+        on_log_line=on_log_line,
+        should_cancel=should_cancel,
+        process_env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+    )
+
+
+def _run_claude_stream_subprocess(
+    *,
+    workspace: str,
+    prompt: str,
+    argv: list[str],
+    timeout_seconds: int,
+    agent_name: str,
+    failure_code: str,
+    on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    process_env: dict[str, str] | None = None,
+) -> tuple[bool, str, str | None]:
 
     process: subprocess.Popen[str]
     try:
@@ -898,7 +1002,7 @@ def _run_claude_stream_command(
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             text=True,
-            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+            env=process_env,
             start_new_session=True,
         )
     except FileNotFoundError:
@@ -981,6 +1085,34 @@ def _run_claude_stream_command(
     if on_log_line is not None and state.get("saw_events"):
         on_log_line("[agent] completed")
     return True, result_text or f"{agent_name} completed", None
+
+
+def _build_claude_container_command_argv(
+    *,
+    workspace: str,
+    container_image: str,
+    inner_argv: list[str],
+    container_env: Mapping[str, str],
+) -> list[str]:
+    container_workspace = "/workspace"
+    expanded_inner = _build_claude_stream_command_argv(inner_argv)
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--workdir",
+        container_workspace,
+        "--volume",
+        f"{Path(workspace).resolve()}:{container_workspace}",
+    ]
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        argv.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+    for key, value in sorted(container_env.items()):
+        argv.extend(["-e", f"{key}={value}"])
+    argv.append(container_image.strip())
+    argv.extend(expanded_inner)
+    return argv
 
 
 def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:
