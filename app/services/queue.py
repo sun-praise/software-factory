@@ -178,6 +178,61 @@ def mark_run_finished(
     conn.commit()
 
 
+def get_run_status(conn: sqlite3.Connection, run_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT status FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row["status"])
+
+
+def is_run_cancel_requested(conn: sqlite3.Connection, run_id: int) -> bool:
+    return get_run_status(conn, run_id) == "cancel_requested"
+
+
+def request_run_cancel(conn: sqlite3.Connection, run_id: int) -> str | None:
+    current_status = get_run_status(conn, run_id)
+    if current_status is None:
+        return None
+
+    if current_status in {"success", "failed", "cancelled"}:
+        return current_status
+
+    if current_status in {"queued", "retry_scheduled"}:
+        conn.execute(
+            """
+            UPDATE autofix_runs
+            SET status = 'cancelled',
+                error_summary = 'cancelled_by_user',
+                last_error_code = 'cancelled',
+                last_error_at = CURRENT_TIMESTAMP,
+                finished_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
+        conn.commit()
+        return "cancelled"
+
+    conn.execute(
+        """
+        UPDATE autofix_runs
+        SET status = 'cancel_requested',
+            error_summary = 'cancel_requested_by_user',
+            last_error_code = 'cancel_requested',
+            last_error_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (run_id,),
+    )
+    conn.commit()
+    return "cancel_requested"
+
+
 def _promote_due_retries(conn: sqlite3.Connection) -> None:
     """
     将到期的重试任务从 'retry_scheduled' 状态提升为 'queued' 状态。

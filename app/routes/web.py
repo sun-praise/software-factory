@@ -26,7 +26,7 @@ from app.services.policy import (
     get_remaining_autofix_quota,
     reset_autofix_count_on_sha_change,
 )
-from app.services.queue import enqueue_autofix_run
+from app.services.queue import enqueue_autofix_run, request_run_cancel
 
 
 router = APIRouter(tags=["web"])
@@ -65,7 +65,7 @@ def _status_class(status: str) -> str:
         return "success"
     if normalized in {"failed", "cancelled"}:
         return "failed"
-    if normalized in {"running"}:
+    if normalized in {"running", "cancel_requested"}:
         return "running"
     if normalized in {"retry_scheduled"}:
         return "retry"
@@ -398,6 +398,27 @@ async def api_run_detail(run_id: str) -> JSONResponse:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="run_id must be an integer",
+        )
+    return JSONResponse(_load_run_detail(run_id_value))
+
+
+@router.post("/api/runs/{run_id}/cancel")
+async def api_cancel_run(run_id: str) -> JSONResponse:
+    try:
+        run_id_value = int(run_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="run_id must be an integer",
+        )
+
+    with connect_db() as conn:
+        cancelled_status = request_run_cancel(conn, run_id_value)
+
+    if cancelled_status is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="run not found",
         )
     return JSONResponse(_load_run_detail(run_id_value))
 

@@ -151,6 +151,12 @@ a:hover {
   border-color: #93c5fd;
 }
 
+.status-pill--cancel_requested {
+  color: #9a3412;
+  background: #ffedd5;
+  border-color: #fdba74;
+}
+
 .status-pill--success {
   color: #166534;
   background: #dcfce7;
@@ -161,6 +167,12 @@ a:hover {
   color: #991b1b;
   background: #fee2e2;
   border-color: #fca5a5;
+}
+
+.status-pill--cancelled {
+  color: #475569;
+  background: #e2e8f0;
+  border-color: #cbd5e1;
 }
 
 .status-pill--retry_scheduled {
@@ -199,6 +211,10 @@ a:hover {
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.run-action-button[hidden] {
+  display: none;
 }
 
 .log-live {
@@ -298,6 +314,19 @@ button {
 
 button:hover {
   filter: brightness(0.95);
+}
+
+button.button-danger {
+  background: #b91c1c;
+}
+
+button.button-danger:hover {
+  filter: brightness(0.92);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .stacked-header {

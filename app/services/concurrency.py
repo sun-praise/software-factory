@@ -130,7 +130,11 @@ def get_pr_lock(conn: sqlite3.Connection, repo: str, pr_number: int) -> PRLock |
 
 def count_running_runs(conn: sqlite3.Connection) -> int:
     row = conn.execute(
-        "SELECT COUNT(*) AS count FROM autofix_runs WHERE status = 'running'"
+        """
+        SELECT COUNT(*) AS count
+        FROM autofix_runs
+        WHERE status IN ('running', 'cancel_requested')
+        """
     ).fetchone()
     if row is None:
         return 0
