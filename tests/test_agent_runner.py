@@ -750,6 +750,10 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         "claude",
         "--print",
         "--verbose",
+        "--permission-mode",
+        "auto",
+        "--allowed-tools",
+        "Bash,Read,Edit,Glob,Grep,LS,WebFetch",
         "--output-format",
         "stream-json",
     ]

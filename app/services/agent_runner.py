@@ -989,6 +989,18 @@ def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:
         expanded.append("--print")
     if "--verbose" not in expanded:
         expanded.append("--verbose")
+    if "--permission-mode" not in expanded:
+        expanded.extend(["--permission-mode", "auto"])
+    if not any(
+        token == "--allowed-tools" or token.startswith("--allowed-tools=")
+        for token in expanded
+    ):
+        expanded.extend(
+            [
+                "--allowed-tools",
+                "Bash,Read,Edit,Glob,Grep,LS,WebFetch",
+            ]
+        )
     if not any(
         token == "--output-format" or token.startswith("--output-format=")
         for token in expanded
