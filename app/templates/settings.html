@@ -98,6 +98,14 @@
               value="{{ claude_agent_worktree_base_dir }}"
               autocomplete="off"
             >
+
+            <label for="claude_agent_provider">Claude Agent provider profile</label>
+            <select id="claude_agent_provider" name="claude_agent_provider">
+              <option value="environment" {% if claude_agent_provider == "environment" %}selected{% endif %}>Environment default</option>
+              <option value="deepseek" {% if claude_agent_provider == "deepseek" %}selected{% endif %}>DeepSeek</option>
+              <option value="kimi" {% if claude_agent_provider == "kimi" %}selected{% endif %}>Kimi</option>
+            </select>
+            <p class="muted tiny">DeepSeek uses <code>DEEPSEEK_API_KEY</code>. Kimi uses <code>KIMI_CODING</code>. No provider secret is stored in the database.</p>
           </fieldset>
 
           <div class="actions">

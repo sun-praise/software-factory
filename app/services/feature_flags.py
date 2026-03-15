@@ -14,6 +14,7 @@ FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY = "agent.claude_agent.enabled"
 FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY = "agent.claude_agent.command"
 FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seconds"
 FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY = "agent.claude_agent.worktree_base_dir"
+FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY = "agent.claude_agent.provider"
 FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 
 OPENHANDS_AGENT_MODE = "openhands"
@@ -30,6 +31,7 @@ class AgentFeatureFlags:
     claude_agent_command: str
     claude_agent_command_timeout_seconds: int
     claude_agent_worktree_base_dir: str
+    claude_agent_provider: str
 
 
 def load_agent_feature_flags(
@@ -62,6 +64,9 @@ def get_default_agent_feature_flags() -> AgentFeatureFlags:
         claude_agent_worktree_base_dir=(
             settings.claude_agent_sdk_worktree_base_dir.strip()
             or ".software-factory-worktrees"
+        ),
+        claude_agent_provider=_normalize_provider(
+            settings.claude_agent_sdk_provider
         ),
     )
 
@@ -128,6 +133,12 @@ def resolve_agent_feature_flags(
         FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
         settings.claude_agent_worktree_base_dir,
     ).strip() or settings.claude_agent_worktree_base_dir
+    claude_provider = _normalize_provider(
+        raw_flags.get(
+            FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY,
+            settings.claude_agent_provider,
+        )
+    )
 
     return AgentFeatureFlags(
         agent_sdks=tuple(modes),
@@ -137,6 +148,7 @@ def resolve_agent_feature_flags(
         claude_agent_command=claude_command,
         claude_agent_command_timeout_seconds=claude_timeout,
         claude_agent_worktree_base_dir=claude_worktree_dir,
+        claude_agent_provider=claude_provider,
     )
 
 
@@ -151,6 +163,7 @@ def save_agent_feature_flags(
     claude_agent_command: str,
     claude_agent_command_timeout_seconds: int,
     claude_agent_worktree_base_dir: str,
+    claude_agent_provider: str,
     legacy_enabled: bool | None = None,
 ) -> None:
     values: list[tuple[str, str]] = [
@@ -173,6 +186,10 @@ def save_agent_feature_flags(
         (
             FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
             claude_agent_worktree_base_dir.strip() or ".software-factory-worktrees",
+        ),
+        (
+            FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY,
+            _normalize_provider(claude_agent_provider),
         ),
     ]
     legacy_write_value = claude_agent_enabled if legacy_enabled is None else legacy_enabled
@@ -207,6 +224,7 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
             flags.claude_agent_command_timeout_seconds
         ),
         "claude_agent_worktree_base_dir": flags.claude_agent_worktree_base_dir,
+        "claude_agent_provider": flags.claude_agent_provider,
         "default_agent_sdks": ",".join(default_flags.agent_sdks),
     }
 
@@ -264,3 +282,10 @@ def _coerce_int(value: str | None, default: int) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_provider(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"deepseek", "kimi"}:
+        return normalized
+    return "environment"

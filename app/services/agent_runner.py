@@ -379,6 +379,7 @@ def run_once(
                 claude_agent_command_timeout_seconds=(
                     feature_flags.claude_agent_command_timeout_seconds
                 ),
+                claude_agent_provider=feature_flags.claude_agent_provider,
                 on_log_line=logger.append,
                 should_cancel=lambda: is_run_cancel_requested(conn, run_id),
             )
@@ -680,6 +681,7 @@ def _execute_agent_sdks(
     openhands_command_timeout_seconds: int,
     claude_agent_command: str,
     claude_agent_command_timeout_seconds: int,
+    claude_agent_provider: str = "environment",
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str | None, str | None, str | None]:
@@ -724,6 +726,8 @@ def _execute_agent_sdks(
                 claude_kwargs["on_log_line"] = on_log_line
             if should_cancel is not None:
                 claude_kwargs["should_cancel"] = should_cancel
+            if claude_agent_provider and claude_agent_provider != "environment":
+                claude_kwargs["provider"] = claude_agent_provider
             claude_ok, claude_message, claude_error_code = _run_claude_agent(
                 **claude_kwargs,
             )
@@ -773,6 +777,7 @@ def _run_claude_agent(
     *,
     command: str,
     timeout_seconds: int,
+    provider: str | None = None,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
@@ -786,6 +791,7 @@ def _run_claude_agent(
         timeout_seconds=timeout_seconds,
         agent_name="Claude Agent SDK",
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+        provider=provider,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
     )
@@ -802,6 +808,7 @@ def _run_claude_stream_command(
     timeout_seconds: int,
     agent_name: str,
     failure_code: str,
+    provider: str | None = None,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
@@ -835,7 +842,12 @@ def _run_claude_stream_command(
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             text=True,
-            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+            env=_build_agent_environment(
+                repo=repo,
+                pr_number=pr_number,
+                run_id=run_id,
+                claude_provider=provider,
+            ),
             start_new_session=True,
         )
     except FileNotFoundError:
@@ -1265,7 +1277,13 @@ def _terminate_agent_process_tree_by_pid(pid: int) -> None:
         _ACTIVE_AGENT_PIDS.discard(pid)
 
 
-def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[str, str]:
+def _build_agent_environment(
+    *,
+    repo: str,
+    pr_number: int,
+    run_id: int,
+    claude_provider: str | None = None,
+) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
@@ -1275,6 +1293,21 @@ def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[
     env["SOFTWARE_FACTORY_REPO"] = repo
     env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
     env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
+    provider = (claude_provider or "").strip().lower()
+    if provider == "deepseek":
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        env["ANTHROPIC_BASE_URL"] = "https://api.deepseek.com/anthropic"
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
+        env["ANTHROPIC_MODEL"] = "deepseek-chat"
+        env["ANTHROPIC_SMALL_FAST_MODEL"] = "deepseek-chat"
+    elif provider == "kimi":
+        api_key = os.environ.get("KIMI_CODING", "").strip()
+        env["ANTHROPIC_BASE_URL"] = "https://api.kimi.com/coding/"
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
     return env
 
 

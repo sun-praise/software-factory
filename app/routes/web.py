@@ -509,6 +509,9 @@ async def save_settings(request: Request) -> RedirectResponse:
     claude_agent_worktree_base_dir = str(
         form.get("claude_agent_worktree_base_dir", ".software-factory-worktrees")
     ).strip()
+    claude_agent_provider = str(
+        form.get("claude_agent_provider", "environment")
+    ).strip()
     timeout_raw = str(form.get("openhands_command_timeout_seconds", "600"))
     try:
         openhands_command_timeout_seconds = max(1, int(timeout_raw.strip()))
@@ -535,6 +538,7 @@ async def save_settings(request: Request) -> RedirectResponse:
                 claude_agent_command_timeout_seconds
             ),
             claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
+            claude_agent_provider=claude_agent_provider,
         )
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)
