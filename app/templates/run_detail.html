@@ -34,7 +34,11 @@
             {% endif %}
           </dd>
           <dt>Status</dt>
-          <dd>{{ run.status | default("pending") }}</dd>
+          <dd>
+            <span class="status-pill {{ run.status_class }}">
+              {{ run.status | default("pending") }}
+            </span>
+          </dd>
           <dt>Created At</dt>
           <dd>{{ run.created_at | default("-") }}</dd>
           <dt>Updated At</dt>
