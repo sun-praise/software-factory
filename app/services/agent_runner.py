@@ -1268,6 +1268,7 @@ def _prepare_openhands_workspace(
         details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
         raise ValueError(f"git worktree add failed: {details}")
 
+    _link_workspace_virtualenv(base_repo=base_repo, worktree_dir=Path(worktree_dir))
     return worktree_dir, worktree_dir
 
 
@@ -1280,6 +1281,17 @@ def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
         )
     finally:
         shutil.rmtree(worktree_dir, ignore_errors=True)
+
+
+def _link_workspace_virtualenv(*, base_repo: Path, worktree_dir: Path) -> None:
+    source_venv = base_repo / ".venv"
+    target_venv = worktree_dir / ".venv"
+    if not source_venv.exists() or target_venv.exists():
+        return
+    try:
+        target_venv.symlink_to(source_venv, target_is_directory=True)
+    except OSError:
+        return
 
 
 def _run_git_command(
