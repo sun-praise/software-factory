@@ -800,6 +800,7 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "test-gh-pat")
     monkeypatch.setenv("UNRELATED_SECRET", "should-not-leak")
     monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
     monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
@@ -851,6 +852,8 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     assert env["ANTHROPIC_API_KEY"] == ""
     assert env["ANTHROPIC_MODEL"] == "openrouter/hunter-alpha"
     assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "openrouter/hunter-alpha"
+    assert env["GH_TOKEN"] == "test-gh-pat"
+    assert env["GITHUB_TOKEN"] == "test-gh-pat"
     assert env["SOFTWARE_FACTORY_REPO"] == "acme/widgets"
     assert env["SOFTWARE_FACTORY_PR_NUMBER"] == "7"
     assert env["SOFTWARE_FACTORY_RUN_ID"] == "9"
@@ -884,6 +887,7 @@ def test_run_claude_agent_supports_docker_runtime(
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "test-gh-pat")
     monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
     monkeypatch.setattr(
         agent_runner.shutil,
@@ -943,6 +947,8 @@ def test_run_claude_agent_supports_docker_runtime(
     assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "test-openrouter-key"
     assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["GH_TOKEN"] == "test-gh-pat"
+    assert env["GITHUB_TOKEN"] == "test-gh-pat"
     assert env["HOME"] == "/tmp/claude-home"
 
 
