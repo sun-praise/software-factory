@@ -762,14 +762,15 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         "Bash,Read,Edit,Glob,Grep,LS,WebFetch",
         "--output-format",
         "stream-json",
+        "fix this",
     ]
     assert captured["cwd"] == str(tmp_path)
     assert captured["stdout"] == agent_runner.subprocess.PIPE
     assert captured["stderr"] == agent_runner.subprocess.PIPE
-    assert captured["stdin"] == agent_runner.subprocess.PIPE
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
     assert captured["text"] is True
     assert captured["timeout"] == 42
-    assert captured["input"] == "fix this"
+    assert captured["input"] is None
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["OPENAI_API_KEY"] == "test-openai-key"
@@ -811,6 +812,12 @@ def test_run_claude_agent_supports_docker_runtime(
         "which",
         lambda value: "/usr/bin/docker" if value == "docker" else f"/usr/bin/{value}",
     )
+    gitdir = tmp_path / ".git-dir"
+    gitdir.mkdir()
+    (tmp_path / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    (gitdir / "commondir").write_text("../.git-common\n", encoding="utf-8")
+    git_common = tmp_path / ".git-common"
+    git_common.mkdir()
 
     ok, message, error_code = _run_claude_agent(
         workspace=str(tmp_path),
@@ -838,9 +845,24 @@ def test_run_claude_agent_supports_docker_runtime(
         f"{tmp_path.resolve()}:/workspace",
     ]
     assert "ghcr.io/example/claude-code:latest" in captured["command"]
+    assert f"{gitdir}:{gitdir}" in captured["command"]
+    assert f"{git_common.resolve()}:{git_common.resolve()}" in captured["command"]
+    assert "--env" in captured["command"]
+    assert "OPENAI_API_KEY" in captured["command"]
+    assert "test-openai-key" not in captured["command"]
     assert "--allowed-tools" in captured["command"]
     assert captured["cwd"] == str(tmp_path)
-    assert captured["input"] == "fix this"
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
+    assert captured["input"] is None
+    assert captured["command"][-1] == "fix this"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_API_KEY"] == "test-openai-key"
+    assert env["HOME"] == "/tmp/claude-home"
+
+
+def test_build_workspace_git_mounts_ignores_missing_git_metadata(tmp_path: Path) -> None:
+    assert agent_runner._build_workspace_git_mounts(str(tmp_path)) == []
 
 
 def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
@@ -862,9 +884,13 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
 
 
 def test_sanitize_log_text_redacts_tokens() -> None:
-    raw = "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz"
+    raw = (
+        "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz "
+        "OPENAI_API_KEY=test-openai-key"
+    )
     masked = _sanitize_log_text(raw)
     assert "abc123" not in masked
     assert "xyz" not in masked
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
+    assert "test-openai-key" not in masked
     assert "[REDACTED]" in masked

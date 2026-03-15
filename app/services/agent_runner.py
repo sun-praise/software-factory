@@ -62,6 +62,7 @@ _REDACTION_PATTERNS = (
     re.compile(r"(github_pat_[A-Za-z0-9_]{20,})"),
     re.compile(r"(?i)(token\s*[=:]\s*)([^\s]+)"),
     re.compile(r"(?i)(secret\s*[=:]\s*)([^\s]+)"),
+    re.compile(r"(?i)([A-Z0-9_]*(?:TOKEN|SECRET|API_KEY)[A-Z0-9_]*=)([^\s]+)"),
 )
 _ANSI_CSI_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _ANSI_OSC_PATTERN = re.compile(r"\x1B\].*?(?:\x07|\x1B\\)")
@@ -915,21 +916,34 @@ def _run_claude_container_command(
     if not _command_exists("docker"):
         return False, f"{agent_name} container runtime not found: docker", failure_code
 
+    container_env = _build_claude_container_environment(
+        repo=repo,
+        pr_number=pr_number,
+        run_id=run_id,
+    )
     argv = _build_claude_container_command_argv(
         workspace=workspace,
         container_image=container_image,
         inner_argv=inner_argv,
-        container_env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+        container_env=container_env,
+        prompt=prompt,
     )
     return _run_claude_stream_subprocess(
         workspace=workspace,
-        prompt=prompt,
         argv=argv,
+        display_argv=_build_claude_container_command_argv(
+            workspace=workspace,
+            container_image=container_image,
+            inner_argv=inner_argv,
+            container_env=container_env,
+            prompt=None,
+        ),
         timeout_seconds=timeout_seconds,
         agent_name=agent_name,
         failure_code=failure_code,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
+        process_env=container_env,
     )
 
 
@@ -969,8 +983,8 @@ def _run_claude_stream_command(
     argv = _build_claude_stream_command_argv(argv)
     return _run_claude_stream_subprocess(
         workspace=workspace,
-        prompt=prompt,
-        argv=argv,
+        argv=[*argv, prompt],
+        display_argv=argv,
         timeout_seconds=timeout_seconds,
         agent_name=agent_name,
         failure_code=failure_code,
@@ -983,8 +997,8 @@ def _run_claude_stream_command(
 def _run_claude_stream_subprocess(
     *,
     workspace: str,
-    prompt: str,
     argv: list[str],
+    display_argv: list[str],
     timeout_seconds: int,
     agent_name: str,
     failure_code: str,
@@ -1000,7 +1014,7 @@ def _run_claude_stream_subprocess(
             cwd=workspace,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             text=True,
             env=process_env,
             start_new_session=True,
@@ -1019,12 +1033,14 @@ def _run_claude_stream_subprocess(
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     if on_log_line is not None:
-        on_log_line(f"[agent] starting {agent_name}: {' '.join(argv)}")
+        on_log_line(
+            f"[agent] starting {agent_name}: {_format_command_for_log(display_argv)}"
+        )
     stdout_stream = getattr(process, "stdout", None)
     stderr_stream = getattr(process, "stderr", None)
     if stdout_stream is None or stderr_stream is None:
         try:
-            stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             _terminate_agent_process_tree(process)
             _unregister_active_agent_process(process.pid)
@@ -1050,9 +1066,6 @@ def _run_claude_stream_subprocess(
     stdout_thread.start()
     stderr_thread.start()
     try:
-        if process.stdin is not None:
-            process.stdin.write(prompt)
-            process.stdin.close()
         deadline = time.monotonic() + timeout_seconds
         while True:
             if should_cancel is not None and should_cancel():
@@ -1093,6 +1106,7 @@ def _build_claude_container_command_argv(
     container_image: str,
     inner_argv: list[str],
     container_env: Mapping[str, str],
+    prompt: str | None,
 ) -> list[str]:
     container_workspace = "/workspace"
     expanded_inner = _build_claude_stream_command_argv(inner_argv)
@@ -1106,13 +1120,64 @@ def _build_claude_container_command_argv(
         "--volume",
         f"{Path(workspace).resolve()}:{container_workspace}",
     ]
+    for host_path, container_path in _build_workspace_git_mounts(workspace):
+        argv.extend(["--volume", f"{host_path}:{container_path}"])
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
         argv.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
-    for key, value in sorted(container_env.items()):
-        argv.extend(["-e", f"{key}={value}"])
+    for key in sorted(container_env):
+        argv.extend(["--env", key])
     argv.append(container_image.strip())
     argv.extend(expanded_inner)
+    if prompt:
+        argv.append(prompt)
     return argv
+
+
+def _build_workspace_git_mounts(workspace: str) -> list[tuple[str, str]]:
+    workspace_path = Path(workspace).resolve()
+    git_entry = workspace_path / ".git"
+    if not git_entry.is_file():
+        return []
+
+    try:
+        git_text = git_entry.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    if not git_text.startswith("gitdir: "):
+        return []
+
+    gitdir = Path(git_text.split("gitdir: ", 1)[1]).expanduser()
+    if not gitdir.exists():
+        return []
+
+    mounts: list[tuple[str, str]] = [(str(gitdir), str(gitdir))]
+    commondir_file = gitdir / "commondir"
+    try:
+        commondir_text = commondir_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        commondir_text = ""
+    if commondir_text:
+        commondir = (gitdir / commondir_text).resolve()
+        if commondir.exists() and str(commondir) != str(gitdir):
+            mounts.append((str(commondir), str(commondir)))
+    return mounts
+
+
+def _build_claude_container_environment(
+    *,
+    repo: str,
+    pr_number: int,
+    run_id: int,
+) -> dict[str, str]:
+    env = _build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id)
+    env["HOME"] = "/tmp/claude-home"
+    env["XDG_CONFIG_HOME"] = "/tmp/claude-home/.config"
+    env["XDG_CACHE_HOME"] = "/tmp/claude-home/.cache"
+    return env
+
+
+def _format_command_for_log(argv: list[str]) -> str:
+    return _sanitize_log_text(" ".join(shlex.quote(token) for token in argv))
 
 
 def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:
@@ -2046,6 +2111,9 @@ def _sanitize_log_text(text: str) -> str:
         lambda m: f"{m.group(1)}[REDACTED]", sanitized
     )
     sanitized = _REDACTION_PATTERNS[3].sub(
+        lambda m: f"{m.group(1)}[REDACTED]", sanitized
+    )
+    sanitized = _REDACTION_PATTERNS[4].sub(
         lambda m: f"{m.group(1)}[REDACTED]", sanitized
     )
     return sanitized
