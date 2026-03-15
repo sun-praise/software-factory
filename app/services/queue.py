@@ -256,9 +256,9 @@ def recover_stale_runs(
         return 0
 
     params: list[Any] = [
+        "stale_run_recovered",
+        "stale_run_recovered",
         f"-{int(stale_after_seconds)} seconds",
-        "stale_run_recovered",
-        "stale_run_recovered",
     ]
     worker_filter = ""
     if worker_id:
@@ -279,7 +279,7 @@ def recover_stale_runs(
           AND datetime(updated_at) <= datetime('now', ?)
           {worker_filter}
         """,
-        (*params[1:], params[0], *params[3:]),
+        tuple(params),
     )
     conn.commit()
     return int(cursor.rowcount or 0)
