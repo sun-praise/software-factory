@@ -1504,38 +1504,35 @@ def _default_executor(
     command: str, workspace_dir: str
 ) -> subprocess.CompletedProcess[str]:
     argv = shlex.split(command)
-    if argv and argv[0] == "python" and shutil.which("python") is None:
-        fallback_python = sys.executable or shutil.which("python3")
-        if fallback_python:
-            argv[0] = fallback_python
+    venv_dir = Path(workspace_dir) / ".venv"
+    venv_bin_dir = venv_dir / "bin"
+    venv_python = venv_bin_dir / "python"
+    env = os.environ.copy()
+    if venv_bin_dir.is_dir():
+        current_path = env.get("PATH", "")
+        env["PATH"] = (
+            f"{venv_bin_dir}{os.pathsep}{current_path}"
+            if current_path
+            else str(venv_bin_dir)
+        )
+        env["VIRTUAL_ENV"] = str(venv_dir)
+    if argv and argv[0] in {"python", "python3"}:
+        if venv_python.exists() and os.access(venv_python, os.X_OK):
+            argv[0] = str(venv_python)
+        elif argv[0] == "python" and shutil.which("python") is None:
+            fallback_python = sys.executable or shutil.which("python3")
+            if fallback_python:
+                argv[0] = fallback_python
 
-    result = subprocess.run(
+    return subprocess.run(
         argv,
         cwd=workspace_dir,
         check=False,
         capture_output=True,
         text=True,
         timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
+        env=env,
     )
-    missing_module_match = re.search(r"No module named ([A-Za-z0-9_.-]+)", result.stderr or "")
-    if (
-        result.returncode != 0
-        and len(argv) >= 3
-        and argv[1] == "-m"
-        and missing_module_match is not None
-    ):
-        cli_name = missing_module_match.group(1)
-        cli_path = shutil.which(cli_name)
-        if cli_path:
-            return subprocess.run(
-                [cli_name, *argv[3:]],
-                cwd=workspace_dir,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
-            )
-    return result
 
 
 def _coerce_result(result: Any) -> dict[str, Any]:

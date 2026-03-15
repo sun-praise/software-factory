@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
@@ -252,39 +252,45 @@ def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
     assert result["comment_posted"] is False
 
 
-def test_default_executor_falls_back_to_cli_when_python_module_is_missing(
+def test_default_executor_prefers_workspace_venv_python(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[list[str]] = []
-
-    class _Result:
-        def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
+    captured: dict[str, object] = {}
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    venv_python = venv_bin / "python"
+    venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    venv_python.chmod(0o755)
 
     def fake_run(command, **kwargs):
-        calls.append(list(command))
-        if command[:3] == [sys.executable, "-m", "ruff"]:
-            return _Result(1, "", f"{sys.executable}: No module named ruff")
-        if command[:1] == ["ruff"]:
-            return _Result(0, "lint ok", "")
-        return _Result(0, "ok", "")
+        captured["command"] = list(command)
+        captured.update(kwargs)
+
+        class _Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return _Result()
 
     import subprocess
 
-    monkeypatch.setattr(shutil, "which", lambda value: None if value == "python" else f"/usr/bin/{value}")
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda value: None if value in {"python", "python3"} else f"/usr/bin/{value}",
+    )
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     result = _default_executor("python -m ruff check .", str(tmp_path))
 
-    assert calls == [
-        [sys.executable, "-m", "ruff", "check", "."],
-        ["ruff", "check", "."],
-    ]
+    assert captured["command"] == [str(venv_python), "-m", "ruff", "check", "."]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["VIRTUAL_ENV"] == str(tmp_path / ".venv")
+    assert str(venv_bin) == str(env["PATH"]).split(os.pathsep)[0]
     assert result.returncode == 0
-    assert result.stdout == "lint ok"
 
 
 def test_run_once_schedules_retry_for_git_failure(

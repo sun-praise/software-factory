@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.config import get_settings
 from app.db import connect_db
 from app.services.queue import claim_next_queued_run
 from app.services.agent_runner import run_once
