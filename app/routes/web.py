@@ -315,7 +315,7 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     with connect_db() as conn:
         row = conn.execute(
             """
-            SELECT id, status, created_at, updated_at, logs_path
+            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path
             FROM autofix_runs
             WHERE id = ?
             """,
@@ -324,14 +324,22 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
 
     run = {
         "id": run_id,
+        "repo": "-",
+        "pr_number": "-",
+        "pr_url": None,
         "status": "not_found",
         "created_at": "-",
         "updated_at": "-",
         "log_preview": "No log data yet.",
     }
     if row is not None:
+        repo = str(row["repo"])
+        pr_number = str(row["pr_number"])
         run = {
             "id": str(row["id"]),
+            "repo": repo,
+            "pr_number": pr_number,
+            "pr_url": f"https://github.com/{repo}/pull/{pr_number}",
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
