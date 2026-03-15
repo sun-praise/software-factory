@@ -246,6 +246,45 @@ def request_run_cancel(conn: sqlite3.Connection, run_id: int) -> str | None:
     return "cancel_requested"
 
 
+def recover_stale_runs(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_seconds: int,
+    worker_id: str | None = None,
+) -> int:
+    if stale_after_seconds <= 0:
+        return 0
+
+    params: list[Any] = [
+        "stale_run_recovered",
+        "stale_run_recovered",
+        f"-{int(stale_after_seconds)} seconds",
+    ]
+    worker_filter = ""
+    if worker_id:
+        worker_filter = "AND worker_id = ?"
+        params.append(worker_id)
+
+    cursor = conn.execute(
+        f"""
+        UPDATE autofix_runs
+        SET status = 'failed',
+            error_summary = COALESCE(error_summary, ?),
+            last_error_code = COALESCE(last_error_code, ?),
+            last_error_at = CURRENT_TIMESTAMP,
+            finished_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE status IN ('running', 'cancel_requested')
+          AND updated_at IS NOT NULL
+          AND datetime(updated_at) <= datetime('now', ?)
+          {worker_filter}
+        """,
+        tuple(params),
+    )
+    conn.commit()
+    return int(cursor.rowcount or 0)
+
+
 def _promote_due_retries(conn: sqlite3.Connection) -> None:
     """
     将到期的重试任务从 'retry_scheduled' 状态提升为 'queued' 状态。
