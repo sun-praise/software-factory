@@ -21,6 +21,18 @@
       <section>
         <h2>Metadata</h2>
         <dl class="meta">
+          <dt>Repository</dt>
+          <dd>{{ run.repo | default("-") }}</dd>
+          <dt>Pull Request</dt>
+          <dd>
+            {% if run.pr_url %}
+              <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">
+                #{{ run.pr_number }}
+              </a>
+            {% else %}
+              {{ run.pr_number | default("-") }}
+            {% endif %}
+          </dd>
           <dt>Status</dt>
           <dd>{{ run.status | default("pending") }}</dd>
           <dt>Created At</dt>
