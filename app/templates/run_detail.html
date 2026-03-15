@@ -7,49 +7,132 @@
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
-    <main class="container">
-      <p>
+    <main class="container run-detail-page" data-run-id="{{ run.id }}">
+      <p class="breadcrumbs">
         <a href="/">Back to runs</a> ·
         <a href="/settings">Settings</a>
       </p>
 
-      <header>
-        <h1>Run {{ run.id | default("N/A") }}</h1>
-        <p class="muted">Minimal run detail placeholder page.</p>
+      <header class="page-header">
+        <div>
+          <h1>Run {{ run.id | default("N/A") }}</h1>
+          <p class="muted page-subtitle">Live execution status and runner log stream.</p>
+        </div>
+        <div class="status-row">
+          <span class="status-label">Status</span>
+          <span id="run-status-pill" class="status-pill status-pill--{{ run.status | default("not_found") }}">
+            {{ run.status | default("not_found") }}
+          </span>
+        </div>
       </header>
 
-      <section>
+      <section class="panel">
         <h2>Metadata</h2>
         <dl class="meta">
           <dt>Repository</dt>
-          <dd>{{ run.repo | default("-") }}</dd>
+          <dd id="run-repo">{{ run.repo | default("-") }}</dd>
           <dt>Pull Request</dt>
-          <dd>
+          <dd id="run-pr">
             {% if run.pr_url %}
-              <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">
-                #{{ run.pr_number }}
-              </a>
+            <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">#{{ run.pr_number }}</a>
             {% else %}
-              {{ run.pr_number | default("-") }}
+            -
             {% endif %}
           </dd>
           <dt>Status</dt>
-          <dd>
-            <span class="status-pill {{ run.status_class }}">
-              {{ run.status | default("pending") }}
-            </span>
-          </dd>
+          <dd id="run-status-text">{{ run.status | default("pending") }}</dd>
           <dt>Created At</dt>
-          <dd>{{ run.created_at | default("-") }}</dd>
+          <dd id="run-created-at">{{ run.created_at | default("-") }}</dd>
           <dt>Updated At</dt>
-          <dd>{{ run.updated_at | default("-") }}</dd>
+          <dd id="run-updated-at">{{ run.updated_at | default("-") }}</dd>
         </dl>
       </section>
 
-      <section>
-        <h2>Log Preview</h2>
-        <pre class="log">{{ run.log_preview | default("No log data yet.") }}</pre>
+      <section class="panel">
+        <div class="log-toolbar">
+          <div>
+            <h2>Live Log</h2>
+            <p class="muted tiny">This view refreshes automatically while the run is queued or running.</p>
+          </div>
+          <div class="log-toolbar-meta">
+            <span id="polling-indicator" class="live-indicator">Live</span>
+          </div>
+        </div>
+        <pre id="run-log" class="log log-live">{{ run.log_preview | default("No log data yet.") }}</pre>
       </section>
     </main>
+    <script>
+      (() => {
+        const root = document.querySelector(".run-detail-page");
+        if (!root) {
+          return;
+        }
+
+        const runId = root.dataset.runId;
+        const statusPill = document.getElementById("run-status-pill");
+        const statusText = document.getElementById("run-status-text");
+        const repoText = document.getElementById("run-repo");
+        const prText = document.getElementById("run-pr");
+        const createdAt = document.getElementById("run-created-at");
+        const updatedAt = document.getElementById("run-updated-at");
+        const logNode = document.getElementById("run-log");
+        const pollingIndicator = document.getElementById("polling-indicator");
+        const activeStatuses = new Set(["queued", "running"]);
+        let pollHandle = null;
+
+        const setStatus = (status) => {
+          statusPill.textContent = status;
+          statusText.textContent = status;
+          statusPill.className = `status-pill status-pill--${status}`;
+        };
+
+        const setPrUrl = (url, prNumber) => {
+          if (!url) {
+            prText.textContent = "-";
+            return;
+          }
+          prText.innerHTML = "";
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.textContent = prNumber ? `#${prNumber}` : url;
+          prText.appendChild(link);
+        };
+
+        const updateView = (run) => {
+          repoText.textContent = run.repo || "-";
+          setPrUrl(run.pr_url || "", run.pr_number || "");
+          setStatus(run.status || "not_found");
+          createdAt.textContent = run.created_at || "-";
+          updatedAt.textContent = run.updated_at || "-";
+          logNode.textContent = run.log_preview || "No log data yet.";
+          logNode.scrollTop = logNode.scrollHeight;
+
+          const shouldKeepPolling = activeStatuses.has(run.status);
+          pollingIndicator.textContent = shouldKeepPolling ? "Live" : "Final";
+          if (!shouldKeepPolling && pollHandle) {
+            window.clearInterval(pollHandle);
+            pollHandle = null;
+          }
+        };
+
+        const fetchRun = async () => {
+          const response = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
+          if (!response.ok) {
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          updateView(await response.json());
+        };
+
+        fetchRun();
+        if (activeStatuses.has(statusText.textContent.trim())) {
+          pollHandle = window.setInterval(fetchRun, 2000);
+        } else {
+          pollingIndicator.textContent = "Final";
+        }
+      })();
+    </script>
   </body>
 </html>

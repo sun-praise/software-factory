@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import shlex
@@ -124,6 +124,31 @@ class RunnerOps:
     )
 
 
+@dataclass
+class RunLogger:
+    workspace_dir: str
+    run_id: int
+    lines: list[str]
+    logs_path: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.logs_path = _write_logs(self.workspace_dir, self.run_id, self.lines)
+
+    def append(self, line: str) -> None:
+        self.lines.append(line)
+        _append_logs(self.logs_path, [line])
+
+    def extend(self, new_lines: list[str]) -> None:
+        if not new_lines:
+            return
+        self.lines.extend(new_lines)
+        _append_logs(self.logs_path, new_lines)
+
+    def flush(self) -> str:
+        self.logs_path = _write_logs(self.workspace_dir, self.run_id, self.lines)
+        return self.logs_path
+
+
 def run_once(
     conn: sqlite3.Connection,
     run: dict[str, Any],
@@ -214,6 +239,7 @@ def run_once(
         prompt,
         "",
     ]
+    logger = RunLogger(workspace_dir=workspace, run_id=run_id, lines=log_lines)
     lock_acquired = acquire_pr_lock(
         conn=conn,
         repo=repo,
@@ -223,8 +249,8 @@ def run_once(
         run_id=run_id,
     )
     if not lock_acquired:
-        log_lines.append("pr_lock: already held")
-        logs_path = _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        logger.append("pr_lock: already held")
+        logs_path = logger.logs_path
         status, error_summary = _finish_failed_run(
             conn,
             run_id,
@@ -263,16 +289,12 @@ def run_once(
                 head_sha=head_sha,
                 worktree_base_dir=worktree_base_dir,
             )
-            log_lines.append(f"agent_workspace={agent_workspace}")
+            logger.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
             workspace_error = f"agent workspace init failed: {exc}"
-            log_lines.append(workspace_error)
+            logger.append(workspace_error)
             if CLAUDE_AGENT_MODE not in agent_modes:
-                logs_path = _write_logs(
-                    workspace_dir=workspace,
-                    run_id=run_id,
-                    lines=log_lines,
-                )
+                logs_path = logger.logs_path
                 status, scheduled_error = _finish_failed_run(
                     conn=conn,
                     run_id=run_id,
@@ -317,12 +339,13 @@ def run_once(
             claude_agent_command_timeout_seconds=(
                 feature_flags.claude_agent_command_timeout_seconds
             ),
+            on_log_line=logger.append,
         )
         if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
             check_workspace = agent_workspace
-        log_lines.append(f"agent_mode={used_agent_mode or 'unknown'}")
+        logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
         if sdk_error_message:
-            log_lines.append(f"agent_error: {sdk_error_message}")
+            logger.append(f"agent_error: {sdk_error_message}")
 
         if not sdk_ok:
             failure_summary = (
@@ -331,11 +354,7 @@ def run_once(
                 and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
                 else sdk_error_message
             )
-            logs_path = _write_logs(
-                workspace_dir=workspace,
-                run_id=run_id,
-                lines=log_lines,
-            )
+            logs_path = logger.logs_path
             status, run_error_summary = _finish_failed_run(
                 conn=conn,
                 run_id=run_id,
@@ -369,7 +388,7 @@ def run_once(
                         "stderr": result["stderr"],
                     }
                 )
-                log_lines.extend(
+                logger.extend(
                     [
                         f"[check] {command}",
                         f"exit_code={result['returncode']}",
@@ -388,7 +407,7 @@ def run_once(
                 run_error_summary = (
                     f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
                 )
-                log_lines.append(run_error_summary)
+                logger.append(run_error_summary)
             else:
                 status, commit_sha, run_error_summary = _finalize_git_changes(
                     repo_dir=check_workspace,
@@ -396,12 +415,9 @@ def run_once(
                     active_ops=active_ops,
                     log_lines=log_lines,
                 )
+                logger.flush()
 
-        logs_path = _write_logs(
-            workspace_dir=workspace,
-            run_id=run_id,
-            lines=log_lines,
-        )
+        logs_path = logger.flush()
         if status == "success":
             increment_autofix_count(
                 conn,
@@ -468,8 +484,7 @@ def run_once(
     )
     if not posted:
         comment_failure = f"pr_comment_failed: {comment_message}"
-        log_lines.append(comment_failure)
-        _write_logs(workspace_dir=workspace, run_id=run_id, lines=log_lines)
+        logger.append(comment_failure)
         run_error_summary = _merge_error_summary(run_error_summary, comment_failure)
         mark_run_finished(
             conn=conn,
@@ -550,6 +565,7 @@ def _execute_agent_sdks(
     openhands_command_timeout_seconds: int,
     claude_agent_command: str,
     claude_agent_command_timeout_seconds: int,
+    on_log_line: Callable[[str], None] | None = None,
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
@@ -563,6 +579,7 @@ def _execute_agent_sdks(
                 prompt=prompt,
                 command=openhands_command,
                 timeout_seconds=openhands_command_timeout_seconds,
+                on_log_line=on_log_line,
             )
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
@@ -580,6 +597,7 @@ def _execute_agent_sdks(
                 prompt=prompt,
                 command=claude_agent_command,
                 timeout_seconds=claude_agent_command_timeout_seconds,
+                on_log_line=on_log_line,
             )
             if claude_ok:
                 return True, None, None, CLAUDE_AGENT_MODE
@@ -600,6 +618,7 @@ def _run_openhands_agent(
     *,
     command: str,
     timeout_seconds: int,
+    on_log_line: Callable[[str], None] | None = None,
 ) -> tuple[bool, str, str | None]:
     return _run_agent_command(
         workspace=workspace,
@@ -611,6 +630,7 @@ def _run_openhands_agent(
         timeout_seconds=timeout_seconds,
         agent_name="OpenHands",
         failure_code=OPENHANDS_FAILURE_CODE_COMMAND,
+        on_log_line=on_log_line,
     )
 
 
@@ -623,6 +643,7 @@ def _run_claude_agent(
     *,
     command: str,
     timeout_seconds: int,
+    on_log_line: Callable[[str], None] | None = None,
 ) -> tuple[bool, str, str | None]:
     return _run_agent_command(
         workspace=workspace,
@@ -634,6 +655,7 @@ def _run_claude_agent(
         timeout_seconds=timeout_seconds,
         agent_name="Claude Agent SDK",
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
+        on_log_line=on_log_line,
     )
 
 
@@ -648,6 +670,7 @@ def _run_agent_command(
     timeout_seconds: int,
     agent_name: str,
     failure_code: str,
+    on_log_line: Callable[[str], None] | None = None,
 ) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
@@ -690,15 +713,39 @@ def _run_agent_command(
         )
 
     _register_active_agent_process(process.pid)
-    stdout: str | None = None
-    stderr: str | None = None
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    if on_log_line is not None:
+        on_log_line(f"[agent] starting {agent_name}: {normalized_command}")
+    stdout_thread = threading.Thread(
+        target=_consume_process_stream,
+        args=(process.stdout, "stdout", stdout_chunks, on_log_line),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_consume_process_stream,
+        args=(process.stderr, "stderr", stderr_chunks, on_log_line),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
     try:
-        stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+        if process.stdin is not None:
+            process.stdin.write(prompt)
+            process.stdin.close()
+        process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         _terminate_agent_process_tree(process)
         return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+    except OSError as exc:
+        return False, f"{agent_name} command failed while running: {exc}", failure_code
     finally:
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
         _unregister_active_agent_process(process.pid)
+
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
 
     if process.returncode != 0:
         std_err = (stderr or "").strip()
@@ -707,6 +754,24 @@ def _run_agent_command(
         return False, message, failure_code
 
     return True, (stdout or "").strip() or f"{agent_name} completed", None
+
+
+def _consume_process_stream(
+    stream: Any,
+    stream_name: str,
+    chunks: list[str],
+    on_log_line: Callable[[str], None] | None,
+) -> None:
+    if stream is None:
+        return
+    try:
+        for raw_line in iter(stream.readline, ""):
+            chunks.append(raw_line)
+            rendered = raw_line.rstrip("\n")
+            if on_log_line is not None and rendered:
+                on_log_line(f"[agent][{stream_name}] {rendered}")
+    finally:
+        stream.close()
 
 
 def _register_active_agent_process(pid: int | None) -> None:
@@ -873,6 +938,16 @@ def _write_logs(workspace_dir: str, run_id: int, lines: list[str]) -> str:
     )
     logs_file.write_text("\n".join(lines), encoding="utf-8")
     return str(logs_file)
+
+
+def _append_logs(logs_path: str, lines: list[str]) -> None:
+    if not lines:
+        return
+    path = Path(logs_path)
+    prefix = "\n" if path.exists() and path.stat().st_size > 0 else ""
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(prefix)
+        handle.write("\n".join(lines))
 
 
 def _finish_failed_run(
