@@ -32,19 +32,59 @@ from app.services.queue import enqueue_autofix_run, request_run_cancel
 router = APIRouter(tags=["web"])
 
 
-def _fetch_runs(limit: int = 20) -> list[dict[str, str]]:
+def _normalize_page(raw_value: str | None, *, default: int = 1) -> int:
+    try:
+        value = int((raw_value or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _fetch_runs(
+    *,
+    page: int = 1,
+    page_size: int = 10,
+    query: str = "",
+) -> dict[str, Any]:
+    normalized_query = query.strip()
+    sql_where = ""
+    sql_params: list[Any] = []
+    if normalized_query:
+        like_value = f"%{normalized_query.lower()}%"
+        sql_where = """
+            WHERE
+                lower(repo) LIKE ?
+                OR lower(status) LIKE ?
+                OR CAST(id AS TEXT) LIKE ?
+                OR CAST(pr_number AS TEXT) LIKE ?
+        """
+        sql_params.extend([like_value, like_value, like_value, like_value])
+
+    offset = (page - 1) * page_size
     with connect_db() as conn:
+        count_row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS total_count
+            FROM autofix_runs
+            {sql_where}
+            """,
+            tuple(sql_params),
+        ).fetchone()
         rows = conn.execute(
-            """
+            f"""
             SELECT id, repo, pr_number, status, created_at, updated_at
             FROM autofix_runs
+            {sql_where}
             ORDER BY id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (limit,),
+            tuple([*sql_params, page_size, offset]),
         ).fetchall()
 
-    return [
+    total_count = int(count_row["total_count"]) if count_row is not None else 0
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    normalized_page = min(page, total_pages)
+    runs = [
         {
             "id": str(row["id"]),
             "repo": str(row["repo"]),
@@ -57,6 +97,18 @@ def _fetch_runs(limit: int = 20) -> list[dict[str, str]]:
         }
         for row in rows
     ]
+    return {
+        "items": runs,
+        "page": normalized_page,
+        "page_size": page_size,
+        "total_count": total_count,
+        "total_pages": total_pages,
+        "query": normalized_query,
+        "has_prev": normalized_page > 1,
+        "has_next": normalized_page < total_pages,
+        "prev_page": normalized_page - 1,
+        "next_page": normalized_page + 1,
+    }
 
 
 def _status_class(status: str) -> str:
@@ -359,13 +411,17 @@ def _enqueue_issue_fix(
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
+    query = str(request.query_params.get("q", "")).strip()
+    page = _normalize_page(request.query_params.get("page"))
+    run_page = _fetch_runs(page=page, page_size=10, query=query)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "request": request,
             "title": "Software Factory",
-            "runs": _fetch_runs(),
+            "runs": run_page["items"],
+            "run_page": run_page,
         },
     )
 

@@ -398,6 +398,40 @@ button:disabled {
   gap: 0.85rem;
 }
 
+.run-search-form {
+  margin: 0.85rem 0 0.4rem;
+}
+
+.run-search-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.run-search-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.run-search-controls input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.65rem;
+  font-family: inherit;
+}
+
+.secondary-link {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.run-results-summary {
+  margin: 0 0 0.9rem;
+}
+
 .run-card {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -450,4 +484,48 @@ button:disabled {
 .status-pill.retry {
   color: #5f3a8d;
   background: #ece2ff;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.pagination-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5.5rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  font-weight: 600;
+}
+
+.pagination-link.disabled {
+  color: var(--muted);
+  background: #f3f4f6;
+  cursor: default;
+  text-decoration: none;
+}
+
+.pagination-current {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+@media (max-width: 680px) {
+  .run-search-controls,
+  .pagination {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pagination-current {
+    text-align: center;
+  }
 }
