@@ -221,12 +221,16 @@ def run_once(
         f"fix: apply autofix updates for PR #{pr_number}"
     )
     feature_flags = resolve_agent_feature_flags(conn)
+    pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+    head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
+    branch = branch or _safe_text(pr_metadata.get("head_ref"))
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
         pr_number=pr_number,
         head_sha=head_sha or "unknown",
         normalized_review=payload,
+        pr_metadata=pr_metadata,
     )
     commands = active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
@@ -1930,6 +1934,7 @@ def _create_run_workspace_clone(
             repo_dir=str(runtime_path),
             args=[
                 "clone",
+                "--dissociate",
                 "--reference-if-able",
                 str(cache_repo_dir),
                 remote_url,
@@ -2027,6 +2032,13 @@ def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
 
 
 def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, str | None]:
+    metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+    return _safe_text(metadata.get("head_ref")) or None, _safe_text(metadata.get("head_sha")) or None
+
+
+def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
+    if pr_number <= 0:
+        return {}
     result = subprocess.run(
         [
             "gh",
@@ -2036,9 +2048,7 @@ def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, 
             "--repo",
             repo,
             "--json",
-            "headRefName,headRefOid",
-            "--jq",
-            '.headRefName + "\\n" + .headRefOid',
+            "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions",
         ],
         check=False,
         capture_output=True,
@@ -2047,19 +2057,41 @@ def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, 
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        logger.warning("failed to fetch PR head via gh: repo=%s pr=%s error=%s", repo, pr_number, details)
-        return None, None
-
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if len(lines) != 2:
         logger.warning(
-            "invalid PR head payload from gh: repo=%s pr=%s payload=%r",
+            "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
             repo,
             pr_number,
-            result.stdout,
+            details,
         )
-        return None, None
-    return lines[0] or None, lines[1] or None
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "invalid PR metadata payload from gh: repo=%s pr=%s error=%s",
+            repo,
+            pr_number,
+            exc,
+        )
+        return {}
+    if not isinstance(payload, Mapping):
+        logger.warning(
+            "unexpected PR metadata payload type from gh: repo=%s pr=%s payload=%r",
+            repo,
+            pr_number,
+            payload,
+        )
+        return {}
+    return {
+        "title": _safe_text(payload.get("title")),
+        "body": _safe_text(payload.get("body")),
+        "base_ref": _safe_text(payload.get("baseRefName")),
+        "head_ref": _safe_text(payload.get("headRefName")),
+        "head_sha": _safe_text(payload.get("headRefOid")),
+        "changed_files": payload.get("changedFiles"),
+        "additions": payload.get("additions"),
+        "deletions": payload.get("deletions"),
+    }
 
 
 def _run_git_command(
