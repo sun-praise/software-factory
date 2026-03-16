@@ -153,6 +153,7 @@ class RunnerOps:
 class WorkspaceBootstrapPlan:
     kind: str
     manifest_paths: tuple[Path, ...]
+    signature_inputs: tuple[str, ...]
     commands: tuple[tuple[str, ...], ...]
     ready_paths: tuple[Path, ...]
 
@@ -717,7 +718,7 @@ def _run_validation_cycle(
     logger: RunLogger,
     log_prefix: str = "check",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    bootstrap_result = _bootstrap_workspace_runtime(workspace_dir)
+    bootstrap_result = _bootstrap_workspace_runtime(workspace_dir, commands=commands)
     if bootstrap_result.kind:
         logger.append(f"{log_prefix}_workspace_bootstrap={bootstrap_result.kind}")
     if bootstrap_result.skipped and bootstrap_result.kind:
@@ -2378,14 +2379,18 @@ def _default_executor(
     )
 
 
-def _bootstrap_workspace_runtime(workspace_dir: str) -> WorkspaceBootstrapResult:
+def _bootstrap_workspace_runtime(
+    workspace_dir: str,
+    *,
+    commands: list[str],
+) -> WorkspaceBootstrapResult:
     workspace = Path(workspace_dir)
-    plan = _build_workspace_bootstrap_plan(workspace)
+    plan = _build_workspace_bootstrap_plan(workspace, commands=commands)
     if plan is None:
         return WorkspaceBootstrapResult(ok=True, skipped=True)
 
     state_file = workspace / BOOTSTRAP_STATE_FILENAME
-    signature = _compute_bootstrap_signature(plan.manifest_paths)
+    signature = _compute_bootstrap_signature(plan.manifest_paths, plan.signature_inputs)
     if _bootstrap_state_matches(state_file, kind=plan.kind, signature=signature) and (
         _workspace_bootstrap_ready(plan)
     ):
@@ -2463,6 +2468,8 @@ def _bootstrap_workspace_runtime(workspace_dir: str) -> WorkspaceBootstrapResult
 
 def _build_workspace_bootstrap_plan(
     workspace: Path,
+    *,
+    commands: list[str],
 ) -> WorkspaceBootstrapPlan | None:
     package_json = workspace / "package.json"
     if package_json.is_file():
@@ -2481,29 +2488,39 @@ def _build_workspace_bootstrap_plan(
         if path.is_file()
     ]
     if python_manifests:
-        return _build_python_bootstrap_plan(workspace, tuple(python_manifests))
+        return _build_python_bootstrap_plan(
+            workspace,
+            tuple(python_manifests),
+            commands=commands,
+        )
     return None
 
 
 def _build_python_bootstrap_plan(
     workspace: Path,
     manifests: tuple[Path, ...],
+    *,
+    commands: list[str],
 ) -> WorkspaceBootstrapPlan:
     venv_dir = workspace / ".venv"
     venv_python = venv_dir / "bin" / "python"
     bootstrap_python = sys.executable or shutil.which("python3") or "python3"
-    commands: list[tuple[str, ...]] = []
+    bootstrap_commands: list[tuple[str, ...]] = []
     if not (venv_python.exists() and os.access(venv_python, os.X_OK)):
-        commands.append((bootstrap_python, "-m", "venv", str(venv_dir)))
+        bootstrap_commands.append((bootstrap_python, "-m", "venv", str(venv_dir)))
 
     requirements_files = [
         path
         for path in manifests
         if path.name in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt"}
     ]
+    has_explicit_dev_requirements = any(
+        path.name in {"requirements-dev.txt", "requirements-test.txt"}
+        for path in requirements_files
+    )
     if requirements_files:
         for requirements_file in requirements_files:
-            commands.append(
+            bootstrap_commands.append(
                 (
                     str(venv_python),
                     "-m",
@@ -2514,12 +2531,21 @@ def _build_python_bootstrap_plan(
                 )
             )
     else:
-        commands.append((str(venv_python), "-m", "pip", "install", "-e", "."))
+        bootstrap_commands.append((str(venv_python), "-m", "pip", "install", "-e", "."))
+
+    extra_modules: tuple[str, ...] = ()
+    if not has_explicit_dev_requirements:
+        extra_modules = _collect_python_check_modules(commands)
+        if extra_modules:
+            bootstrap_commands.append(
+                (str(venv_python), "-m", "pip", "install", *extra_modules)
+            )
 
     return WorkspaceBootstrapPlan(
         kind="python",
         manifest_paths=manifests,
-        commands=tuple(commands),
+        signature_inputs=extra_modules,
+        commands=tuple(bootstrap_commands),
         ready_paths=(venv_python,),
     )
 
@@ -2542,6 +2568,7 @@ def _build_node_bootstrap_plan(workspace: Path) -> WorkspaceBootstrapPlan:
     return WorkspaceBootstrapPlan(
         kind="node",
         manifest_paths=tuple(manifest_paths),
+        signature_inputs=(),
         commands=commands,
         ready_paths=(workspace / "node_modules",),
     )
@@ -2556,14 +2583,37 @@ def _workspace_bootstrap_ready(plan: WorkspaceBootstrapPlan) -> bool:
     return False
 
 
-def _compute_bootstrap_signature(manifest_paths: tuple[Path, ...]) -> str:
+def _compute_bootstrap_signature(
+    manifest_paths: tuple[Path, ...],
+    signature_inputs: tuple[str, ...],
+) -> str:
     hasher = hashlib.sha256()
     for path in sorted(manifest_paths, key=lambda item: str(item)):
         hasher.update(str(path.name).encode("utf-8"))
         hasher.update(b"\0")
         hasher.update(path.read_bytes())
         hasher.update(b"\0")
+    for value in signature_inputs:
+        hasher.update(value.encode("utf-8"))
+        hasher.update(b"\0")
     return hasher.hexdigest()
+
+
+def _collect_python_check_modules(check_commands: list[str]) -> tuple[str, ...]:
+    modules: list[str] = []
+    for command in check_commands:
+        argv = shlex.split(command)
+        if len(argv) < 3:
+            continue
+        if argv[0] not in {"python", "python3"} or argv[1] != "-m":
+            continue
+        module_name = argv[2].strip()
+        if not module_name:
+            continue
+        root_module = module_name.split(".", 1)[0]
+        if root_module in {"pytest", "ruff", "mypy"} and root_module not in modules:
+            modules.append(root_module)
+    return tuple(modules)
 
 
 def _bootstrap_state_matches(state_file: Path, *, kind: str, signature: str) -> bool:
