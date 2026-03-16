@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     claude_agent_sdk_command_timeout_seconds: int = 1800
     openhands_worktree_base_dir: str = ".software-factory-worktrees"
     claude_agent_sdk_worktree_base_dir: str = ".software-factory-worktrees"
+    repo_cache_base_dir: str = ".software-factory-repo-cache"
+    run_workspace_base_dir: str = ".software-factory-run-workspaces"
 
     @field_validator(
         "bot_logins",

@@ -18,6 +18,8 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+import httpx
+
 from app.config import get_settings
 from app.services.agent_prompt import (
     build_autofix_prompt,
@@ -48,6 +50,8 @@ Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
 BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 600
 GIT_COMMAND_TIMEOUT_SECONDS = 30
+GITHUB_API_TIMEOUT_SECONDS = 10.0
+CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
 OPENHANDS_AGENT_MODE = "openhands"
@@ -57,6 +61,7 @@ OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
 RUN_CANCELLED_CODE = "cancelled"
 BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
+PR_FETCH_TIMEOUT_SECONDS = 30
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -204,7 +209,7 @@ def run_once(
 ) -> dict[str, Any]:
     settings = get_settings()
     active_ops = ops or RunnerOps()
-    workspace = _validate_workspace_dir(workspace_dir)
+    runtime_root = _validate_runtime_root(workspace_dir)
     run_id = int(run["id"])
     repo = str(run.get("repo") or "")
     pr_number = int(run.get("pr_number") or 0)
@@ -227,14 +232,14 @@ def run_once(
     )
     commands = active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
-        base_dir=workspace,
+        base_dir=runtime_root,
         archive_subdir=settings.log_archive_subdir,
         older_than_days=settings.log_retention_days,
     )
     if not commands:
         error_summary = f"unsupported_project_type: {project_type or 'unknown'}"
         logs_path = _write_logs(
-            workspace_dir=workspace,
+            workspace_dir=runtime_root,
             run_id=run_id,
             lines=[
                 f"run_id={run_id}",
@@ -286,7 +291,7 @@ def run_once(
         "",
     ]
     logger = RunLogger(
-        workspace_dir=workspace,
+        workspace_dir=runtime_root,
         run_id=run_id,
         lines=log_lines,
         on_progress=_build_run_progress_callback(conn, run_id),
@@ -343,22 +348,17 @@ def run_once(
             "comment_posted": False,
         }
 
-    agent_workspace = workspace
+    agent_workspace = runtime_root
     agent_worktree: str | None = None
     if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
-        primary_agent_mode = agent_modes[0]
-        worktree_base_dir = (
-            feature_flags.openhands_worktree_base_dir
-            if primary_agent_mode == OPENHANDS_AGENT_MODE
-            else feature_flags.claude_agent_worktree_base_dir
-        )
         try:
-            agent_workspace, agent_worktree = _prepare_openhands_workspace(
-                base_repo_dir=workspace,
+            agent_workspace, agent_worktree, branch, head_sha = _prepare_run_workspace(
+                runtime_root=runtime_root,
+                repo=repo,
+                pr_number=pr_number,
                 run_id=run_id,
                 branch=branch,
                 head_sha=head_sha,
-                worktree_base_dir=worktree_base_dir,
             )
             logger.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
@@ -393,7 +393,7 @@ def run_once(
         run_error_summary = None
         run_error_code: str | None = None
         commit_sha: str | None = None
-        check_workspace = workspace
+        check_workspace = runtime_root
         baseline_check_workspace = agent_workspace
         try:
             baseline_check_results, baseline_checks_summary = _run_validation_cycle(
@@ -611,7 +611,7 @@ def run_once(
     finally:
         if agent_worktree is not None:
             _cleanup_openhands_workspace(
-                base_repo_dir=workspace,
+                runtime_root=runtime_root,
                 worktree_dir=agent_worktree,
             )
         release_pr_lock(
@@ -643,7 +643,7 @@ def run_once(
         logs_path=logs_path,
     )
     posted, comment_message = active_ops.post_pr_comment(
-        workspace,
+        runtime_root,
         repo,
         pr_number,
         comment_body,
@@ -1831,70 +1831,298 @@ def _command_exists(command_name: str) -> bool:
     return shutil.which(command_name) is not None
 
 
-def _prepare_openhands_workspace(
+def _prepare_run_workspace(
     *,
-    base_repo_dir: str,
+    runtime_root: str,
+    repo: str,
+    pr_number: int,
     run_id: int,
     branch: str | None,
     head_sha: str | None,
-    worktree_base_dir: str,
-) -> tuple[str, str]:
-    base_repo = Path(base_repo_dir)
-    if not (base_repo / ".git").exists():
-        raise ValueError("agent workspace requires a git repository")
+) -> tuple[str, str, str | None, str | None]:
+    settings = get_settings()
+    runtime_path = Path(runtime_root).resolve()
+    cache_root = runtime_path / settings.repo_cache_base_dir
+    run_workspace_root = runtime_path / settings.run_workspace_base_dir
+    cache_root.mkdir(parents=True, exist_ok=True)
+    run_workspace_root.mkdir(parents=True, exist_ok=True)
 
-    git_ref = branch or head_sha or "HEAD"
-    worktree_root = Path(worktree_base_dir)
-    if not worktree_root.is_absolute():
-        worktree_root = base_repo / worktree_root
+    remote_url = f"https://github.com/{repo}.git"
+    cache_repo_dir = cache_root / f"{repo.replace('/', '__')}.git"
+    _ensure_repo_cache(cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url)
 
-    worktree_root.mkdir(parents=True, exist_ok=True)
-    worktree_dir = tempfile.mkdtemp(
-        prefix=f"{WORKTREE_CMD_PREFIX}-{run_id}-", dir=str(worktree_root)
+    run_workspace_dir = _create_run_workspace_clone(
+        runtime_path=runtime_path,
+        run_workspace_root=run_workspace_root,
+        cache_repo_dir=cache_repo_dir,
+        remote_url=remote_url,
+        run_id=run_id,
     )
+
+    resolved_branch = branch
+    resolved_head_sha = head_sha
+    if pr_number > 0:
+        pr_branch, pr_head_sha = _fetch_pull_request_head(repo=repo, pr_number=pr_number)
+        resolved_branch = resolved_branch or pr_branch
+        resolved_head_sha = resolved_head_sha or pr_head_sha
+        if not resolved_branch:
+            shutil.rmtree(run_workspace_dir, ignore_errors=True)
+            raise ValueError("unable to resolve PR head branch")
+    _checkout_run_workspace_target(
+        run_workspace_dir=run_workspace_dir,
+        resolved_branch=resolved_branch,
+        resolved_head_sha=resolved_head_sha,
+    )
+
+    return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
+
+
+def _ensure_repo_cache(*, cache_root: Path, cache_repo_dir: Path, remote_url: str) -> None:
+    lock_dir = cache_root / f"{cache_repo_dir.name}.lock"
+    deadline = time.monotonic() + CACHE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise ValueError(f"timed out acquiring repo cache lock: {lock_dir}")
+            time.sleep(0.2)
+
     try:
-        result = _run_git_command(
-            repo_dir=base_repo_dir,
-            args=["worktree", "add", "--detach", worktree_dir, git_ref],
+        if not cache_repo_dir.exists():
+            result = _run_git_command(
+                repo_dir=str(cache_root),
+                args=["clone", "--mirror", remote_url, str(cache_repo_dir)],
+                timeout=PR_FETCH_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0:
+                _raise_workspace_git_error("git clone --mirror", result)
+            return
+
+        _run_git_command(
+            repo_dir=str(cache_repo_dir),
+            args=["remote", "set-url", "origin", remote_url],
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
+        result = _run_git_command(
+            repo_dir=str(cache_repo_dir),
+            args=["fetch", "--prune", "origin"],
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            _raise_workspace_git_error("git fetch cache", result)
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
+
+
+def _create_run_workspace_clone(
+    *,
+    runtime_path: Path,
+    run_workspace_root: Path,
+    cache_repo_dir: Path,
+    remote_url: str,
+    run_id: int,
+) -> str:
+    run_workspace_dir = tempfile.mkdtemp(
+        prefix=f"{WORKTREE_CMD_PREFIX}-{run_id}-", dir=str(run_workspace_root)
+    )
+    try:
+        clone_result = _run_git_command(
+            repo_dir=str(runtime_path),
+            args=[
+                "clone",
+                "--reference-if-able",
+                str(cache_repo_dir),
+                remote_url,
+                run_workspace_dir,
+            ],
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
-        shutil.rmtree(worktree_dir)
-        raise ValueError(f"failed to create worktree: {exc}") from exc
+        shutil.rmtree(run_workspace_dir, ignore_errors=True)
+        raise ValueError(f"failed to create run workspace: {exc}") from exc
 
-    if result.returncode != 0:
-        shutil.rmtree(worktree_dir)
-        details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
-        raise ValueError(f"git worktree add failed: {details}")
-
-    return worktree_dir, worktree_dir
+    if clone_result.returncode != 0:
+        _raise_workspace_git_error("git clone", clone_result, cleanup_dir=run_workspace_dir)
+    return run_workspace_dir
 
 
-def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
-    base_repo = Path(base_repo_dir).resolve()
+def _checkout_run_workspace_target(
+    *,
+    run_workspace_dir: str,
+    resolved_branch: str | None,
+    resolved_head_sha: str | None,
+) -> None:
+    if resolved_branch:
+        fetch_result = _run_git_command(
+            repo_dir=run_workspace_dir,
+            args=["fetch", "origin", resolved_branch],
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
+        if fetch_result.returncode != 0:
+            _raise_workspace_git_error("git fetch branch", fetch_result, cleanup_dir=run_workspace_dir)
+        checkout_result = _run_git_command(
+            repo_dir=run_workspace_dir,
+            args=["checkout", "-B", resolved_branch, f"origin/{resolved_branch}"],
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+        if checkout_result.returncode != 0 and resolved_head_sha:
+            checkout_result = _run_git_command(
+                repo_dir=run_workspace_dir,
+                args=["checkout", "-B", resolved_branch, resolved_head_sha],
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+            )
+        if checkout_result.returncode != 0:
+            _raise_workspace_git_error("git checkout branch", checkout_result, cleanup_dir=run_workspace_dir)
+        return
+
+    if resolved_head_sha:
+        checkout_result = _run_git_command(
+            repo_dir=run_workspace_dir,
+            args=["checkout", "--detach", resolved_head_sha],
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+        if checkout_result.returncode != 0:
+            _raise_workspace_git_error("git checkout head", checkout_result, cleanup_dir=run_workspace_dir)
+
+
+def _raise_workspace_git_error(
+    action: str,
+    result: subprocess.CompletedProcess[str],
+    *,
+    cleanup_dir: str | None = None,
+) -> None:
+    if cleanup_dir is not None:
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+    details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+    raise ValueError(f"{action} failed: {details}")
+
+
+def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
+    settings = get_settings()
+    runtime_path = Path(runtime_root).resolve()
+    worktree_root = (runtime_path / settings.run_workspace_base_dir).resolve()
     worktree_path = Path(worktree_dir).resolve()
-    if worktree_path == base_repo:
+    if worktree_path == runtime_path:
         logger.warning(
-            "refusing to clean workspace root directly: base_repo_dir=%s worktree_dir=%s",
-            base_repo_dir,
+            "refusing to clean runtime root directly: runtime_root=%s worktree_dir=%s",
+            runtime_root,
+            worktree_dir,
+        )
+        return
+    if worktree_root not in worktree_path.parents:
+        logger.warning(
+            "refusing to clean workspace outside run workspace root: runtime_root=%s worktree_dir=%s",
+            runtime_root,
             worktree_dir,
         )
         return
     if not worktree_path.name.startswith(f"{WORKTREE_CMD_PREFIX}-"):
         logger.warning(
-            "refusing to clean workspace with unexpected name: base_repo_dir=%s worktree_dir=%s",
-            base_repo_dir,
+            "refusing to clean workspace with unexpected name: runtime_root=%s worktree_dir=%s",
+            runtime_root,
             worktree_dir,
         )
         return
-    try:
-        _run_git_command(
-            repo_dir=base_repo_dir,
-            args=["worktree", "remove", "--force", worktree_dir],
-            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    shutil.rmtree(worktree_dir, ignore_errors=True)
+
+
+def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, str | None]:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+    auth_headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "software-factory",
+        **({"Authorization": f"token {token}"} if token else {}),
+    }
+    anonymous_headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "software-factory",
+    }
+
+    auth_payload, auth_status, auth_error = _request_pull_request_payload(url=url, headers=auth_headers)
+    if auth_payload is not None:
+        return _parse_pull_request_head(auth_payload, repo=repo, pr_number=pr_number)
+
+    if auth_error is not None:
+        logger.warning(
+            "failed to fetch PR head with %s request: repo=%s pr=%s error=%s",
+            "authenticated" if token else "anonymous",
+            repo,
+            pr_number,
+            auth_error,
         )
-    finally:
-        shutil.rmtree(worktree_dir, ignore_errors=True)
+    elif auth_status is not None:
+        logger.warning(
+            "failed to fetch PR head with %s request: repo=%s pr=%s status=%s",
+            "authenticated" if token else "anonymous",
+            repo,
+            pr_number,
+            auth_status,
+        )
+
+    if token and auth_status in {401, 403}:
+        payload, status_code, error_message = _request_pull_request_payload(
+            url=url,
+            headers=anonymous_headers,
+        )
+        if payload is not None:
+            logger.warning(
+                "authenticated PR head request failed; anonymous fallback succeeded: repo=%s pr=%s status=%s",
+                repo,
+                pr_number,
+                auth_status,
+            )
+            return _parse_pull_request_head(payload, repo=repo, pr_number=pr_number)
+        if error_message is not None:
+            logger.warning(
+                "anonymous PR head fallback failed: repo=%s pr=%s error=%s",
+                repo,
+                pr_number,
+                error_message,
+            )
+        elif status_code is not None:
+            logger.warning(
+                "anonymous PR head fallback failed: repo=%s pr=%s status=%s",
+                repo,
+                pr_number,
+                status_code,
+            )
+    return None, None
+
+
+def _request_pull_request_payload(
+    *,
+    url: str,
+    headers: dict[str, str],
+) -> tuple[dict[str, Any] | None, int | None, str | None]:
+    try:
+        response = httpx.get(url, headers=headers, timeout=GITHUB_API_TIMEOUT_SECONDS)
+    except httpx.RequestError as exc:
+        return None, None, str(exc)
+    if response.status_code >= 400:
+        return None, response.status_code, None
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        return None, response.status_code, f"invalid_json: {exc}"
+    if not isinstance(payload, dict):
+        return None, response.status_code, "invalid_payload_type"
+    return payload, response.status_code, None
+
+
+def _parse_pull_request_head(
+    payload: dict[str, Any],
+    *,
+    repo: str,
+    pr_number: int,
+) -> tuple[str | None, str | None]:
+    head = payload.get("head")
+    if not isinstance(head, dict):
+        logger.warning("missing PR head payload: repo=%s pr=%s", repo, pr_number)
+        return None, None
+    return _safe_text(head.get("ref")) or None, _safe_text(head.get("sha")) or None
 
 
 def _run_git_command(
@@ -2385,7 +2613,7 @@ def _safe_text(value: Any) -> str | None:
     return None
 
 
-def _validate_workspace_dir(workspace_dir: str) -> str:
+def _validate_runtime_root(workspace_dir: str) -> str:
     resolved = Path(workspace_dir).expanduser().resolve()
     if not resolved.exists() or not resolved.is_dir():
         raise ValueError(f"Invalid workspace_dir: {workspace_dir}")
