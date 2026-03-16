@@ -130,6 +130,8 @@ def test_run_once_failure_marks_failed_and_records_error(
 
     def executor(command: str, workspace_dir: str) -> dict[str, object]:
         executor_calls["count"] += 1
+        # First execution is the baseline validation pass. Every later call is a
+        # post-agent validation attempt, which should keep failing in this test.
         if executor_calls["count"] >= 2:
             return {"returncode": 2, "stdout": "", "stderr": "lint failed"}
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
@@ -190,6 +192,8 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
 
     def executor(command: str, workspace_dir: str) -> dict[str, object]:
         executor_calls["count"] += 1
+        # First execution is the baseline validation pass. The second call is the
+        # first post-agent validation attempt, which should fail in this test.
         if executor_calls["count"] == 2:
             return {"returncode": 1, "stdout": "", "stderr": "lint failed"}
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
@@ -344,7 +348,7 @@ def test_run_once_fails_when_new_check_failures_are_introduced(
     assert "introduced" in prompts[1]
 
 
-def test_run_once_returns_bootstrap_failures_to_agent_and_retries(
+def test_run_once_returns_bootstrap_failures_to_agent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -405,6 +409,11 @@ def test_run_once_returns_bootstrap_failures_to_agent_and_retries(
 
     assert result["status"] == "success"
     assert len(prompts) == 1
+    assert (
+        "[failed-check] [bootstrap] .venv/bin/python -m pip install -r requirements.txt"
+        in prompts[0]
+    )
+    assert "No module named pip" in prompts[0]
 
 
 def test_run_once_records_comment_failure_in_db(
