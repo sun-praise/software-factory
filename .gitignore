@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 data/*.db
 .worktrees/
+.software_factory_bootstrap_state.json
