@@ -117,11 +117,6 @@ def main() -> int:
     parser.add_argument("--workspace-dir", default=str(ROOT))
     args = parser.parse_args()
 
-    workspace_error = _validate_workspace_dir(args.workspace_dir)
-    if workspace_error is not None:
-        print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
-        return 2
-
     init_db()
     recovered_count = _recover_stale_runs()
     if recovered_count:
@@ -133,7 +128,10 @@ def main() -> int:
     if args.once:
         workspace_error = _validate_workspace_dir(args.workspace_dir)
         if workspace_error is not None:
-            print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
+            print(
+                f"invalid workspace_dir={args.workspace_dir}: {workspace_error}",
+                file=sys.stderr,
+            )
             return 2
         _process_one(workspace_dir=args.workspace_dir)
         return 0
@@ -141,7 +139,10 @@ def main() -> int:
     while not _STOP_WORKER:
         workspace_error = _validate_workspace_dir(args.workspace_dir)
         if workspace_error is not None:
-            print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
+            print(
+                f"invalid workspace_dir={args.workspace_dir}: {workspace_error}",
+                file=sys.stderr,
+            )
             return 2
         processed = _process_one(workspace_dir=args.workspace_dir)
         if not processed:

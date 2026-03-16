@@ -1880,9 +1880,9 @@ def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
             worktree_dir,
         )
         return
-    if base_repo not in worktree_path.parents:
+    if not worktree_path.name.startswith(f"{WORKTREE_CMD_PREFIX}-"):
         logger.warning(
-            "refusing to clean workspace outside base repo: base_repo_dir=%s worktree_dir=%s",
+            "refusing to clean workspace with unexpected name: base_repo_dir=%s worktree_dir=%s",
             base_repo_dir,
             worktree_dir,
         )
