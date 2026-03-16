@@ -2,6 +2,7 @@ import json
 import sqlite3
 from functools import lru_cache
 from typing import Any
+import re
 
 from fastapi import APIRouter, HTTPException, Request, status
 
@@ -36,6 +37,7 @@ _REVIEW_EVENTS_ALLOWING_BOT_ACTORS = {
     "pull_request_review",
     "pull_request_review_comment",
 }
+_AUTOFIX_SUMMARY_COMMENT_PATTERN = re.compile(r"^\s*autofix run #\d+\b", re.IGNORECASE)
 
 
 async def _read_payload(request: Request) -> dict[str, Any]:
@@ -87,10 +89,22 @@ async def github_webhook(request: Request) -> dict[str, Any]:
         }
 
     should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
+    event_body = extract_event_body(event_type, payload)
+    if _is_autofix_summary_comment(event_type=event_type, body=event_body):
+        return {
+            "ok": True,
+            "message": "GitHub webhook received",
+            "event_type": event_type,
+            "ignored": True,
+            "reason": "autofix_summary_comment",
+            "signature": signature_result.status,
+            "repo": event.repo,
+            "pr_number": event.pr_number,
+        }
     filter_reason = get_filter_reason(
         event.repo,
         actor=None if should_ignore_actor else event.actor,
-        body=extract_event_body(event_type, payload),
+        body=event_body,
     )
     if filter_reason is not None:
         return {
@@ -275,3 +289,11 @@ def _extract_project_type_from_payload(payload: dict[str, Any]) -> str | None:
         "rust": "rust",
     }
     return mapping.get(normalized)
+
+
+def _is_autofix_summary_comment(*, event_type: str, body: str | None) -> bool:
+    if event_type != "issue_comment":
+        return False
+    if not isinstance(body, str):
+        return False
+    return _AUTOFIX_SUMMARY_COMMENT_PATTERN.search(body) is not None

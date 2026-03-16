@@ -139,6 +139,31 @@ def test_bot_comment_is_filtered(tmp_path: Path) -> None:
     assert response.json()["reason"] == "noise_actor"
 
 
+def test_autofix_summary_issue_comment_is_ignored(tmp_path: Path) -> None:
+    _set_env(tmp_path, secret="")
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 9, "pull_request": {"url": "https://example/pr/9"}},
+        "comment": {
+            "id": 3005,
+            "body": "Autofix run #34\nStatus: success\nCommit: deadbeef",
+        },
+        "sender": {"login": "svtter"},
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={"X-GitHub-Event": "issue_comment"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ignored"] is True
+    assert response.json()["reason"] == "autofix_summary_comment"
+
+
 def test_bot_pull_request_review_is_queued(tmp_path: Path) -> None:
     _set_env(tmp_path, secret="")
 
