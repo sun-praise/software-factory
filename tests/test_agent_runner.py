@@ -97,6 +97,7 @@ def test_run_once_success_writes_logs_and_marks_success(
     logs_path = Path(result["logs_path"])
     assert logs_path.exists()
     logs_text = logs_path.read_text(encoding="utf-8")
+    assert "git_push: success ref=origin/feature/test commit=deadbeef" in logs_text
     assert "pytest -q" in logs_text
     assert "ruff check ." in logs_text
     assert "mypy ." in logs_text
@@ -134,6 +135,10 @@ def test_run_once_failure_marks_failed_and_records_error(
             "success": True,
             "commit_sha": "deadbeef",
             "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
     )
@@ -189,6 +194,10 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
             "success": True,
             "commit_sha": "deadbeef",
             "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
         collect_check_commands=lambda *_: ["python -m ruff check ."],
@@ -241,6 +250,10 @@ def test_run_once_allows_push_when_only_preexisting_failures_remain(
             "success": True,
             "commit_sha": "deadbeef",
             "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
         collect_check_commands=lambda *_: ["python -m mypy ."],
@@ -296,6 +309,10 @@ def test_run_once_fails_when_new_check_failures_are_introduced(
             "success": True,
             "commit_sha": "deadbeef",
             "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
         collect_check_commands=lambda *_: ["python -m mypy ."],
@@ -579,6 +596,10 @@ def test_run_once_schedules_retry_for_git_failure(
             "success": False,
             "commit_sha": None,
             "error": "push_rejected",
+            "error_stage": "git_push",
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
     )

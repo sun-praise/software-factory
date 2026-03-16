@@ -68,16 +68,32 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(add_result),
+            "error_stage": "git_add",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     diff_result = _run_git(repo_dir, ["diff", "--cached", "--quiet"])
     if diff_result.returncode == 0:
-        return {"success": False, "commit_sha": None, "error": "no_changes"}
+        return {
+            "success": False,
+            "commit_sha": None,
+            "error": "no_changes",
+            "error_stage": "git_diff",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
+        }
     if diff_result.returncode != 1:
         return {
             "success": False,
             "commit_sha": None,
             "error": _pick_message(diff_result),
+            "error_stage": "git_diff",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     commit_result = _run_git(repo_dir, ["commit", "-m", message])
@@ -86,6 +102,10 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(commit_result),
+            "error_stage": "git_commit",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     sha_result = _run_git(repo_dir, ["rev-parse", "HEAD"])
@@ -94,11 +114,23 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(sha_result),
+            "error_stage": "git_rev_parse",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     commit_sha = sha_result.stdout.strip()
     if not commit_sha:
-        return {"success": False, "commit_sha": None, "error": "empty_commit_sha"}
+        return {
+            "success": False,
+            "commit_sha": None,
+            "error": "empty_commit_sha",
+            "error_stage": "git_rev_parse",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
+        }
 
     target_branch = branch
     if target_branch is None:
@@ -108,6 +140,10 @@ def commit_and_push(
                 "success": False,
                 "commit_sha": commit_sha,
                 "error": _pick_message(branch_result),
+                "error_stage": "git_branch",
+                "remote": remote,
+                "branch": None,
+                "pushed_ref": None,
             }
         target_branch = branch_result.stdout.strip()
         if not target_branch or target_branch == "HEAD":
@@ -115,6 +151,10 @@ def commit_and_push(
                 "success": False,
                 "commit_sha": commit_sha,
                 "error": "detached_head",
+                "error_stage": "git_branch",
+                "remote": remote,
+                "branch": target_branch or None,
+                "pushed_ref": None,
             }
 
     push_result = _run_git(repo_dir, ["push", remote, target_branch])
@@ -123,9 +163,21 @@ def commit_and_push(
             "success": False,
             "commit_sha": commit_sha,
             "error": _pick_message(push_result),
+            "error_stage": "git_push",
+            "remote": remote,
+            "branch": target_branch,
+            "pushed_ref": f"{remote}/{target_branch}",
         }
 
-    return {"success": True, "commit_sha": commit_sha, "error": None}
+    return {
+        "success": True,
+        "commit_sha": commit_sha,
+        "error": None,
+        "error_stage": None,
+        "remote": remote,
+        "branch": target_branch,
+        "pushed_ref": f"{remote}/{target_branch}",
+    }
 
 
 def post_pr_comment(

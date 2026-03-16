@@ -684,7 +684,10 @@ def _finalize_git_changes(
     )
     if commit_result.get("success"):
         commit_sha = _safe_text(commit_result.get("commit_sha"))
-        log_lines.append(f"git_push: success commit={commit_sha or 'unknown'}")
+        pushed_ref = _safe_text(commit_result.get("pushed_ref")) or "unknown"
+        log_lines.append(
+            f"git_push: success ref={pushed_ref} commit={commit_sha or 'unknown'}"
+        )
         return "success", commit_sha, None
 
     error = _safe_text(commit_result.get("error")) or "unknown_git_error"
@@ -692,8 +695,16 @@ def _finalize_git_changes(
         log_lines.append("git_push: skipped no_changes")
         return "success", None, None
 
-    log_lines.append(f"git_push: failed error={error}")
-    return "failed", _safe_text(commit_result.get("commit_sha")), f"git_failed: {error}"
+    error_stage = _safe_text(commit_result.get("error_stage")) or "git"
+    pushed_ref = _safe_text(commit_result.get("pushed_ref"))
+    if pushed_ref:
+        log_lines.append(
+            f"git_push: failed stage={error_stage} ref={pushed_ref} error={error}"
+        )
+    else:
+        log_lines.append(f"git_push: failed stage={error_stage} error={error}")
+    error_prefix = "git_push_failed" if error_stage == "git_push" else "git_commit_failed"
+    return "failed", _safe_text(commit_result.get("commit_sha")), f"{error_prefix}: {error}"
 
 
 def _run_validation_cycle(

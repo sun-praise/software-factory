@@ -124,7 +124,15 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
     )
 
     result = git_ops.commit_and_push("/repo", "msg")
-    assert result == {"success": False, "commit_sha": None, "error": "no_changes"}
+    assert result == {
+        "success": False,
+        "commit_sha": None,
+        "error": "no_changes",
+        "error_stage": "git_diff",
+        "remote": "origin",
+        "branch": None,
+        "pushed_ref": None,
+    }
     assert calls == [
         ["git", "add", "-A"],
         ["git", "diff", "--cached", "--quiet"],
@@ -163,7 +171,15 @@ def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
     )
 
     result = git_ops.commit_and_push("/repo", "feat: m5")
-    assert result == {"success": True, "commit_sha": "deadbeef", "error": None}
+    assert result == {
+        "success": True,
+        "commit_sha": "deadbeef",
+        "error": None,
+        "error_stage": None,
+        "remote": "origin",
+        "branch": "feature/m5",
+        "pushed_ref": "origin/feature/m5",
+    }
     assert calls[-1] == ["git", "push", "origin", "feature/m5"]
 
 
@@ -201,7 +217,15 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
         remote="upstream",
         branch="release/m5",
     )
-    assert result == {"success": False, "commit_sha": "deadbeef", "error": "rejected"}
+    assert result == {
+        "success": False,
+        "commit_sha": "deadbeef",
+        "error": "rejected",
+        "error_stage": "git_push",
+        "remote": "upstream",
+        "branch": "release/m5",
+        "pushed_ref": "upstream/release/m5",
+    }
     assert ["git", "rev-parse", "--abbrev-ref", "HEAD"] not in calls
 
 
