@@ -195,6 +195,20 @@ def test_collect_pull_request_metadata_returns_empty_when_gh_missing(
     )
 
 
+def test_collect_pull_request_metadata_returns_empty_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise agent_runner.subprocess.TimeoutExpired(cmd="gh pr view", timeout=30)
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    assert (
+        agent_runner._collect_pull_request_metadata(repo="acme/widgets", pr_number=7)
+        == {}
+    )
+
+
 def test_run_once_returns_failed_checks_to_agent_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -2122,6 +2122,13 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             pr_number,
         )
         return {}
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
+            repo,
+            pr_number,
+        )
+        return {}
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
         logger.warning(
