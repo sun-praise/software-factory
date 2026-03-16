@@ -130,7 +130,7 @@ def test_run_once_failure_marks_failed_and_records_error(
 
     def executor(command: str, workspace_dir: str) -> dict[str, object]:
         executor_calls["count"] += 1
-        if executor_calls["count"] == 2:
+        if executor_calls["count"] >= 2:
             return {"returncode": 2, "stdout": "", "stderr": "lint failed"}
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
