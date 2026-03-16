@@ -22,21 +22,30 @@
 
       <section>
         <h2>Run History</h2>
-        <form method="get" action="/" class="run-search-form">
-          <label for="run-search" class="run-search-label">Search runs</label>
-          <div class="run-search-controls">
-            <input
-              id="run-search"
-              type="text"
-              name="q"
-              value="{{ run_page.query }}"
-              placeholder="Search by run id, repo, PR number, or status">
-            <button type="submit">Search</button>
+        <div class="run-toolbar">
+          <form method="get" action="/" class="run-search-form">
+            <label for="run-search" class="run-search-label">Search runs</label>
+            <div class="run-search-shell">
+              <span class="run-search-icon" aria-hidden="true">/</span>
+              <input
+                id="run-search"
+                type="text"
+                name="q"
+                value="{{ run_page.query }}"
+                placeholder="run id, repo, PR number, status">
+              <button type="submit" class="search-button">Search</button>
+            </div>
             {% if run_page.query %}
-            <a href="/" class="secondary-link">Clear</a>
+            <a href="/" class="secondary-link">Reset filter</a>
             {% endif %}
+          </form>
+
+          <div class="run-toolbar-summary">
+            <span class="summary-kicker">Result set</span>
+            <strong>{{ run_page.total_count }}</strong>
+            <span class="muted">runs total</span>
           </div>
-        </form>
+        </div>
 
         <p class="muted run-results-summary">
           Showing {{ runs|length }} of {{ run_page.total_count }} runs
@@ -77,17 +86,22 @@
         <nav class="pagination" aria-label="Run history pages">
           {% if run_page.has_prev %}
           <a href="/?page={{ run_page.prev_page }}{% if run_page.query %}&q={{ run_page.query | urlencode }}{% endif %}" class="pagination-link">
-            Previous
+            <span aria-hidden="true">←</span>
+            <span>Previous</span>
           </a>
           {% else %}
           <span class="pagination-link disabled">Previous</span>
           {% endif %}
 
-          <span class="pagination-current">Page {{ run_page.page }} of {{ run_page.total_pages }}</span>
+          <span class="pagination-current">
+            <span class="pagination-current-number">{{ run_page.page }}</span>
+            <span>of {{ run_page.total_pages }}</span>
+          </span>
 
           {% if run_page.has_next %}
           <a href="/?page={{ run_page.next_page }}{% if run_page.query %}&q={{ run_page.query | urlencode }}{% endif %}" class="pagination-link">
-            Next
+            <span>Next</span>
+            <span aria-hidden="true">→</span>
           </a>
           {% else %}
           <span class="pagination-link disabled">Next</span>
