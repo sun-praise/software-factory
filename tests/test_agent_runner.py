@@ -216,6 +216,110 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
     assert "lint failed" in prompts[1]
 
 
+def test_run_once_allows_push_when_only_preexisting_failures_remain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    calls = {"count": 0}
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        calls["count"] += 1
+        if command == "python -m mypy .":
+            return {
+                "returncode": 1,
+                "stdout": "app/main.py:1: error: preexisting",
+                "stderr": "",
+            }
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m mypy ."],
+    )
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert result["commit_sha"] == "deadbeef"
+    assert "preexisting_checks_failed" in str(result["error_summary"])
+    assert calls["count"] == 2
+
+
+def test_run_once_fails_when_new_check_failures_are_introduced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    calls = {"count": 0}
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "returncode": 1,
+                "stdout": "app/main.py:1: error: preexisting",
+                "stderr": "",
+            }
+        return {
+            "returncode": 1,
+            "stdout": "app/main.py:1: error: preexisting\napp/new.py:2: error: introduced",
+            "stderr": "",
+        }
+
+    prompts: list[str] = []
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m mypy ."],
+    )
+
+    def fake_execute_agent_sdks(**kwargs):
+        prompts.append(str(kwargs["prompt"]))
+        return True, None, None, "claude_agent_sdk"
+
+    monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    assert len(prompts) == 3
+    assert "introduced" in prompts[1]
+
+
 def test_run_once_returns_bootstrap_failures_to_agent_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
