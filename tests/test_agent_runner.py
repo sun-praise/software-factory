@@ -181,6 +181,43 @@ def test_run_once_failure_marks_failed_and_records_error(
     assert "ruff check" in str(row["error_summary"])
 
 
+def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) -> None:
+    conn = _make_conn()
+    enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=7,
+        head_sha="abc123",
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "must_fix": [
+                {
+                    "source": "manual_issue",
+                    "path": None,
+                    "line": None,
+                    "text": "Manual issue submission: https://github.com/acme/widgets/pull/7",
+                    "severity": "P1",
+                }
+            ],
+            "should_fix": [],
+        },
+    )
+    run = claim_next_queued_run(conn)
+    assert run is not None
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=RunnerOps(post_pr_comment=lambda *_: (True, "ok")),
+    )
+
+    assert result["status"] == "failed"
+    assert "manual_issue_context_missing" in str(result["error_summary"])
+
+
 def test_run_once_returns_failed_checks_to_agent_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -373,7 +410,8 @@ def test_run_once_recovers_from_bootstrap_failures_before_checks(
         prompts.append(str(kwargs["prompt"]))
         return True, None, None, "claude_agent_sdk"
 
-    def fake_bootstrap(_workspace_dir: str):
+    def fake_bootstrap(_workspace_dir: str, *, commands: list[str]):
+        assert commands == ["python -m ruff check ."]
         bootstrap_calls["count"] += 1
         if bootstrap_calls["count"] == 1:
             return agent_runner.WorkspaceBootstrapResult(
@@ -570,8 +608,9 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
     monkeypatch.setattr(agent_runner.sys, "executable", "/usr/bin/python3")
     monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
 
-    first = agent_runner._bootstrap_workspace_runtime(str(tmp_path))
-    second = agent_runner._bootstrap_workspace_runtime(str(tmp_path))
+    commands = ["python -m ruff check ."]
+    first = agent_runner._bootstrap_workspace_runtime(str(tmp_path), commands=commands)
+    second = agent_runner._bootstrap_workspace_runtime(str(tmp_path), commands=commands)
 
     assert first.ok is True
     assert first.skipped is False
@@ -586,6 +625,13 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
             "install",
             "-r",
             str(requirements),
+        ],
+        [
+            str(tmp_path / ".venv" / "bin" / "python"),
+            "-m",
+            "pip",
+            "install",
+            "ruff",
         ],
     ]
 
@@ -780,7 +826,9 @@ def test_normalize_agent_modes() -> None:
     )
 
 
-def test_execute_agent_sdks_falls_back_to_claude(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_agent_sdks_falls_back_to_claude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[str] = []
 
     def fake_openhands(
@@ -1085,7 +1133,9 @@ def test_run_claude_agent_supports_docker_runtime(
     assert env["HOME"] == "/tmp/claude-home"
 
 
-def test_build_workspace_git_mounts_ignores_missing_git_metadata(tmp_path: Path) -> None:
+def test_build_workspace_git_mounts_ignores_missing_git_metadata(
+    tmp_path: Path,
+) -> None:
     assert agent_runner._build_workspace_git_mounts(str(tmp_path)) == []
 
 
@@ -1124,7 +1174,9 @@ def test_sanitize_log_text_redacts_tokens() -> None:
 
 
 def test_render_claude_stream_record_handles_non_object_json() -> None:
-    lines, result_text, error_text, saw_events = _render_claude_stream_record('["a", "b"]\n')
+    lines, result_text, error_text, saw_events = _render_claude_stream_record(
+        '["a", "b"]\n'
+    )
 
     assert lines == ["[agent][stdout] ['a', 'b']"]
     assert result_text is None

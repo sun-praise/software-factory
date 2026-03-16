@@ -117,6 +117,26 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
             (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
             ),
@@ -135,6 +155,14 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
     }
     assert calls == [
         ["git", "add", "-A"],
+        [
+            "git",
+            "diff",
+            "--cached",
+            "--name-only",
+            "--",
+            ".software_factory_bootstrap_state.json",
+        ],
         ["git", "diff", "--cached", "--quiet"],
     ]
 
@@ -144,6 +172,26 @@ def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
         monkeypatch,
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
@@ -189,6 +237,26 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
             (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
             ),
@@ -227,6 +295,72 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
         "pushed_ref": "upstream/release/m5",
     }
     assert ["git", "rev-parse", "--abbrev-ref", "HEAD"] not in calls
+
+
+def test_commit_and_push_excludes_runtime_state_file(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ],
+                    stdout=".software_factory_bootstrap_state.json\n",
+                ),
+            ),
+            (
+                [
+                    "git",
+                    "reset",
+                    "--quiet",
+                    "HEAD",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "reset",
+                        "--quiet",
+                        "HEAD",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
+                ["git", "diff", "--cached", "--quiet"],
+                _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
+            ),
+        ],
+    )
+
+    result = git_ops.commit_and_push("/repo", "msg")
+
+    assert result["error"] == "no_changes"
+    assert [
+        "git",
+        "reset",
+        "--quiet",
+        "HEAD",
+        "--",
+        ".software_factory_bootstrap_state.json",
+    ] in calls
 
 
 def test_post_pr_comment_success(monkeypatch) -> None:

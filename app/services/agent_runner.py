@@ -221,6 +221,40 @@ def run_once(
         f"fix: apply autofix updates for PR #{pr_number}"
     )
     feature_flags = resolve_agent_feature_flags(conn)
+    manual_issue_error = _manual_issue_context_error(payload)
+    if manual_issue_error:
+        logs_path = _write_logs(
+            workspace_dir=runtime_root,
+            run_id=run_id,
+            lines=[
+                f"run_id={run_id}",
+                f"repo={repo}",
+                f"pr_number={pr_number}",
+                manual_issue_error,
+            ],
+        )
+        mark_run_finished(
+            conn=conn,
+            run_id=run_id,
+            status="failed",
+            error_summary=manual_issue_error,
+            logs_path=logs_path,
+            last_error_code="manual_issue_context_missing",
+        )
+        return {
+            "run_id": run_id,
+            "status": "failed",
+            "error_summary": manual_issue_error,
+            "logs_path": logs_path,
+            "commit_sha": None,
+            "checks": {
+                "overall_status": "failed",
+                "passed_count": 0,
+                "failed_count": 0,
+                "failed_commands": [],
+            },
+            "comment_posted": False,
+        }
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
@@ -431,33 +465,33 @@ def run_once(
 
         prompt_for_attempt = prompt
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
-            logger.append(
-                f"agent_attempt={attempt}/{MAX_CHECK_FEEDBACK_ATTEMPTS}"
-            )
-            sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = _execute_agent_sdks(
-                workspace=agent_workspace,
-                run_id=run_id,
-                repo=repo,
-                pr_number=pr_number,
-                prompt=prompt_for_attempt,
-                modes=agent_modes,
-                openhands_command=feature_flags.openhands_command,
-                openhands_command_timeout_seconds=(
-                    feature_flags.openhands_command_timeout_seconds
-                ),
-                claude_agent_command=feature_flags.claude_agent_command,
-                claude_agent_provider=feature_flags.claude_agent_provider,
-                claude_agent_base_url=feature_flags.claude_agent_base_url,
-                claude_agent_model=feature_flags.claude_agent_model,
-                claude_agent_runtime=feature_flags.claude_agent_runtime,
-                claude_agent_container_image=(
-                    feature_flags.claude_agent_container_image
-                ),
-                claude_agent_command_timeout_seconds=(
-                    feature_flags.claude_agent_command_timeout_seconds
-                ),
-                on_log_line=logger.append,
-                should_cancel=lambda: is_run_cancel_requested(conn, run_id),
+            logger.append(f"agent_attempt={attempt}/{MAX_CHECK_FEEDBACK_ATTEMPTS}")
+            sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = (
+                _execute_agent_sdks(
+                    workspace=agent_workspace,
+                    run_id=run_id,
+                    repo=repo,
+                    pr_number=pr_number,
+                    prompt=prompt_for_attempt,
+                    modes=agent_modes,
+                    openhands_command=feature_flags.openhands_command,
+                    openhands_command_timeout_seconds=(
+                        feature_flags.openhands_command_timeout_seconds
+                    ),
+                    claude_agent_command=feature_flags.claude_agent_command,
+                    claude_agent_provider=feature_flags.claude_agent_provider,
+                    claude_agent_base_url=feature_flags.claude_agent_base_url,
+                    claude_agent_model=feature_flags.claude_agent_model,
+                    claude_agent_runtime=feature_flags.claude_agent_runtime,
+                    claude_agent_container_image=(
+                        feature_flags.claude_agent_container_image
+                    ),
+                    claude_agent_command_timeout_seconds=(
+                        feature_flags.claude_agent_command_timeout_seconds
+                    ),
+                    on_log_line=logger.append,
+                    should_cancel=lambda: is_run_cancel_requested(conn, run_id),
+                )
             )
             if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
                 check_workspace = agent_workspace
@@ -484,7 +518,8 @@ def run_once(
                     }
                 failure_summary = (
                     f"{sdk_error_code}: {sdk_error_message}"
-                    if sdk_error_code and sdk_error_message
+                    if sdk_error_code
+                    and sdk_error_message
                     and not str(sdk_error_message).startswith(f"{sdk_error_code}:")
                     else sdk_error_message
                 )
@@ -546,7 +581,9 @@ def run_once(
             if checks_summary["overall_status"] == "passed" or not new_failure_results:
                 preexisting_error_summary: str | None = None
                 if checks_summary["overall_status"] != "passed":
-                    preexisting_failed_commands = checks_summary.get("failed_commands") or []
+                    preexisting_failed_commands = (
+                        checks_summary.get("failed_commands") or []
+                    )
                     preexisting_error_summary = (
                         "preexisting_checks_failed: "
                         + ", ".join(str(item) for item in preexisting_failed_commands)
@@ -701,8 +738,14 @@ def _finalize_git_changes(
         )
     else:
         log_lines.append(f"git_push: failed stage={error_stage} error={error}")
-    error_prefix = "git_push_failed" if error_stage == "git_push" else "git_commit_failed"
-    return "failed", _safe_text(commit_result.get("commit_sha")), f"{error_prefix}: {error}"
+    error_prefix = (
+        "git_push_failed" if error_stage == "git_push" else "git_commit_failed"
+    )
+    return (
+        "failed",
+        _safe_text(commit_result.get("commit_sha")),
+        f"{error_prefix}: {error}",
+    )
 
 
 def _run_validation_cycle(
@@ -940,8 +983,10 @@ def _execute_agent_sdks(
                 openhands_kwargs["on_log_line"] = on_log_line
             if should_cancel is not None:
                 openhands_kwargs["should_cancel"] = should_cancel
-            openhands_ok, openhands_message, openhands_error_code = _run_openhands_agent(
-                **openhands_kwargs,
+            openhands_ok, openhands_message, openhands_error_code = (
+                _run_openhands_agent(
+                    **openhands_kwargs,
+                )
             )
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
@@ -1202,7 +1247,6 @@ def _run_claude_stream_subprocess(
     should_cancel: Callable[[], bool] | None = None,
     process_env: dict[str, str] | None = None,
 ) -> tuple[bool, str, str | None]:
-
     process: subprocess.Popen[str]
     try:
         process = subprocess.Popen(
@@ -1240,10 +1284,18 @@ def _run_claude_stream_subprocess(
         except subprocess.TimeoutExpired:
             _terminate_agent_process_tree(process)
             _unregister_active_agent_process(process.pid)
-            return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+            return (
+                False,
+                f"{agent_name} command timed out after {timeout_seconds}s",
+                failure_code,
+            )
         except OSError as exc:
             _unregister_active_agent_process(process.pid)
-            return False, f"{agent_name} command failed while running: {exc}", failure_code
+            return (
+                False,
+                f"{agent_name} command failed while running: {exc}",
+                failure_code,
+            )
         _unregister_active_agent_process(process.pid)
         if process.returncode != 0:
             message = (stderr or "").strip() or (stdout or "").strip()
@@ -1268,12 +1320,20 @@ def _run_claude_stream_subprocess(
                 if on_log_line is not None:
                     on_log_line("[agent] cancellation requested; terminating process")
                 _terminate_agent_process_tree(process)
-                return False, f"{agent_name} command cancelled by user", RUN_CANCELLED_CODE
+                return (
+                    False,
+                    f"{agent_name} command cancelled by user",
+                    RUN_CANCELLED_CODE,
+                )
             if process.poll() is not None:
                 break
             if time.monotonic() >= deadline:
                 _terminate_agent_process_tree(process)
-                return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+                return (
+                    False,
+                    f"{agent_name} command timed out after {timeout_seconds}s",
+                    failure_code,
+                )
             time.sleep(1.0)
     except OSError as exc:
         return False, f"{agent_name} command failed while running: {exc}", failure_code
@@ -1288,7 +1348,12 @@ def _run_claude_stream_subprocess(
     error_text = _safe_text(state.get("error_text"))
 
     if process.returncode != 0:
-        message = error_text or (stderr or "").strip() or result_text or (stdout or "").strip()
+        message = (
+            error_text
+            or (stderr or "").strip()
+            or result_text
+            or (stdout or "").strip()
+        )
         return False, message or f"{agent_name} command failed", failure_code
 
     if on_log_line is not None and state.get("saw_events"):
@@ -1493,12 +1558,20 @@ def _run_agent_command(
                 if on_log_line is not None:
                     on_log_line("[agent] cancellation requested; terminating process")
                 _terminate_agent_process_tree(process)
-                return False, f"{agent_name} command cancelled by user", RUN_CANCELLED_CODE
+                return (
+                    False,
+                    f"{agent_name} command cancelled by user",
+                    RUN_CANCELLED_CODE,
+                )
             if process.poll() is not None:
                 break
             if time.monotonic() >= deadline:
                 _terminate_agent_process_tree(process)
-                return False, f"{agent_name} command timed out after {timeout_seconds}s", failure_code
+                return (
+                    False,
+                    f"{agent_name} command timed out after {timeout_seconds}s",
+                    failure_code,
+                )
             time.sleep(1.0)
     except OSError as exc:
         return False, f"{agent_name} command failed while running: {exc}", failure_code
@@ -1549,8 +1622,8 @@ def _consume_claude_stream(
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
             try:
-                rendered_lines, result_text, error_text, saw_events = _render_claude_stream_record(
-                    raw_line
+                rendered_lines, result_text, error_text, saw_events = (
+                    _render_claude_stream_record(raw_line)
                 )
             except Exception:
                 cleaned = _clean_terminal_log_line(raw_line.strip())
@@ -1610,7 +1683,7 @@ def _render_claude_stream_record(
     return [], None, None, False
 
 
-def _render_claude_assistant_event(payload: dict[str, Any]) -> list[str]:
+def _render_claude_assistant_event(payload: Mapping[str, Any]) -> list[str]:
     message = payload.get("message")
     if not isinstance(message, dict):
         return []
@@ -1765,7 +1838,9 @@ def _terminate_agent_process_tree_by_pid(pid: int) -> None:
         _ACTIVE_AGENT_PIDS.discard(pid)
 
 
-def _build_agent_environment(*, repo: str, pr_number: int, run_id: int) -> dict[str, str]:
+def _build_agent_environment(
+    *, repo: str, pr_number: int, run_id: int
+) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
@@ -1847,7 +1922,9 @@ def _prepare_run_workspace(
 
     remote_url = f"https://github.com/{repo}.git"
     cache_repo_dir = cache_root / f"{repo.replace('/', '__')}.git"
-    _ensure_repo_cache(cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url)
+    _ensure_repo_cache(
+        cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url
+    )
 
     run_workspace_dir = _create_run_workspace_clone(
         runtime_path=runtime_path,
@@ -1860,7 +1937,9 @@ def _prepare_run_workspace(
     resolved_branch = branch
     resolved_head_sha = head_sha
     if pr_number > 0:
-        pr_branch, pr_head_sha = _fetch_pull_request_head(repo=repo, pr_number=pr_number)
+        pr_branch, pr_head_sha = _fetch_pull_request_head(
+            repo=repo, pr_number=pr_number
+        )
         resolved_branch = resolved_branch or pr_branch
         resolved_head_sha = resolved_head_sha or pr_head_sha
         if not resolved_branch:
@@ -1875,7 +1954,9 @@ def _prepare_run_workspace(
     return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
 
 
-def _ensure_repo_cache(*, cache_root: Path, cache_repo_dir: Path, remote_url: str) -> None:
+def _ensure_repo_cache(
+    *, cache_root: Path, cache_repo_dir: Path, remote_url: str
+) -> None:
     lock_dir = cache_root / f"{cache_repo_dir.name}.lock"
     deadline = time.monotonic() + CACHE_LOCK_TIMEOUT_SECONDS
     while True:
@@ -1942,7 +2023,9 @@ def _create_run_workspace_clone(
         raise ValueError(f"failed to create run workspace: {exc}") from exc
 
     if clone_result.returncode != 0:
-        _raise_workspace_git_error("git clone", clone_result, cleanup_dir=run_workspace_dir)
+        _raise_workspace_git_error(
+            "git clone", clone_result, cleanup_dir=run_workspace_dir
+        )
     return run_workspace_dir
 
 
@@ -1959,7 +2042,9 @@ def _checkout_run_workspace_target(
             timeout=PR_FETCH_TIMEOUT_SECONDS,
         )
         if fetch_result.returncode != 0:
-            _raise_workspace_git_error("git fetch branch", fetch_result, cleanup_dir=run_workspace_dir)
+            _raise_workspace_git_error(
+                "git fetch branch", fetch_result, cleanup_dir=run_workspace_dir
+            )
         checkout_result = _run_git_command(
             repo_dir=run_workspace_dir,
             args=["checkout", "-B", resolved_branch, f"origin/{resolved_branch}"],
@@ -1972,7 +2057,9 @@ def _checkout_run_workspace_target(
                 timeout=GIT_COMMAND_TIMEOUT_SECONDS,
             )
         if checkout_result.returncode != 0:
-            _raise_workspace_git_error("git checkout branch", checkout_result, cleanup_dir=run_workspace_dir)
+            _raise_workspace_git_error(
+                "git checkout branch", checkout_result, cleanup_dir=run_workspace_dir
+            )
         return
 
     if resolved_head_sha:
@@ -1982,7 +2069,9 @@ def _checkout_run_workspace_target(
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
         if checkout_result.returncode != 0:
-            _raise_workspace_git_error("git checkout head", checkout_result, cleanup_dir=run_workspace_dir)
+            _raise_workspace_git_error(
+                "git checkout head", checkout_result, cleanup_dir=run_workspace_dir
+            )
 
 
 def _raise_workspace_git_error(
@@ -2026,7 +2115,9 @@ def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
     shutil.rmtree(worktree_dir, ignore_errors=True)
 
 
-def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, str | None]:
+def _fetch_pull_request_head(
+    *, repo: str, pr_number: int
+) -> tuple[str | None, str | None]:
     result = subprocess.run(
         [
             "gh",
@@ -2047,7 +2138,12 @@ def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, 
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        logger.warning("failed to fetch PR head via gh: repo=%s pr=%s error=%s", repo, pr_number, details)
+        logger.warning(
+            "failed to fetch PR head via gh: repo=%s pr=%s error=%s",
+            repo,
+            pr_number,
+            details,
+        )
         return None, None
 
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -2280,6 +2376,27 @@ def _parse_payload(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _manual_issue_context_error(payload: Mapping[str, Any]) -> str | None:
+    must_fix = payload.get("must_fix")
+    if not isinstance(must_fix, list):
+        return None
+    for item in must_fix:
+        if not isinstance(item, Mapping):
+            continue
+        if _safe_text(item.get("source")) != "manual_issue":
+            continue
+        if item.get("context_resolved") is True:
+            continue
+        text = _safe_text(item.get("text")) or ""
+        if "Operator note:" in text or "GitHub context:" in text:
+            continue
+        return (
+            "manual_issue_context_missing: provide a specific GitHub comment/issue link "
+            "or store explicit manual issue text before running autofix"
+        )
+    return None
+
+
 def _default_executor(
     command: str, workspace_dir: str
 ) -> subprocess.CompletedProcess[str]:
@@ -2448,7 +2565,8 @@ def _build_python_bootstrap_plan(
     requirements_files = [
         path
         for path in manifests
-        if path.name in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt"}
+        if path.name
+        in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt"}
     ]
     has_explicit_dev_requirements = any(
         path.name in {"requirements-dev.txt", "requirements-test.txt"}

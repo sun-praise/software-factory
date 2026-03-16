@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from dataclasses import dataclass
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
@@ -26,10 +27,31 @@ from app.services.policy import (
     get_remaining_autofix_quota,
     reset_autofix_count_on_sha_change,
 )
+from app.services.normalizer import normalize_review_events
 from app.services.queue import enqueue_autofix_run, request_run_cancel
 
 
 router = APIRouter(tags=["web"])
+
+
+@dataclass(frozen=True)
+class ParsedIssueTarget:
+    repo: str
+    owner: str
+    repo_name: str
+    pr_number: int
+    issue_number: int | None
+    source_url: str
+    source_fragment: str
+    url_kind: str
+
+
+@dataclass(frozen=True)
+class ManualIssueContext:
+    text: str
+    path: str | None = None
+    line: int | None = None
+    source_url: str | None = None
 
 
 def _normalize_page(raw_value: str | None, *, default: int = 1) -> int:
@@ -191,8 +213,9 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     }
 
 
-def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
-    parsed = urlparse(url)
+def _parse_issue_url(url: str) -> ParsedIssueTarget:
+    normalized_url = url.strip()
+    parsed = urlparse(normalized_url)
     if parsed.scheme != "https" or (parsed.hostname or "").lower() != "github.com":
         raise ValueError("Only https GitHub links on github.com are supported.")
 
@@ -204,6 +227,8 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
         )
 
     owner, repo_name, section, number_part = path_parts[:4]
+    repo = f"{owner}/{repo_name}"
+    fragment = parsed.fragment.strip()
     if section in {"pull", "pulls"}:
         try:
             pr_number = int(number_part)
@@ -213,10 +238,16 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
         if pr_number <= 0:
             raise ValueError("PR number in URL must be a positive integer.")
 
-        repo = f"{owner}/{repo_name}"
-        issue_number = None
-        issue_url = f"https://github.com/{repo}/pull/{pr_number}"
-        return repo, pr_number, issue_number, issue_url
+        return ParsedIssueTarget(
+            repo=repo,
+            owner=owner,
+            repo_name=repo_name,
+            pr_number=pr_number,
+            issue_number=None,
+            source_url=normalized_url,
+            source_fragment=fragment,
+            url_kind="pull",
+        )
 
     if section != "issues":
         raise ValueError(
@@ -225,7 +256,6 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
             "https://github.com/<owner>/<repo>/issues/<number>."
         )
 
-    repo = f"{owner}/{repo_name}"
     try:
         issue_number = int(number_part)
     except ValueError as exc:
@@ -238,40 +268,56 @@ def _parse_issue_url(url: str) -> tuple[str, int, int | None, str]:
         repo_name=repo_name,
         issue_number=issue_number,
     )
-    pr_number = resolved_pr_number or issue_number
-    if resolved_pr_number is None:
-        issue_url = f"https://github.com/{repo}/issues/{issue_number}"
-    else:
-        issue_url = f"https://github.com/{repo}/pull/{pr_number}"
+    return ParsedIssueTarget(
+        repo=repo,
+        owner=owner,
+        repo_name=repo_name,
+        pr_number=resolved_pr_number or issue_number,
+        issue_number=issue_number,
+        source_url=normalized_url,
+        source_fragment=fragment,
+        url_kind="issue",
+    )
 
-    return repo, pr_number, issue_number, issue_url
+
+def _github_token() -> str:
+    for key in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "GITHUB_RELEASE_TOKEN",
+    ):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return ""
 
 
-def _resolve_pr_number_from_issue(
-    *,
-    owner: str,
-    repo_name: str,
-    issue_number: int,
-) -> int | None:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+def _github_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "software-factory",
     }
+    token = _github_token()
     if token:
         headers["Authorization"] = f"token {token}"
-    url = f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}"
+    return headers
+
+
+def _github_get_json(url: str, *, not_found_message: str) -> dict[str, Any]:
     try:
-        response = httpx.get(url, headers=headers, timeout=10.0)
+        response = httpx.get(url, headers=_github_headers(), timeout=10.0)
     except httpx.RequestError as exc:
-        raise ValueError(f"Failed to query issue details: {exc}") from exc
+        raise ValueError(f"Failed to query GitHub details: {exc}") from exc
 
     if response.status_code == 404:
-        raise ValueError("Issue not found or unavailable.")
+        raise ValueError(not_found_message)
     if response.status_code == 403:
-        raise ValueError("GitHub API access denied while resolving issue details.")
+        raise ValueError(
+            "GitHub API access denied while resolving manual issue details."
+        )
     if response.status_code == 401:
-        raise ValueError("Unauthorized when querying GitHub issue details.")
+        raise ValueError("Unauthorized when querying GitHub manual issue details.")
     if response.status_code >= 400:
         raise ValueError(
             f"GitHub API returned unexpected status: {response.status_code}."
@@ -283,6 +329,275 @@ def _resolve_pr_number_from_issue(
         raise ValueError("GitHub API returned invalid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Unexpected response from GitHub API.")
+    return payload
+
+
+def _github_get_list(url: str, *, not_found_message: str) -> list[dict[str, Any]]:
+    try:
+        response = httpx.get(url, headers=_github_headers(), timeout=10.0)
+    except httpx.RequestError as exc:
+        raise ValueError(f"Failed to query GitHub details: {exc}") from exc
+
+    if response.status_code == 404:
+        raise ValueError(not_found_message)
+    if response.status_code == 403:
+        raise ValueError(
+            "GitHub API access denied while resolving manual issue details."
+        )
+    if response.status_code == 401:
+        raise ValueError("Unauthorized when querying GitHub manual issue details.")
+    if response.status_code >= 400:
+        raise ValueError(
+            f"GitHub API returned unexpected status: {response.status_code}."
+        )
+
+    try:
+        payload = response.json()
+    except JSONDecodeError as exc:
+        raise ValueError("GitHub API returned invalid JSON.") from exc
+    if not isinstance(payload, list):
+        raise ValueError("Unexpected response from GitHub API.")
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _parse_fragment_numeric_id(fragment: str, prefixes: tuple[str, ...]) -> int | None:
+    normalized = fragment.strip().lower()
+    for prefix in prefixes:
+        if normalized.startswith(prefix):
+            suffix = normalized[len(prefix) :]
+            try:
+                parsed_id = int(suffix)
+            except ValueError:
+                return None
+            return parsed_id if parsed_id > 0 else None
+    return None
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed_value = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed_value if parsed_value > 0 else None
+
+
+def _string_or_empty(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _format_manual_issue_context(
+    *,
+    label: str,
+    body: str,
+    title: str = "",
+    path: str | None = None,
+    line: int | None = None,
+) -> str:
+    parts = [label]
+    if title:
+        parts.append(f"Title: {title}")
+    if path:
+        location = f"File: {path}"
+        if line is not None:
+            location += f":{line}"
+        parts.append(location)
+    parts.append(body)
+    return "\n".join(part for part in parts if part)
+
+
+def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
+    issue_number = target.issue_number or target.pr_number
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{target.repo}/issues/{issue_number}",
+        not_found_message="Issue not found or unavailable.",
+    )
+    title = _string_or_empty(payload.get("title"))
+    body = _string_or_empty(payload.get("body"))
+    if not title and not body:
+        raise ValueError(
+            "GitHub issue has no body text. Add a description to the manual issue."
+        )
+    context_body = body or title
+    return ManualIssueContext(
+        text=_format_manual_issue_context(
+            label="GitHub issue context",
+            title=title,
+            body=context_body,
+        ),
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+    )
+
+
+def _fetch_issue_comment_context(
+    target: ParsedIssueTarget, comment_id: int
+) -> ManualIssueContext:
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{target.repo}/issues/comments/{comment_id}",
+        not_found_message="GitHub issue comment not found or unavailable.",
+    )
+    body = _string_or_empty(payload.get("body"))
+    if not body:
+        raise ValueError(
+            "GitHub issue comment is empty. Add a description to the manual issue."
+        )
+    return ManualIssueContext(
+        text=_format_manual_issue_context(
+            label="GitHub issue comment",
+            body=body,
+        ),
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+    )
+
+
+def _fetch_review_comment_context(
+    target: ParsedIssueTarget, comment_id: int
+) -> ManualIssueContext:
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{target.repo}/pulls/comments/{comment_id}",
+        not_found_message="GitHub review comment not found or unavailable.",
+    )
+    body = _string_or_empty(payload.get("body"))
+    if not body:
+        raise ValueError(
+            "GitHub review comment is empty. Add a description to the manual issue."
+        )
+    path = _string_or_empty(payload.get("path")) or None
+    line = _coerce_positive_int(payload.get("line")) or _coerce_positive_int(
+        payload.get("original_line")
+    )
+    return ManualIssueContext(
+        text=_format_manual_issue_context(
+            label="GitHub review comment",
+            body=body,
+            path=path,
+            line=line,
+        ),
+        path=path,
+        line=line,
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+    )
+
+
+def _fetch_review_context(
+    target: ParsedIssueTarget, review_id: int
+) -> ManualIssueContext:
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews/{review_id}",
+        not_found_message="GitHub pull request review not found or unavailable.",
+    )
+    body = _string_or_empty(payload.get("body"))
+    if not body:
+        raise ValueError(
+            "GitHub pull request review is empty. Add a description to the manual issue."
+        )
+    state = _string_or_empty(payload.get("state"))
+    label = "GitHub pull request review"
+    if state:
+        label = f"{label} ({state.lower()})"
+    return ManualIssueContext(
+        text=_format_manual_issue_context(label=label, body=body),
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+    )
+
+
+def _resolve_manual_issue_context(
+    target: ParsedIssueTarget,
+    *,
+    description_present: bool,
+) -> ManualIssueContext | None:
+    fragment = target.source_fragment.strip().lower()
+
+    try:
+        if target.url_kind == "issue":
+            comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
+            if comment_id is not None:
+                return _fetch_issue_comment_context(target, comment_id)
+            if not fragment:
+                return _fetch_issue_body_context(target)
+            return None
+
+        issue_comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
+        if issue_comment_id is not None:
+            return _fetch_issue_comment_context(target, issue_comment_id)
+
+        review_comment_id = _parse_fragment_numeric_id(
+            fragment,
+            ("discussion_r", "r"),
+        )
+        if review_comment_id is not None:
+            return _fetch_review_comment_context(target, review_comment_id)
+
+        review_id = _parse_fragment_numeric_id(fragment, ("pullrequestreview-",))
+        if review_id is not None:
+            return _fetch_review_context(target, review_id)
+    except ValueError:
+        if description_present:
+            return None
+        raise
+
+    return None
+
+
+def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, Any]:
+    review_comments = _github_get_list(
+        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/comments?per_page=100",
+        not_found_message="Pull request review comments not found or unavailable.",
+    )
+    issue_comments = _github_get_list(
+        f"https://api.github.com/repos/{target.repo}/issues/{target.pr_number}/comments?per_page=100",
+        not_found_message="Pull request issue comments not found or unavailable.",
+    )
+    reviews = _github_get_list(
+        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews?per_page=100",
+        not_found_message="Pull request reviews not found or unavailable.",
+    )
+
+    events: list[dict[str, Any]] = []
+    events.extend(
+        {"event_type": "pull_request_review_comment", "payload": {"comment": comment}}
+        for comment in review_comments
+    )
+    events.extend(
+        {
+            "event_type": "issue_comment",
+            "payload": {
+                "issue": {"pull_request": {"url": target.source_url}},
+                "comment": comment,
+            },
+        }
+        for comment in issue_comments
+    )
+    events.extend(
+        {"event_type": "pull_request_review", "payload": {"review": review}}
+        for review in reviews
+    )
+
+    normalized = normalize_review_events(
+        repo=target.repo,
+        pr_number=target.pr_number,
+        events=events,
+        head_sha=None,
+    )
+    normalized["project_type"] = "python"
+    normalized["manual_issue_source_url"] = target.source_url
+    normalized["issue_number"] = target.issue_number
+    return normalized
+
+
+def _resolve_pr_number_from_issue(
+    *,
+    owner: str,
+    repo_name: str,
+    issue_number: int,
+) -> int | None:
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}",
+        not_found_message="Issue not found or unavailable.",
+    )
 
     pull_request_info = payload.get("pull_request")
     if not isinstance(pull_request_info, dict):
@@ -301,64 +616,85 @@ def _resolve_pr_number_from_issue(
 
 def _build_issue_normalized_review(
     *,
-    repo: str,
-    pr_number: int,
-    issue_number: int | None,
-    issue_url: str,
+    target: ParsedIssueTarget,
+    description: str | None,
+    resolved_context: ManualIssueContext | None,
 ) -> dict[str, Any]:
-    issue_text = f"Manual issue submission: {issue_url}"
-    if issue_number is not None:
-        issue_text = f"{issue_text}\n\nOriginal issue number: {issue_number}"
+    issue_parts = [f"Manual issue submission: {target.source_url}"]
+    if target.issue_number is not None:
+        issue_parts.append(f"Original issue number: {target.issue_number}")
+    if description:
+        issue_parts.append(f"Operator note:\n{description}")
+    if resolved_context is not None:
+        context_source = resolved_context.source_url or target.source_url
+        issue_parts.append(f"GitHub context source: {context_source}")
+        issue_parts.append(f"GitHub context:\n{resolved_context.text}")
+
+    issue_text = "\n\n".join(part for part in issue_parts if part)
+    context_resolved = bool(description or resolved_context is not None)
 
     item = {
         "source": "manual_issue",
-        "path": None,
-        "line": None,
+        "path": resolved_context.path if resolved_context is not None else None,
+        "line": resolved_context.line if resolved_context is not None else None,
         "text": issue_text,
         "severity": "P1",
+        "source_url": target.source_url,
+        "context_resolved": context_resolved,
     }
 
     must_fix: list[dict[str, Any]] = [item]
     should_fix: list[dict[str, Any]] = []
 
     return {
-        "repo": repo,
-        "pr_number": pr_number,
+        "repo": target.repo,
+        "pr_number": target.pr_number,
         "head_sha": None,
         "must_fix": must_fix,
         "should_fix": should_fix,
         "ignore": [],
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
-        "issue_number": issue_number,
+        "issue_number": target.issue_number,
     }
 
 
 def _enqueue_issue_fix(
     *,
-    repo: str,
-    pr_number: int,
-    issue_number: int | None,
-    issue_url: str,
+    target: ParsedIssueTarget,
+    description: str | None,
+    resolved_context: ManualIssueContext | None,
 ) -> dict[str, Any]:
     run_id: int | None = None
     remaining_quota = None
     idempotency_key = None
     queue_status = "not_queued"
 
-    normalized_review = _build_issue_normalized_review(
-        repo=repo,
-        pr_number=pr_number,
-        issue_number=issue_number,
-        issue_url=issue_url,
-    )
+    if target.url_kind == "pull" and not target.source_fragment and description is None:
+        normalized_review = _fetch_pull_request_feedback_review(target)
+        if not normalized_review.get("must_fix") and not normalized_review.get(
+            "should_fix"
+        ):
+            raise ValueError(
+                "No actionable pull request comments were found. Provide a specific comment link or a manual issue description."
+            )
+    else:
+        if resolved_context is None and description is None:
+            raise ValueError(
+                "Please provide a specific GitHub comment/issue link or add a description."
+            )
+        normalized_review = _build_issue_normalized_review(
+            target=target,
+            description=description,
+            resolved_context=resolved_context,
+        )
     head_sha = None
 
     review_batch_id = build_review_batch_id(normalized_review)
     normalized_review["review_batch_id"] = review_batch_id
     idempotency_key = build_task_idempotency_key(
-        repo=repo,
-        pr_number=pr_number,
+        repo=target.repo,
+        pr_number=target.pr_number,
         head_sha=head_sha,
         review_batch_id=review_batch_id,
     )
@@ -367,25 +703,27 @@ def _enqueue_issue_fix(
         if head_sha:
             reset_autofix_count_on_sha_change(
                 conn,
-                repo,
-                pr_number,
+                target.repo,
+                target.pr_number,
                 head_sha,
             )
         ensure_pull_request_row(
             conn,
-            repo,
-            pr_number,
+            target.repo,
+            target.pr_number,
             branch=None,
             head_sha=head_sha,
         )
-        remaining_quota = get_remaining_autofix_quota(conn, repo, pr_number)
+        remaining_quota = get_remaining_autofix_quota(
+            conn, target.repo, target.pr_number
+        )
         if remaining_quota == 0:
             queue_status = "autofix_limit_reached"
         else:
             run_id = enqueue_autofix_run(
                 conn=conn,
-                repo=repo,
-                pr_number=pr_number,
+                repo=target.repo,
+                pr_number=target.pr_number,
                 head_sha=head_sha,
                 normalized_review_json=normalized_review,
                 trigger_source="manual_issue",
@@ -397,9 +735,9 @@ def _enqueue_issue_fix(
     return {
         "ok": True,
         "message": "Issue submission accepted.",
-        "repo": repo,
-        "pr_number": pr_number,
-        "issue_number": issue_number,
+        "repo": target.repo,
+        "pr_number": target.pr_number,
+        "issue_number": target.issue_number,
         "queue_status": queue_status,
         "queued_run_id": run_id,
         "idempotency_key": idempotency_key,
@@ -603,9 +941,7 @@ async def save_settings(request: Request) -> RedirectResponse:
             claude_agent_model=claude_agent_model,
             claude_agent_runtime=claude_agent_runtime,
             claude_agent_container_image=claude_agent_container_image,
-            claude_agent_command_timeout_seconds=(
-                claude_agent_command_timeout_seconds
-            ),
+            claude_agent_command_timeout_seconds=(claude_agent_command_timeout_seconds),
             claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
         )
 
@@ -632,7 +968,10 @@ async def issue_entry_page(request: Request) -> HTMLResponse:
 async def submit_issue(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
     form = await request.form()
-    request_data = {"url": str(form.get("url", "")).strip()}
+    request_data = {
+        "url": str(form.get("url", "")).strip(),
+        "description": str(form.get("description", "")).strip() or None,
+    }
 
     try:
         payload = IssueSubmissionRequest.model_validate(request_data)
@@ -651,7 +990,27 @@ async def submit_issue(request: Request) -> HTMLResponse:
         )
 
     try:
-        repo, pr_number, issue_number, issue_url = _parse_issue_url(payload.url)
+        target = _parse_issue_url(payload.url)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="issue_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Manual Issue",
+                "message": str(exc),
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+
+    description = _string_or_empty(payload.description) or None
+    try:
+        resolved_context = _resolve_manual_issue_context(
+            target,
+            description_present=description is not None,
+        )
     except ValueError as exc:
         return templates.TemplateResponse(
             request=request,
@@ -668,10 +1027,22 @@ async def submit_issue(request: Request) -> HTMLResponse:
 
     try:
         result = _enqueue_issue_fix(
-            repo=repo,
-            pr_number=pr_number,
-            issue_number=issue_number,
-            issue_url=issue_url,
+            target=target,
+            description=description,
+            resolved_context=resolved_context,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="issue_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Manual Issue",
+                "message": str(exc),
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
         )
     except sqlite3.Error:
         result = {
@@ -695,7 +1066,19 @@ async def submit_issue(request: Request) -> HTMLResponse:
 @router.post("/api/issues")
 async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
     try:
-        repo, pr_number, issue_number, issue_url = _parse_issue_url(payload.url)
+        target = _parse_issue_url(payload.url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    description = _string_or_empty(payload.description) or None
+    try:
+        resolved_context = _resolve_manual_issue_context(
+            target,
+            description_present=description is not None,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -704,11 +1087,15 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
 
     try:
         return _enqueue_issue_fix(
-            repo=repo,
-            pr_number=pr_number,
-            issue_number=issue_number,
-            issue_url=issue_url,
+            target=target,
+            description=description,
+            resolved_context=resolved_context,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
