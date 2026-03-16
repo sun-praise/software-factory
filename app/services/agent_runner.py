@@ -1906,15 +1906,15 @@ def _prepare_run_workspace(
 
     resolved_branch = branch
     resolved_head_sha = head_sha
-    if pr_number > 0:
+    if pr_number > 0 and (not resolved_branch or not resolved_head_sha):
         pr_branch, pr_head_sha = _fetch_pull_request_head(
             repo=repo, pr_number=pr_number
         )
         resolved_branch = resolved_branch or pr_branch
         resolved_head_sha = resolved_head_sha or pr_head_sha
-        if not resolved_branch:
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError("unable to resolve PR head branch")
+    if pr_number > 0 and not resolved_branch:
+        shutil.rmtree(run_workspace_dir, ignore_errors=True)
+        raise ValueError("unable to resolve PR head branch")
     _checkout_run_workspace_target(
         run_workspace_dir=run_workspace_dir,
         resolved_branch=resolved_branch,
