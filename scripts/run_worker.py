@@ -28,6 +28,17 @@ from app.services.logging_config import get_run_log_path
 _STOP_WORKER = False
 
 
+def _validate_workspace_dir(workspace_dir: str) -> str | None:
+    workspace = Path(workspace_dir).resolve()
+    if not workspace.exists():
+        return "workspace_dir does not exist"
+    if not workspace.is_dir():
+        return "workspace_dir is not a directory"
+    if not (workspace / ".git").exists():
+        return "workspace_dir is not a git worktree"
+    return None
+
+
 def _handle_stop_signal(signum: int, _frame: object) -> None:
     global _STOP_WORKER
     _STOP_WORKER = True
@@ -106,6 +117,11 @@ def main() -> int:
     parser.add_argument("--workspace-dir", default=str(ROOT))
     args = parser.parse_args()
 
+    workspace_error = _validate_workspace_dir(args.workspace_dir)
+    if workspace_error is not None:
+        print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
+        return 2
+
     init_db()
     recovered_count = _recover_stale_runs()
     if recovered_count:
@@ -115,10 +131,18 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_stop_signal)
 
     if args.once:
+        workspace_error = _validate_workspace_dir(args.workspace_dir)
+        if workspace_error is not None:
+            print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
+            return 2
         _process_one(workspace_dir=args.workspace_dir)
         return 0
 
     while not _STOP_WORKER:
+        workspace_error = _validate_workspace_dir(args.workspace_dir)
+        if workspace_error is not None:
+            print(f"invalid workspace_dir={args.workspace_dir}: {workspace_error}")
+            return 2
         processed = _process_one(workspace_dir=args.workspace_dir)
         if not processed:
             time.sleep(args.interval_seconds)
