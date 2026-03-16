@@ -18,8 +18,6 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
-import httpx
-
 from app.config import get_settings
 from app.services.agent_prompt import (
     build_autofix_prompt,
@@ -50,7 +48,6 @@ Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
 BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 600
 GIT_COMMAND_TIMEOUT_SECONDS = 30
-GITHUB_API_TIMEOUT_SECONDS = 10.0
 CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
@@ -2029,100 +2026,39 @@ def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
 
 
 def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, str | None]:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
-    auth_headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "software-factory",
-        **({"Authorization": f"token {token}"} if token else {}),
-    }
-    anonymous_headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "software-factory",
-    }
-
-    auth_payload, auth_status, auth_error = _request_pull_request_payload(url=url, headers=auth_headers)
-    if auth_payload is not None:
-        return _parse_pull_request_head(auth_payload, repo=repo, pr_number=pr_number)
-
-    if auth_error is not None:
-        logger.warning(
-            "failed to fetch PR head with %s request: repo=%s pr=%s error=%s",
-            "authenticated" if token else "anonymous",
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
             repo,
-            pr_number,
-            auth_error,
-        )
-    elif auth_status is not None:
-        logger.warning(
-            "failed to fetch PR head with %s request: repo=%s pr=%s status=%s",
-            "authenticated" if token else "anonymous",
-            repo,
-            pr_number,
-            auth_status,
-        )
-
-    if token and auth_status in {401, 403}:
-        payload, status_code, error_message = _request_pull_request_payload(
-            url=url,
-            headers=anonymous_headers,
-        )
-        if payload is not None:
-            logger.warning(
-                "authenticated PR head request failed; anonymous fallback succeeded: repo=%s pr=%s status=%s",
-                repo,
-                pr_number,
-                auth_status,
-            )
-            return _parse_pull_request_head(payload, repo=repo, pr_number=pr_number)
-        if error_message is not None:
-            logger.warning(
-                "anonymous PR head fallback failed: repo=%s pr=%s error=%s",
-                repo,
-                pr_number,
-                error_message,
-            )
-        elif status_code is not None:
-            logger.warning(
-                "anonymous PR head fallback failed: repo=%s pr=%s status=%s",
-                repo,
-                pr_number,
-                status_code,
-            )
-    return None, None
-
-
-def _request_pull_request_payload(
-    *,
-    url: str,
-    headers: dict[str, str],
-) -> tuple[dict[str, Any] | None, int | None, str | None]:
-    try:
-        response = httpx.get(url, headers=headers, timeout=GITHUB_API_TIMEOUT_SECONDS)
-    except httpx.RequestError as exc:
-        return None, None, str(exc)
-    if response.status_code >= 400:
-        return None, response.status_code, None
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        return None, response.status_code, f"invalid_json: {exc}"
-    if not isinstance(payload, dict):
-        return None, response.status_code, "invalid_payload_type"
-    return payload, response.status_code, None
-
-
-def _parse_pull_request_head(
-    payload: dict[str, Any],
-    *,
-    repo: str,
-    pr_number: int,
-) -> tuple[str | None, str | None]:
-    head = payload.get("head")
-    if not isinstance(head, dict):
-        logger.warning("missing PR head payload: repo=%s pr=%s", repo, pr_number)
+            "--json",
+            "headRefName,headRefOid",
+            "--jq",
+            '.headRefName + "\\n" + .headRefOid',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=PR_FETCH_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+        logger.warning("failed to fetch PR head via gh: repo=%s pr=%s error=%s", repo, pr_number, details)
         return None, None
-    return _safe_text(head.get("ref")) or None, _safe_text(head.get("sha")) or None
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) != 2:
+        logger.warning(
+            "invalid PR head payload from gh: repo=%s pr=%s payload=%r",
+            repo,
+            pr_number,
+            result.stdout,
+        )
+        return None, None
+    return lines[0] or None, lines[1] or None
 
 
 def _run_git_command(
