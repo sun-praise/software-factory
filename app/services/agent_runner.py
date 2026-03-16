@@ -394,6 +394,42 @@ def run_once(
         run_error_code: str | None = None
         commit_sha: str | None = None
         check_workspace = workspace
+        baseline_check_workspace = agent_workspace
+        try:
+            baseline_check_results, baseline_checks_summary = _run_validation_cycle(
+                conn=conn,
+                run_id=run_id,
+                workspace_dir=baseline_check_workspace,
+                commands=commands,
+                execute=execute,
+                logger=logger,
+                log_prefix="baseline",
+            )
+        except RuntimeError as exc:
+            if str(exc) != "cancel_requested_before_checks":
+                raise
+            logger.append("cancel_requested: stopping run before baseline checks")
+            logs_path = logger.flush()
+            status, run_error_summary = _finish_cancelled_run(
+                conn,
+                run_id,
+                logs_path,
+            )
+            return {
+                "run_id": run_id,
+                "status": status,
+                "error_summary": run_error_summary,
+                "logs_path": logs_path,
+                "commit_sha": None,
+                "checks": checks_summary,
+                "comment_posted": False,
+            }
+        baseline_failure_index = _build_check_failure_index(baseline_check_results)
+        if baseline_failure_index:
+            logger.append(
+                "preexisting_check_failures: "
+                + ", ".join(sorted(baseline_failure_index))
+            )
 
         prompt_for_attempt = prompt
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
@@ -477,97 +513,60 @@ def run_once(
                     "comment_posted": False,
                 }
 
-            bootstrap_result = _bootstrap_workspace_runtime(check_workspace)
-            if bootstrap_result.kind:
-                logger.append(f"workspace_bootstrap={bootstrap_result.kind}")
-            if bootstrap_result.skipped and bootstrap_result.kind:
-                logger.append("workspace_bootstrap_status=ready")
-            for detail in bootstrap_result.details:
-                logger.extend(
-                    [
-                        f"[bootstrap] {detail['command']}",
-                        f"exit_code={detail['exit_code']}",
-                        "stdout:",
-                        _sanitize_log_text(detail["stdout"]),
-                        "stderr:",
-                        _sanitize_log_text(detail["stderr"]),
-                        "",
-                    ]
+            try:
+                check_results, checks_summary = _run_validation_cycle(
+                    conn=conn,
+                    run_id=run_id,
+                    workspace_dir=check_workspace,
+                    commands=commands,
+                    execute=execute,
+                    logger=logger,
                 )
-
-            check_results = []
-            bootstrap_failed = False
-            if not bootstrap_result.ok:
-                bootstrap_failed = True
-                if bootstrap_result.details:
-                    check_results.extend(
-                        {
-                            "command": f"[bootstrap] {detail['command']}",
-                            "exit_code": detail["exit_code"],
-                            "stdout": detail["stdout"],
-                            "stderr": detail["stderr"],
-                        }
-                        for detail in bootstrap_result.details
+            except RuntimeError as exc:
+                if str(exc) != "cancel_requested_before_checks":
+                    raise
+                logger.append("cancel_requested: stopping run before checks")
+                logs_path = logger.flush()
+                status, run_error_summary = _finish_cancelled_run(
+                    conn,
+                    run_id,
+                    logs_path,
+                )
+                return {
+                    "run_id": run_id,
+                    "status": status,
+                    "error_summary": run_error_summary,
+                    "logs_path": logs_path,
+                    "commit_sha": None,
+                    "checks": checks_summary,
+                    "comment_posted": False,
+                }
+            new_failure_results = _filter_new_check_failures(
+                baseline_check_results=baseline_check_results,
+                current_check_results=check_results,
+            )
+            if checks_summary["overall_status"] == "passed" or not new_failure_results:
+                preexisting_error_summary: str | None = None
+                if checks_summary["overall_status"] != "passed":
+                    preexisting_failed_commands = checks_summary.get("failed_commands") or []
+                    preexisting_error_summary = (
+                        "preexisting_checks_failed: "
+                        + ", ".join(str(item) for item in preexisting_failed_commands)
                     )
-                else:
-                    check_results.append(
-                        {
-                            "command": "[bootstrap] workspace setup",
-                            "exit_code": 1,
-                            "stdout": "",
-                            "stderr": bootstrap_result.error_summary or "",
-                        }
-                    )
-
-            for command in commands:
-                if bootstrap_failed:
-                    break
-                if is_run_cancel_requested(conn, run_id):
-                    logger.append("cancel_requested: stopping run before checks")
-                    logs_path = logger.flush()
-                    status, run_error_summary = _finish_cancelled_run(
-                        conn,
-                        run_id,
-                        logs_path,
-                    )
-                    return {
-                        "run_id": run_id,
-                        "status": status,
-                        "error_summary": run_error_summary,
-                        "logs_path": logs_path,
-                        "commit_sha": None,
-                        "checks": checks_summary,
-                        "comment_posted": False,
+                    logger.append(preexisting_error_summary)
+                    checks_summary = {
+                        **checks_summary,
+                        "overall_status": "passed",
+                        "failed_count": 0,
+                        "failed_commands": [],
                     }
-                result = _coerce_result(execute(command, check_workspace))
-                check_results.append(
-                    {
-                        "command": command,
-                        "exit_code": result["returncode"],
-                        "stdout": result["stdout"],
-                        "stderr": result["stderr"],
-                    }
-                )
-                logger.extend(
-                    [
-                        f"[check] {command}",
-                        f"exit_code={result['returncode']}",
-                        "stdout:",
-                        _sanitize_log_text(result["stdout"]),
-                        "stderr:",
-                        _sanitize_log_text(result["stderr"]),
-                        "",
-                    ]
-                )
-
-            checks_summary = active_ops.summarize_check_results(check_results)
-            if checks_summary["overall_status"] == "passed":
-                status, commit_sha, run_error_summary = _finalize_git_changes(
+                status, commit_sha, git_error_summary = _finalize_git_changes(
                     repo_dir=check_workspace,
                     commit_message=commit_message,
                     active_ops=active_ops,
                     log_lines=log_lines,
                 )
+                run_error_summary = preexisting_error_summary or git_error_summary
                 logger.flush()
                 break
 
@@ -580,7 +579,7 @@ def run_once(
                 break
             prompt_for_attempt = _build_check_feedback_prompt(
                 base_prompt=prompt,
-                check_results=check_results,
+                check_results=new_failure_results,
             )
             logger.append("agent_feedback: rerunning agent with failed check output")
 
@@ -695,6 +694,147 @@ def _finalize_git_changes(
 
     log_lines.append(f"git_push: failed error={error}")
     return "failed", _safe_text(commit_result.get("commit_sha")), f"git_failed: {error}"
+
+
+def _run_validation_cycle(
+    *,
+    conn: sqlite3.Connection,
+    run_id: int,
+    workspace_dir: str,
+    commands: list[str],
+    execute: Executor,
+    logger: RunLogger,
+    log_prefix: str = "check",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    bootstrap_result = _bootstrap_workspace_runtime(workspace_dir)
+    if bootstrap_result.kind:
+        logger.append(f"{log_prefix}_workspace_bootstrap={bootstrap_result.kind}")
+    if bootstrap_result.skipped and bootstrap_result.kind:
+        logger.append(f"{log_prefix}_workspace_bootstrap_status=ready")
+    for detail in bootstrap_result.details:
+        logger.extend(
+            [
+                f"[{log_prefix}-bootstrap] {detail['command']}",
+                f"exit_code={detail['exit_code']}",
+                "stdout:",
+                _sanitize_log_text(detail["stdout"]),
+                "stderr:",
+                _sanitize_log_text(detail["stderr"]),
+                "",
+            ]
+        )
+
+    check_results: list[dict[str, Any]] = []
+    bootstrap_failed = False
+    if not bootstrap_result.ok:
+        bootstrap_failed = True
+        if bootstrap_result.details:
+            check_results.extend(
+                {
+                    "command": f"[bootstrap] {detail['command']}",
+                    "exit_code": detail["exit_code"],
+                    "stdout": detail["stdout"],
+                    "stderr": detail["stderr"],
+                }
+                for detail in bootstrap_result.details
+            )
+        else:
+            check_results.append(
+                {
+                    "command": "[bootstrap] workspace setup",
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": bootstrap_result.error_summary or "",
+                }
+            )
+
+    for command in commands:
+        if bootstrap_failed:
+            break
+        if is_run_cancel_requested(conn, run_id):
+            raise RuntimeError("cancel_requested_before_checks")
+        result = _coerce_result(execute(command, workspace_dir))
+        check_results.append(
+            {
+                "command": command,
+                "exit_code": result["returncode"],
+                "stdout": result["stdout"],
+                "stderr": result["stderr"],
+            }
+        )
+        logger.extend(
+            [
+                f"[{log_prefix}] {command}",
+                f"exit_code={result['returncode']}",
+                "stdout:",
+                _sanitize_log_text(result["stdout"]),
+                "stderr:",
+                _sanitize_log_text(result["stderr"]),
+                "",
+            ]
+        )
+
+    return check_results, summarize_check_results(check_results)
+
+
+def _build_check_failure_index(
+    check_results: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    failures: dict[str, set[str]] = {}
+    for result in check_results:
+        exit_code = int(result.get("exit_code", 0))
+        if exit_code == 0:
+            continue
+        command = str(result.get("command", "")).strip() or "unknown command"
+        signatures = {
+            line for line in _extract_check_failure_signatures(result) if line.strip()
+        }
+        if not signatures:
+            signatures = {f"exit_code={exit_code}"}
+        failures[command] = signatures
+    return failures
+
+
+def _filter_new_check_failures(
+    *,
+    baseline_check_results: list[dict[str, Any]],
+    current_check_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    baseline_index = _build_check_failure_index(baseline_check_results)
+    new_failures: list[dict[str, Any]] = []
+    for result in current_check_results:
+        exit_code = int(result.get("exit_code", 0))
+        if exit_code == 0:
+            continue
+        command = str(result.get("command", "")).strip() or "unknown command"
+        baseline_signatures = baseline_index.get(command)
+        if baseline_signatures is None:
+            new_failures.append(result)
+            continue
+        current_signatures = {
+            line for line in _extract_check_failure_signatures(result) if line.strip()
+        }
+        if not current_signatures:
+            current_signatures = {f"exit_code={exit_code}"}
+        if not current_signatures.issubset(baseline_signatures):
+            new_failures.append(result)
+    return new_failures
+
+
+def _extract_check_failure_signatures(result: dict[str, Any]) -> set[str]:
+    signatures: set[str] = set()
+    for key in ("stdout", "stderr"):
+        raw_text = _sanitize_log_text(str(result.get(key, "")))
+        for raw_line in raw_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if re.match(r"^Found \d+ errors? in \d+ files?", line):
+                continue
+            if re.match(r"^Success: no issues found", line):
+                continue
+            signatures.add(line)
+    return signatures
 
 
 def _build_check_feedback_prompt(
