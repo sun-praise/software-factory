@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+PR_BODY_PREVIEW_LIMIT = 600
+
+
 def build_autofix_prompt(
     repo: str,
     pr_number: int,
@@ -136,9 +139,9 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
     title = _safe_text(metadata.get("title"), "")
     base_ref = _safe_text(metadata.get("base_ref"), "")
     head_ref = _safe_text(metadata.get("head_ref"), "")
-    changed_files = _safe_text(metadata.get("changed_files"), "")
-    additions = _safe_text(metadata.get("additions"), "")
-    deletions = _safe_text(metadata.get("deletions"), "")
+    changed_files = _positive_int_text(metadata.get("changed_files"))
+    additions = _positive_int_text(metadata.get("additions"))
+    deletions = _positive_int_text(metadata.get("deletions"))
     body = _safe_text(metadata.get("body"), "")
 
     if title:
@@ -153,8 +156,8 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
         lines.append(f"- Diff Stats: +{additions or '0'} / -{deletions or '0'}")
     if body:
         compact_body = " ".join(body.split())
-        if len(compact_body) > 600:
-            compact_body = f"{compact_body[:600].rstrip()}..."
+        if len(compact_body) > PR_BODY_PREVIEW_LIMIT:
+            compact_body = f"{compact_body[:PR_BODY_PREVIEW_LIMIT].rstrip()}..."
         lines.append(f"- PR Body: {compact_body}")
 
 
@@ -163,3 +166,15 @@ def _safe_text(value: Any, fallback: str) -> str:
         return fallback
     text = str(value).strip()
     return text if text else fallback
+
+
+def _positive_int_text(value: Any) -> str:
+    if isinstance(value, bool) or value is None:
+        return ""
+    try:
+        normalized = int(str(value).strip())
+    except (TypeError, ValueError):
+        return ""
+    if normalized <= 0:
+        return ""
+    return str(normalized)
