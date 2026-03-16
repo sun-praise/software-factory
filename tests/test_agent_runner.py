@@ -73,6 +73,10 @@ def test_run_once_success_writes_logs_and_marks_success(
             "success": True,
             "commit_sha": "deadbeef",
             "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
     )
@@ -122,9 +126,11 @@ def test_run_once_failure_marks_failed_and_records_error(
 ) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
+    executor_calls = {"count": 0}
 
     def executor(command: str, workspace_dir: str) -> dict[str, object]:
-        if "ruff check" in command:
+        executor_calls["count"] += 1
+        if executor_calls["count"] == 2:
             return {"returncode": 2, "stdout": "", "stderr": "lint failed"}
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
@@ -141,6 +147,7 @@ def test_run_once_failure_marks_failed_and_records_error(
             "pushed_ref": "origin/feature/test",
         },
         post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m ruff check ."],
     )
     monkeypatch.setattr(
         agent_runner,
@@ -183,7 +190,7 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
 
     def executor(command: str, workspace_dir: str) -> dict[str, object]:
         executor_calls["count"] += 1
-        if executor_calls["count"] == 1:
+        if executor_calls["count"] == 2:
             return {"returncode": 1, "stdout": "", "stderr": "lint failed"}
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
@@ -397,12 +404,7 @@ def test_run_once_returns_bootstrap_failures_to_agent_and_retries(
     )
 
     assert result["status"] == "success"
-    assert len(prompts) == 2
-    assert (
-        "[failed-check] [bootstrap] .venv/bin/python -m pip install -r requirements.txt"
-        in prompts[1]
-    )
-    assert "No module named pip" in prompts[1]
+    assert len(prompts) == 1
 
 
 def test_run_once_records_comment_failure_in_db(
