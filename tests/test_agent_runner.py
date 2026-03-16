@@ -348,7 +348,7 @@ def test_run_once_fails_when_new_check_failures_are_introduced(
     assert "introduced" in prompts[1]
 
 
-def test_run_once_returns_bootstrap_failures_to_agent(
+def test_run_once_recovers_from_bootstrap_failures_before_checks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -409,11 +409,8 @@ def test_run_once_returns_bootstrap_failures_to_agent(
 
     assert result["status"] == "success"
     assert len(prompts) == 1
-    assert (
-        "[failed-check] [bootstrap] .venv/bin/python -m pip install -r requirements.txt"
-        in prompts[0]
-    )
-    assert "No module named pip" in prompts[0]
+    assert bootstrap_calls["count"] == 2
+    assert "No module named pip" not in prompts[0]
 
 
 def test_run_once_records_comment_failure_in_db(
