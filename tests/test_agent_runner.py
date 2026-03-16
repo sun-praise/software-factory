@@ -587,6 +587,9 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
 ) -> None:
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("fastapi\n", encoding="utf-8")
+    legacy_state = tmp_path / agent_runner.LEGACY_BOOTSTRAP_STATE_FILENAME
+    legacy_state.write_text("legacy", encoding="utf-8")
+    state_file = tmp_path / ".git" / "software-factory" / "bootstrap-state.json"
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -607,6 +610,9 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
 
     monkeypatch.setattr(agent_runner.sys, "executable", "/usr/bin/python3")
     monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner, "_bootstrap_state_file", lambda workspace: state_file
+    )
 
     commands = ["python -m ruff check ."]
     first = agent_runner._bootstrap_workspace_runtime(str(tmp_path), commands=commands)
@@ -616,6 +622,8 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
     assert first.skipped is False
     assert second.ok is True
     assert second.skipped is True
+    assert state_file.is_file()
+    assert legacy_state.exists() is False
     assert calls == [
         ["/usr/bin/python3", "-m", "venv", str(tmp_path / ".venv")],
         [
@@ -634,6 +642,49 @@ def test_bootstrap_workspace_runtime_installs_python_requirements_once_per_signa
             "ruff",
         ],
     ]
+
+
+def test_resolve_repo_git_dir_prefers_git_rev_parse_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = tmp_path / ".git"
+    expected.mkdir()
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_run_git_command",
+        lambda **kwargs: agent_runner.subprocess.CompletedProcess(
+            args=["git", "rev-parse", "--absolute-git-dir"],
+            returncode=0,
+            stdout=str(expected),
+            stderr="",
+        ),
+    )
+
+    assert agent_runner._resolve_repo_git_dir(tmp_path) == expected.resolve()
+
+
+def test_resolve_repo_git_dir_falls_back_to_worktree_git_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gitdir = tmp_path / ".git-dir"
+    gitdir.mkdir()
+    (tmp_path / ".git").write_text("gitdir: .git-dir\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_run_git_command",
+        lambda **kwargs: agent_runner.subprocess.CompletedProcess(
+            args=["git", "rev-parse", "--absolute-git-dir"],
+            returncode=1,
+            stdout="",
+            stderr="fatal: not a git repository",
+        ),
+    )
+
+    assert agent_runner._resolve_repo_git_dir(tmp_path) == gitdir.resolve()
 
 
 def test_run_once_schedules_retry_for_git_failure(
