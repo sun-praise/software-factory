@@ -1871,6 +1871,22 @@ def _prepare_openhands_workspace(
 
 
 def _cleanup_openhands_workspace(base_repo_dir: str, worktree_dir: str) -> None:
+    base_repo = Path(base_repo_dir).resolve()
+    worktree_path = Path(worktree_dir).resolve()
+    if worktree_path == base_repo:
+        logger.warning(
+            "refusing to clean workspace root directly: base_repo_dir=%s worktree_dir=%s",
+            base_repo_dir,
+            worktree_dir,
+        )
+        return
+    if not worktree_path.name.startswith(f"{WORKTREE_CMD_PREFIX}-"):
+        logger.warning(
+            "refusing to clean workspace with unexpected name: base_repo_dir=%s worktree_dir=%s",
+            base_repo_dir,
+            worktree_dir,
+        )
+        return
     try:
         _run_git_command(
             repo_dir=base_repo_dir,
