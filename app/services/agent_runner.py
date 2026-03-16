@@ -50,6 +50,8 @@ Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
 BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 600
 GIT_COMMAND_TIMEOUT_SECONDS = 30
+GITHUB_API_TIMEOUT_SECONDS = 10.0
+CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
 OPENHANDS_AGENT_MODE = "openhands"
@@ -1847,16 +1849,57 @@ def _prepare_run_workspace(
 
     remote_url = f"https://github.com/{repo}.git"
     cache_repo_dir = cache_root / f"{repo.replace('/', '__')}.git"
-    if not cache_repo_dir.exists():
-        result = _run_git_command(
-            repo_dir=str(cache_root),
-            args=["clone", "--mirror", remote_url, str(cache_repo_dir)],
-            timeout=PR_FETCH_TIMEOUT_SECONDS,
-        )
-        if result.returncode != 0:
-            details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
-            raise ValueError(f"git clone --mirror failed: {details}")
-    else:
+    _ensure_repo_cache(cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url)
+
+    run_workspace_dir = _create_run_workspace_clone(
+        runtime_path=runtime_path,
+        run_workspace_root=run_workspace_root,
+        cache_repo_dir=cache_repo_dir,
+        remote_url=remote_url,
+        run_id=run_id,
+    )
+
+    resolved_branch = branch
+    resolved_head_sha = head_sha
+    if pr_number > 0:
+        pr_branch, pr_head_sha = _fetch_pull_request_head(repo=repo, pr_number=pr_number)
+        resolved_branch = resolved_branch or pr_branch
+        resolved_head_sha = resolved_head_sha or pr_head_sha
+        if not resolved_branch:
+            shutil.rmtree(run_workspace_dir, ignore_errors=True)
+            raise ValueError("unable to resolve PR head branch")
+    _checkout_run_workspace_target(
+        run_workspace_dir=run_workspace_dir,
+        resolved_branch=resolved_branch,
+        resolved_head_sha=resolved_head_sha,
+    )
+
+    return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
+
+
+def _ensure_repo_cache(*, cache_root: Path, cache_repo_dir: Path, remote_url: str) -> None:
+    lock_dir = cache_root / f"{cache_repo_dir.name}.lock"
+    deadline = time.monotonic() + CACHE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise ValueError(f"timed out acquiring repo cache lock: {lock_dir}")
+            time.sleep(0.2)
+
+    try:
+        if not cache_repo_dir.exists():
+            result = _run_git_command(
+                repo_dir=str(cache_root),
+                args=["clone", "--mirror", remote_url, str(cache_repo_dir)],
+                timeout=PR_FETCH_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0:
+                _raise_workspace_git_error("git clone --mirror", result)
+            return
+
         _run_git_command(
             repo_dir=str(cache_repo_dir),
             args=["remote", "set-url", "origin", remote_url],
@@ -1868,9 +1911,19 @@ def _prepare_run_workspace(
             timeout=PR_FETCH_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
-            raise ValueError(f"git fetch cache failed: {details}")
+            _raise_workspace_git_error("git fetch cache", result)
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
 
+
+def _create_run_workspace_clone(
+    *,
+    runtime_path: Path,
+    run_workspace_root: Path,
+    cache_repo_dir: Path,
+    remote_url: str,
+    run_id: int,
+) -> str:
     run_workspace_dir = tempfile.mkdtemp(
         prefix=f"{WORKTREE_CMD_PREFIX}-{run_id}-", dir=str(run_workspace_root)
     )
@@ -1891,19 +1944,16 @@ def _prepare_run_workspace(
         raise ValueError(f"failed to create run workspace: {exc}") from exc
 
     if clone_result.returncode != 0:
-        shutil.rmtree(run_workspace_dir, ignore_errors=True)
-        details = clone_result.stderr.strip() or clone_result.stdout.strip() or "unknown git error"
-        raise ValueError(f"git clone failed: {details}")
+        _raise_workspace_git_error("git clone", clone_result, cleanup_dir=run_workspace_dir)
+    return run_workspace_dir
 
-    resolved_branch = branch
-    resolved_head_sha = head_sha
-    if pr_number > 0:
-        pr_branch, pr_head_sha = _fetch_pull_request_head(repo=repo, pr_number=pr_number)
-        resolved_branch = resolved_branch or pr_branch
-        resolved_head_sha = resolved_head_sha or pr_head_sha
-        if not resolved_branch:
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError("unable to resolve PR head branch")
+
+def _checkout_run_workspace_target(
+    *,
+    run_workspace_dir: str,
+    resolved_branch: str | None,
+    resolved_head_sha: str | None,
+) -> None:
     if resolved_branch:
         fetch_result = _run_git_command(
             repo_dir=run_workspace_dir,
@@ -1911,9 +1961,7 @@ def _prepare_run_workspace(
             timeout=PR_FETCH_TIMEOUT_SECONDS,
         )
         if fetch_result.returncode != 0:
-            details = fetch_result.stderr.strip() or fetch_result.stdout.strip() or "unknown git error"
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError(f"git fetch branch failed: {details}")
+            _raise_workspace_git_error("git fetch branch", fetch_result, cleanup_dir=run_workspace_dir)
         checkout_result = _run_git_command(
             repo_dir=run_workspace_dir,
             args=["checkout", "-B", resolved_branch, f"origin/{resolved_branch}"],
@@ -1926,21 +1974,29 @@ def _prepare_run_workspace(
                 timeout=GIT_COMMAND_TIMEOUT_SECONDS,
             )
         if checkout_result.returncode != 0:
-            details = checkout_result.stderr.strip() or checkout_result.stdout.strip() or "unknown git error"
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError(f"git checkout branch failed: {details}")
-    elif resolved_head_sha:
+            _raise_workspace_git_error("git checkout branch", checkout_result, cleanup_dir=run_workspace_dir)
+        return
+
+    if resolved_head_sha:
         checkout_result = _run_git_command(
             repo_dir=run_workspace_dir,
             args=["checkout", "--detach", resolved_head_sha],
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
         if checkout_result.returncode != 0:
-            details = checkout_result.stderr.strip() or checkout_result.stdout.strip() or "unknown git error"
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError(f"git checkout head failed: {details}")
+            _raise_workspace_git_error("git checkout head", checkout_result, cleanup_dir=run_workspace_dir)
 
-    return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
+
+def _raise_workspace_git_error(
+    action: str,
+    result: subprocess.CompletedProcess[str],
+    *,
+    cleanup_dir: str | None = None,
+) -> None:
+    if cleanup_dir is not None:
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+    details = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+    raise ValueError(f"{action} failed: {details}")
 
 
 def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
@@ -1975,39 +2031,98 @@ def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
 def _fetch_pull_request_head(*, repo: str, pr_number: int) -> tuple[str | None, str | None]:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
-    header_sets = [
-        {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "software-factory",
-            **({"Authorization": f"token {token}"} if token else {}),
-        },
-    ]
-    if token:
-        header_sets.append(
-            {
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "software-factory",
-            }
+    auth_headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "software-factory",
+        **({"Authorization": f"token {token}"} if token else {}),
+    }
+    anonymous_headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "software-factory",
+    }
+
+    auth_payload, auth_status, auth_error = _request_pull_request_payload(url=url, headers=auth_headers)
+    if auth_payload is not None:
+        return _parse_pull_request_head(auth_payload, repo=repo, pr_number=pr_number)
+
+    if auth_error is not None:
+        logger.warning(
+            "failed to fetch PR head with %s request: repo=%s pr=%s error=%s",
+            "authenticated" if token else "anonymous",
+            repo,
+            pr_number,
+            auth_error,
+        )
+    elif auth_status is not None:
+        logger.warning(
+            "failed to fetch PR head with %s request: repo=%s pr=%s status=%s",
+            "authenticated" if token else "anonymous",
+            repo,
+            pr_number,
+            auth_status,
         )
 
-    for headers in header_sets:
-        try:
-            response = httpx.get(url, headers=headers, timeout=10.0)
-        except httpx.RequestError:
-            continue
-        if response.status_code >= 400:
-            continue
-        try:
-            payload = response.json()
-        except ValueError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        head = payload.get("head")
-        if not isinstance(head, dict):
-            continue
-        return _safe_text(head.get("ref")) or None, _safe_text(head.get("sha")) or None
+    if token and auth_status in {401, 403}:
+        payload, status_code, error_message = _request_pull_request_payload(
+            url=url,
+            headers=anonymous_headers,
+        )
+        if payload is not None:
+            logger.warning(
+                "authenticated PR head request failed; anonymous fallback succeeded: repo=%s pr=%s status=%s",
+                repo,
+                pr_number,
+                auth_status,
+            )
+            return _parse_pull_request_head(payload, repo=repo, pr_number=pr_number)
+        if error_message is not None:
+            logger.warning(
+                "anonymous PR head fallback failed: repo=%s pr=%s error=%s",
+                repo,
+                pr_number,
+                error_message,
+            )
+        elif status_code is not None:
+            logger.warning(
+                "anonymous PR head fallback failed: repo=%s pr=%s status=%s",
+                repo,
+                pr_number,
+                status_code,
+            )
     return None, None
+
+
+def _request_pull_request_payload(
+    *,
+    url: str,
+    headers: dict[str, str],
+) -> tuple[dict[str, Any] | None, int | None, str | None]:
+    try:
+        response = httpx.get(url, headers=headers, timeout=GITHUB_API_TIMEOUT_SECONDS)
+    except httpx.RequestError as exc:
+        return None, None, str(exc)
+    if response.status_code >= 400:
+        return None, response.status_code, None
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        return None, response.status_code, f"invalid_json: {exc}"
+    if not isinstance(payload, dict):
+        return None, response.status_code, "invalid_payload_type"
+    return payload, response.status_code, None
+
+
+def _parse_pull_request_head(
+    payload: dict[str, Any],
+    *,
+    repo: str,
+    pr_number: int,
+) -> tuple[str | None, str | None]:
+    head = payload.get("head")
+    if not isinstance(head, dict):
+        logger.warning("missing PR head payload: repo=%s pr=%s", repo, pr_number)
+        return None, None
+    return _safe_text(head.get("ref")) or None, _safe_text(head.get("sha")) or None
 
 
 def _run_git_command(
