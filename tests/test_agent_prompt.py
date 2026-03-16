@@ -45,6 +45,40 @@ def test_build_autofix_prompt_contains_required_constraints_and_summaries() -> N
     assert "#24" in prompt
 
 
+def test_build_autofix_prompt_hides_zero_value_pr_stats() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "changed_files": 0,
+            "additions": 0,
+            "deletions": 0,
+        },
+    )
+
+    assert "Changed Files:" not in prompt
+    assert "Diff Stats:" not in prompt
+
+
+def test_build_autofix_prompt_shows_positive_pr_stats() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "changed_files": 3,
+            "additions": "5",
+            "deletions": 2,
+        },
+    )
+
+    assert "- Changed Files: 3" in prompt
+    assert "- Diff Stats: +5 / -2" in prompt
+
+
 def test_collect_check_commands_defaults_to_python_commands() -> None:
     assert collect_check_commands() == [
         "python -m pytest -q",
