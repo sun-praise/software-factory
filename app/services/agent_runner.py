@@ -28,7 +28,9 @@ from app.services.concurrency import acquire_pr_lock, release_pr_lock
 from app.services.git_ops import (
     checkout_branch,
     commit_and_push,
+    create_pull_request,
     ensure_head_sha,
+    post_issue_comment,
     post_pr_comment,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
@@ -39,6 +41,7 @@ from app.services.queue import (
     is_run_cancel_requested,
     mark_run_finished,
     touch_run_progress,
+    update_run_issue_pull_request,
     update_run_logs_path,
 )
 from app.services.retry import RetryConfig, schedule_retry
@@ -139,6 +142,10 @@ class RunnerOps:
     ensure_head_sha: Callable[[str, str], bool] = ensure_head_sha
     commit_and_push: Callable[..., dict[str, Any]] = commit_and_push
     post_pr_comment: Callable[[str, str, int, str], tuple[bool, str]] = post_pr_comment
+    post_issue_comment: Callable[[str, str, int, str], tuple[bool, str]] = (
+        post_issue_comment
+    )
+    create_pull_request: Callable[..., dict[str, Any]] = create_pull_request
     generate_fix: Callable[..., Any] = _noop
     apply_fix_plan: Callable[..., Any] = _noop
     build_autofix_prompt: Callable[..., str] = build_autofix_prompt
@@ -216,11 +223,22 @@ def run_once(
     worker_id = _safe_text(run.get("worker_id")) or settings.worker_id
 
     payload = _parse_payload(run.get("normalized_review_json"))
+    source_kind = _resolve_run_source_kind(run, payload)
+    issue_number = _coerce_positive_int(
+        run.get("issue_number")
+    ) or _coerce_positive_int(payload.get("issue_number"))
     head_sha = _safe_text(run.get("head_sha")) or _safe_text(payload.get("head_sha"))
     branch = _resolve_branch(conn, run, payload)
+    base_branch = _safe_text(run.get("base_branch")) or _safe_text(
+        payload.get("base_branch")
+    )
     project_type = _safe_text(payload.get("project_type"))
-    commit_message = _safe_text(payload.get("commit_message")) or (
-        f"fix: apply autofix updates for PR #{pr_number}"
+    commit_message = _safe_text(
+        payload.get("commit_message")
+    ) or _default_commit_message(
+        source_kind=source_kind,
+        pr_number=pr_number,
+        issue_number=issue_number,
     )
     feature_flags = resolve_agent_feature_flags(conn)
     manual_issue_error = _manual_issue_context_error(payload)
@@ -257,9 +275,11 @@ def run_once(
             },
             "comment_posted": False,
         }
-    pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
-    head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
-    branch = branch or _safe_text(pr_metadata.get("head_ref"))
+    pr_metadata: dict[str, Any] = {}
+    if source_kind == "pull_request" and pr_number > 0:
+        pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+        head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
+        branch = branch or _safe_text(pr_metadata.get("head_ref"))
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
@@ -335,14 +355,16 @@ def run_once(
         on_progress=_build_run_progress_callback(conn, run_id),
     )
     update_run_logs_path(conn, run_id, logger.logs_path)
-    lock_acquired = acquire_pr_lock(
-        conn=conn,
-        repo=repo,
-        pr_number=pr_number,
-        lock_owner=worker_id,
-        lock_ttl_seconds=settings.pr_lock_ttl_seconds,
-        run_id=run_id,
-    )
+    lock_acquired = True
+    if source_kind == "pull_request":
+        lock_acquired = acquire_pr_lock(
+            conn=conn,
+            repo=repo,
+            pr_number=pr_number,
+            lock_owner=worker_id,
+            lock_ttl_seconds=settings.pr_lock_ttl_seconds,
+            run_id=run_id,
+        )
     if not lock_acquired:
         logger.append("pr_lock: already held")
         logs_path = logger.logs_path
@@ -390,14 +412,27 @@ def run_once(
     agent_worktree: str | None = None
     if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
         try:
-            agent_workspace, agent_worktree, branch, head_sha = _prepare_run_workspace(
-                runtime_root=runtime_root,
-                repo=repo,
-                pr_number=pr_number,
-                run_id=run_id,
-                branch=branch,
-                head_sha=head_sha,
-            )
+            if source_kind == "issue":
+                agent_workspace, agent_worktree, branch, head_sha = (
+                    _prepare_issue_run_workspace(
+                        runtime_root=runtime_root,
+                        repo=repo,
+                        run_id=run_id,
+                        base_branch=base_branch,
+                        working_branch=branch,
+                    )
+                )
+            else:
+                agent_workspace, agent_worktree, branch, head_sha = (
+                    _prepare_run_workspace(
+                        runtime_root=runtime_root,
+                        repo=repo,
+                        pr_number=pr_number,
+                        run_id=run_id,
+                        branch=branch,
+                        head_sha=head_sha,
+                    )
+                )
             logger.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
             workspace_error = f"agent workspace init failed: {exc}"
@@ -431,6 +466,8 @@ def run_once(
         run_error_summary = None
         run_error_code: str | None = None
         commit_sha: str | None = None
+        created_pr_number: int | None = None
+        created_pr_url: str | None = None
         check_workspace = runtime_root
         baseline_check_workspace = agent_workspace
         try:
@@ -606,8 +643,57 @@ def run_once(
                     commit_message=commit_message,
                     active_ops=active_ops,
                     log_lines=log_lines,
+                    branch=branch,
+                    set_upstream=(source_kind == "issue"),
                 )
                 run_error_summary = preexisting_error_summary or git_error_summary
+                if status == "success" and source_kind == "issue":
+                    if not commit_sha:
+                        status = "failed"
+                        run_error_summary = _merge_error_summary(
+                            run_error_summary,
+                            "issue_run_no_code_changes",
+                        )
+                    else:
+                        created_pr_number, created_pr_url, pr_creation_error = (
+                            _create_issue_pull_request(
+                                conn=conn,
+                                run_id=run_id,
+                                repo_dir=check_workspace,
+                                repo=repo,
+                                issue_number=issue_number,
+                                base_branch=base_branch,
+                                working_branch=branch,
+                                payload=payload,
+                                active_ops=active_ops,
+                                logger=logger,
+                            )
+                        )
+                        if pr_creation_error:
+                            status = "failed"
+                            run_error_summary = _merge_error_summary(
+                                run_error_summary,
+                                pr_creation_error,
+                            )
+                        elif (
+                            created_pr_number is not None and created_pr_url is not None
+                        ):
+                            pr_number = created_pr_number
+                            increment_autofix_count(
+                                conn,
+                                repo,
+                                pr_number,
+                                branch=branch,
+                                head_sha=commit_sha,
+                            )
+                            mark_run_finished(
+                                conn=conn,
+                                run_id=run_id,
+                                status=status,
+                                commit_sha=commit_sha,
+                                error_summary=run_error_summary,
+                                logs_path=logger.logs_path,
+                            )
                 logger.flush()
                 break
 
@@ -625,7 +711,7 @@ def run_once(
             logger.append("agent_feedback: rerunning agent with failed check output")
 
         logs_path = logger.flush()
-        if status == "success":
+        if status == "success" and source_kind == "pull_request":
             increment_autofix_count(
                 conn,
                 repo,
@@ -641,7 +727,7 @@ def run_once(
                 error_summary=run_error_summary,
                 logs_path=logs_path,
             )
-        else:
+        elif status != "success":
             status, run_error_summary = _finish_failed_run(
                 conn,
                 run_id,
@@ -655,14 +741,15 @@ def run_once(
                 runtime_root=runtime_root,
                 worktree_dir=agent_worktree,
             )
-        release_pr_lock(
-            conn,
-            repo,
-            pr_number,
-            lock_owner=worker_id,
-            run_id=run_id,
-            force=False,
-        )
+        if source_kind == "pull_request" and lock_acquired:
+            release_pr_lock(
+                conn,
+                repo,
+                pr_number,
+                lock_owner=worker_id,
+                run_id=run_id,
+                force=False,
+            )
 
     if status == "retry_scheduled":
         return {
@@ -683,14 +770,26 @@ def run_once(
         error_summary=run_error_summary,
         logs_path=logs_path,
     )
-    posted, comment_message = active_ops.post_pr_comment(
-        runtime_root,
-        repo,
-        pr_number,
-        comment_body,
-    )
+    if created_pr_url:
+        comment_body = f"Created PR: {created_pr_url}\n{comment_body}"
+    if source_kind == "issue" and issue_number is not None:
+        posted, comment_message = active_ops.post_issue_comment(
+            runtime_root,
+            repo,
+            issue_number,
+            comment_body,
+        )
+        comment_error_prefix = "issue_comment_failed"
+    else:
+        posted, comment_message = active_ops.post_pr_comment(
+            runtime_root,
+            repo,
+            pr_number,
+            comment_body,
+        )
+        comment_error_prefix = "pr_comment_failed"
     if not posted:
-        comment_failure = f"pr_comment_failed: {comment_message}"
+        comment_failure = f"{comment_error_prefix}: {comment_message}"
         logger.append(comment_failure)
         run_error_summary = _merge_error_summary(run_error_summary, comment_failure)
         mark_run_finished(
@@ -718,10 +817,15 @@ def _finalize_git_changes(
     commit_message: str,
     active_ops: RunnerOps,
     log_lines: list[str],
+    *,
+    branch: str | None = None,
+    set_upstream: bool = False,
 ) -> tuple[str, str | None, str | None]:
     commit_result = active_ops.commit_and_push(
         repo_dir=repo_dir,
         message=commit_message,
+        branch=branch,
+        set_upstream=set_upstream,
     )
     if commit_result.get("success"):
         commit_sha = _safe_text(commit_result.get("commit_sha"))
@@ -1960,6 +2064,79 @@ def _prepare_run_workspace(
     return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
 
 
+def _prepare_issue_run_workspace(
+    *,
+    runtime_root: str,
+    repo: str,
+    run_id: int,
+    base_branch: str | None,
+    working_branch: str | None,
+) -> tuple[str, str, str, str | None]:
+    if not base_branch:
+        raise ValueError("issue run missing base branch")
+    if not working_branch:
+        raise ValueError("issue run missing working branch")
+
+    settings = get_settings()
+    runtime_path = Path(runtime_root).resolve()
+    cache_root = runtime_path / settings.repo_cache_base_dir
+    run_workspace_root = runtime_path / settings.run_workspace_base_dir
+    cache_root.mkdir(parents=True, exist_ok=True)
+    run_workspace_root.mkdir(parents=True, exist_ok=True)
+
+    remote_url = f"https://github.com/{repo}.git"
+    cache_repo_dir = cache_root / f"{repo.replace('/', '__')}.git"
+    _ensure_repo_cache(
+        cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url
+    )
+    run_workspace_dir = _create_run_workspace_clone(
+        runtime_path=runtime_path,
+        run_workspace_root=run_workspace_root,
+        cache_repo_dir=cache_repo_dir,
+        remote_url=remote_url,
+        run_id=run_id,
+    )
+    fetch_result = _run_git_command(
+        repo_dir=run_workspace_dir,
+        args=["fetch", "origin", base_branch],
+        timeout=PR_FETCH_TIMEOUT_SECONDS,
+    )
+    if fetch_result.returncode != 0:
+        _raise_workspace_git_error(
+            "git fetch base branch",
+            fetch_result,
+            cleanup_dir=run_workspace_dir,
+        )
+    checkout_base_result = _run_git_command(
+        repo_dir=run_workspace_dir,
+        args=["checkout", "-B", base_branch, f"origin/{base_branch}"],
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+    if checkout_base_result.returncode != 0:
+        _raise_workspace_git_error(
+            "git checkout base branch",
+            checkout_base_result,
+            cleanup_dir=run_workspace_dir,
+        )
+    checkout_branch_result = _run_git_command(
+        repo_dir=run_workspace_dir,
+        args=["checkout", "-B", working_branch],
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+    if checkout_branch_result.returncode != 0:
+        _raise_workspace_git_error(
+            "git checkout working branch",
+            checkout_branch_result,
+            cleanup_dir=run_workspace_dir,
+        )
+    return (
+        run_workspace_dir,
+        run_workspace_dir,
+        working_branch,
+        _current_head_sha(run_workspace_dir),
+    )
+
+
 def _ensure_repo_cache(
     *, cache_root: Path, cache_repo_dir: Path, remote_url: str
 ) -> None:
@@ -2079,6 +2256,17 @@ def _checkout_run_workspace_target(
             _raise_workspace_git_error(
                 "git checkout head", checkout_result, cleanup_dir=run_workspace_dir
             )
+
+
+def _current_head_sha(repo_dir: str) -> str | None:
+    result = _run_git_command(
+        repo_dir=repo_dir,
+        args=["rev-parse", "HEAD"],
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        return None
+    return _safe_text(result.stdout)
 
 
 def _raise_workspace_git_error(
@@ -2384,12 +2572,84 @@ def _build_pr_comment(
     return "\n".join(lines)
 
 
+def _create_issue_pull_request(
+    *,
+    conn: sqlite3.Connection,
+    run_id: int,
+    repo_dir: str,
+    repo: str,
+    issue_number: int | None,
+    base_branch: str | None,
+    working_branch: str | None,
+    payload: Mapping[str, Any],
+    active_ops: RunnerOps,
+    logger: RunLogger,
+) -> tuple[int | None, str | None, str | None]:
+    if issue_number is None:
+        return None, None, "pr_creation_failed: missing issue_number"
+    if not base_branch:
+        return None, None, "pr_creation_failed: missing base_branch"
+    if not working_branch:
+        return None, None, "pr_creation_failed: missing working_branch"
+
+    issue_title = _safe_text(payload.get("issue_title")) or f"Issue {issue_number}"
+    issue_url = (
+        _safe_text(payload.get("issue_url"))
+        or f"https://github.com/{repo}/issues/{issue_number}"
+    )
+    pr_title = f"fix: address issue #{issue_number} - {issue_title}"
+    pr_body = "\n".join(
+        [
+            f"Closes #{issue_number}",
+            "",
+            "## Summary",
+            f"- Autofix run #{run_id} implements the issue requirements from {issue_url}",
+            f"- Working branch: `{working_branch}`",
+        ]
+    )
+    pr_result = active_ops.create_pull_request(
+        repo_dir=repo_dir,
+        repo=repo,
+        base_branch=base_branch,
+        head_branch=working_branch,
+        title=pr_title,
+        body=pr_body,
+    )
+    if not pr_result.get("success"):
+        error = _safe_text(pr_result.get("error")) or "unknown_pr_creation_error"
+        logger.append(f"pr_create: failed error={error}")
+        return None, None, f"pr_creation_failed: {error}"
+
+    created_pr_number = _coerce_positive_int(pr_result.get("number"))
+    created_pr_url = _safe_text(pr_result.get("url"))
+    if created_pr_number is None or created_pr_url is None:
+        logger.append("pr_create: failed error=incomplete_pr_metadata")
+        return None, None, "pr_creation_failed: incomplete_pr_metadata"
+
+    update_run_issue_pull_request(
+        conn,
+        run_id,
+        pr_number=created_pr_number,
+        created_pr_url=created_pr_url,
+        working_branch=working_branch,
+    )
+    logger.append(
+        f"pr_create: success pr_number={created_pr_number} url={created_pr_url}"
+    )
+    return created_pr_number, created_pr_url, None
+
+
 def _resolve_branch(
     conn: sqlite3.Connection, run: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> str | None:
     from_payload = _safe_text(payload.get("branch"))
     if from_payload:
         return from_payload
+    working_branch = _safe_text(run.get("working_branch")) or _safe_text(
+        payload.get("working_branch")
+    )
+    if working_branch:
+        return working_branch
 
     repo = _safe_text(run.get("repo"))
     pr_number = run.get("pr_number")
@@ -2420,6 +2680,36 @@ def _parse_payload(value: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     return {}
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_run_source_kind(run: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
+    source_kind = _safe_text(run.get("source_kind")) or _safe_text(
+        payload.get("source_kind")
+    )
+    if source_kind == "issue":
+        return "issue"
+    return "pull_request"
+
+
+def _default_commit_message(
+    *,
+    source_kind: str,
+    pr_number: int,
+    issue_number: int | None,
+) -> str:
+    if source_kind == "issue" and issue_number is not None:
+        return f"fix: address issue #{issue_number}"
+    return f"fix: apply autofix updates for PR #{pr_number}"
 
 
 def _manual_issue_context_error(payload: Mapping[str, Any]) -> str | None:

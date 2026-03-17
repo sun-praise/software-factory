@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Sequence
 
@@ -62,6 +63,8 @@ def commit_and_push(
     message: str,
     remote: str = "origin",
     branch: str | None = None,
+    *,
+    set_upstream: bool = False,
 ) -> dict:
     add_result = _run_git(repo_dir, ["add", "-A"])
     if add_result.returncode != 0:
@@ -190,7 +193,11 @@ def commit_and_push(
                 "pushed_ref": None,
             }
 
-    push_result = _run_git(repo_dir, ["push", remote, target_branch])
+    push_args = ["push"]
+    if set_upstream:
+        push_args.append("-u")
+    push_args.extend([remote, target_branch])
+    push_result = _run_git(repo_dir, push_args)
     if push_result.returncode != 0:
         return {
             "success": False,
@@ -243,3 +250,97 @@ def post_pr_comment(
         output = result.stdout.strip() or "comment_posted"
         return True, output
     return False, _pick_message(result)
+
+
+def post_issue_comment(
+    repo_dir: str,
+    repo: str,
+    issue_number: int,
+    body: str,
+) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "comment",
+                str(issue_number),
+                "--repo",
+                repo,
+                "--body",
+                body,
+            ],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"gh issue comment timed out after {GH_COMMAND_TIMEOUT_SECONDS}s"
+    if result.returncode == 0:
+        output = result.stdout.strip() or "comment_posted"
+        return True, output
+    return False, _pick_message(result)
+
+
+def create_pull_request(
+    repo_dir: str,
+    repo: str,
+    base_branch: str,
+    head_branch: str,
+    title: str,
+    body: str,
+) -> dict[str, str | int | None | bool]:
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repo,
+                "--base",
+                base_branch,
+                "--head",
+                head_branch,
+                "--title",
+                title,
+                "--body",
+                body,
+            ],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "number": None,
+            "url": None,
+            "error": f"gh pr create timed out after {GH_COMMAND_TIMEOUT_SECONDS}s",
+        }
+    if result.returncode != 0:
+        return {
+            "success": False,
+            "number": None,
+            "url": None,
+            "error": _pick_message(result),
+        }
+
+    url = (
+        result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+    )
+    number = None
+    if url:
+        match = re.search(r"/pull/(\d+)(?:$|[/?#])", url)
+        if match is not None:
+            number = int(match.group(1))
+    return {
+        "success": True,
+        "number": number,
+        "url": url or None,
+        "error": None,
+    }

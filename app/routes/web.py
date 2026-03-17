@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from json import JSONDecodeError
@@ -39,7 +40,7 @@ class ParsedIssueTarget:
     repo: str
     owner: str
     repo_name: str
-    pr_number: int
+    pr_number: int | None
     issue_number: int | None
     source_url: str
     source_fragment: str
@@ -52,6 +53,24 @@ class ManualIssueContext:
     path: str | None = None
     line: int | None = None
     source_url: str | None = None
+
+
+@dataclass(frozen=True)
+class GitHubIssueDetails:
+    issue_number: int
+    title: str
+    body: str
+    html_url: str
+
+
+def _slugify_branch_suffix(value: str, *, fallback: str = "work") -> str:
+    slug = value.strip().lower()
+    slug = slug.replace("'", "")
+    slug = "".join(ch if ch.isalnum() else "-" for ch in slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    if not slug:
+        return fallback
+    return slug[:40].rstrip("-") or fallback
 
 
 def _normalize_page(raw_value: str | None, *, default: int = 1) -> int:
@@ -272,7 +291,7 @@ def _parse_issue_url(url: str) -> ParsedIssueTarget:
         repo=repo,
         owner=owner,
         repo_name=repo_name,
-        pr_number=resolved_pr_number or issue_number,
+        pr_number=resolved_pr_number,
         issue_number=issue_number,
         source_url=normalized_url,
         source_fragment=fragment,
@@ -409,14 +428,44 @@ def _format_manual_issue_context(
     return "\n".join(part for part in parts if part)
 
 
-def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
+def _fetch_issue_details(target: ParsedIssueTarget) -> GitHubIssueDetails:
     issue_number = target.issue_number or target.pr_number
+    if issue_number is None:
+        raise ValueError("Issue details are unavailable without an issue number.")
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/issues/{issue_number}",
         not_found_message="Issue not found or unavailable.",
     )
     title = _string_or_empty(payload.get("title"))
     body = _string_or_empty(payload.get("body"))
+    return GitHubIssueDetails(
+        issue_number=issue_number,
+        title=title,
+        body=body,
+        html_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+    )
+
+
+def _fetch_repo_default_branch(repo: str) -> str:
+    payload = _github_get_json(
+        f"https://api.github.com/repos/{repo}",
+        not_found_message="Repository not found or unavailable.",
+    )
+    default_branch = _string_or_empty(payload.get("default_branch"))
+    if not default_branch:
+        raise ValueError("Repository default branch is unavailable.")
+    return default_branch
+
+
+def _build_issue_working_branch(issue_number: int, issue_title: str) -> str:
+    suffix = _slugify_branch_suffix(issue_title, fallback=f"issue-{issue_number}")
+    return f"autofix/issue-{issue_number}-{suffix}"
+
+
+def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
+    details = _fetch_issue_details(target)
+    title = details.title
+    body = details.body
     if not title and not body:
         raise ValueError(
             "GitHub issue has no body text. Add a description to the manual issue."
@@ -428,7 +477,7 @@ def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
             title=title,
             body=context_body,
         ),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+        source_url=details.html_url,
     )
 
 
@@ -485,6 +534,8 @@ def _fetch_review_comment_context(
 def _fetch_review_context(
     target: ParsedIssueTarget, review_id: int
 ) -> ManualIssueContext:
+    if target.pr_number is None:
+        raise ValueError("Pull request review lookup requires a pull request number.")
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews/{review_id}",
         not_found_message="GitHub pull request review not found or unavailable.",
@@ -543,16 +594,19 @@ def _resolve_manual_issue_context(
 
 
 def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, Any]:
+    pr_number = target.pr_number
+    if pr_number is None:
+        raise ValueError("Pull request feedback lookup requires a pull request number.")
     review_comments = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/comments?per_page=100",
+        f"https://api.github.com/repos/{target.repo}/pulls/{pr_number}/comments?per_page=100",
         not_found_message="Pull request review comments not found or unavailable.",
     )
     issue_comments = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/issues/{target.pr_number}/comments?per_page=100",
+        f"https://api.github.com/repos/{target.repo}/issues/{pr_number}/comments?per_page=100",
         not_found_message="Pull request issue comments not found or unavailable.",
     )
     reviews = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews?per_page=100",
+        f"https://api.github.com/repos/{target.repo}/pulls/{pr_number}/reviews?per_page=100",
         not_found_message="Pull request reviews not found or unavailable.",
     )
 
@@ -578,7 +632,7 @@ def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, 
 
     normalized = normalize_review_events(
         repo=target.repo,
-        pr_number=target.pr_number,
+        pr_number=pr_number,
         events=events,
         head_sha=None,
     )
@@ -619,6 +673,10 @@ def _build_issue_normalized_review(
     target: ParsedIssueTarget,
     description: str | None,
     resolved_context: ManualIssueContext | None,
+    source_kind: str,
+    issue_title: str | None,
+    base_branch: str | None,
+    working_branch: str | None,
 ) -> dict[str, Any]:
     issue_parts = [f"Manual issue submission: {target.source_url}"]
     if target.issue_number is not None:
@@ -656,6 +714,11 @@ def _build_issue_normalized_review(
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
         "issue_number": target.issue_number,
+        "issue_title": issue_title,
+        "source_kind": source_kind,
+        "base_branch": base_branch,
+        "working_branch": working_branch,
+        "issue_url": target.source_url,
     }
 
 
@@ -669,6 +732,10 @@ def _enqueue_issue_fix(
     remaining_quota = None
     idempotency_key = None
     queue_status = "not_queued"
+    source_kind = "pull_request"
+    base_branch: str | None = None
+    working_branch: str | None = None
+    issue_title: str | None = None
 
     if target.url_kind == "pull" and not target.source_fragment and description is None:
         normalized_review = _fetch_pull_request_feedback_review(target)
@@ -678,7 +745,17 @@ def _enqueue_issue_fix(
             raise ValueError(
                 "No actionable pull request comments were found. Provide a specific comment link or a manual issue description."
             )
+        normalized_review["source_kind"] = "pull_request"
     else:
+        if target.pr_number is None and target.issue_number is not None:
+            source_kind = "issue"
+            issue_details = _fetch_issue_details(target)
+            issue_title = issue_details.title or f"Issue {issue_details.issue_number}"
+            base_branch = _fetch_repo_default_branch(target.repo)
+            working_branch = _build_issue_working_branch(
+                issue_details.issue_number,
+                issue_title,
+            )
         if resolved_context is None and description is None:
             raise ValueError(
                 "Please provide a specific GitHub comment/issue link or add a description."
@@ -687,6 +764,10 @@ def _enqueue_issue_fix(
             target=target,
             description=description,
             resolved_context=resolved_context,
+            source_kind=source_kind,
+            issue_title=issue_title,
+            base_branch=base_branch,
+            working_branch=working_branch,
         )
     head_sha = None
 
@@ -694,39 +775,46 @@ def _enqueue_issue_fix(
     normalized_review["review_batch_id"] = review_batch_id
     idempotency_key = build_task_idempotency_key(
         repo=target.repo,
-        pr_number=target.pr_number,
+        pr_number=target.pr_number or 0,
         head_sha=head_sha,
         review_batch_id=review_batch_id,
+        source_kind=source_kind,
+        issue_number=target.issue_number,
     )
 
     with connect_db() as conn:
-        if head_sha:
+        if head_sha and target.pr_number is not None:
             reset_autofix_count_on_sha_change(
                 conn,
                 target.repo,
                 target.pr_number,
                 head_sha,
             )
-        ensure_pull_request_row(
-            conn,
-            target.repo,
-            target.pr_number,
-            branch=None,
-            head_sha=head_sha,
-        )
-        remaining_quota = get_remaining_autofix_quota(
-            conn, target.repo, target.pr_number
-        )
+        if source_kind == "pull_request" and target.pr_number is not None:
+            ensure_pull_request_row(
+                conn,
+                target.repo,
+                target.pr_number,
+                branch=None,
+                head_sha=head_sha,
+            )
+            remaining_quota = get_remaining_autofix_quota(
+                conn, target.repo, target.pr_number
+            )
         if remaining_quota == 0:
             queue_status = "autofix_limit_reached"
         else:
             run_id = enqueue_autofix_run(
                 conn=conn,
                 repo=target.repo,
-                pr_number=target.pr_number,
+                pr_number=target.pr_number or 0,
                 head_sha=head_sha,
                 normalized_review_json=normalized_review,
                 trigger_source="manual_issue",
+                source_kind=source_kind,
+                issue_number=target.issue_number,
+                base_branch=base_branch,
+                working_branch=working_branch,
                 idempotency_key=idempotency_key,
                 max_attempts=get_settings().max_retry_attempts,
             )
@@ -738,11 +826,14 @@ def _enqueue_issue_fix(
         "repo": target.repo,
         "pr_number": target.pr_number,
         "issue_number": target.issue_number,
+        "source_kind": source_kind,
         "queue_status": queue_status,
         "queued_run_id": run_id,
         "idempotency_key": idempotency_key,
         "remaining_quota": remaining_quota,
         "head_sha": head_sha,
+        "base_branch": base_branch,
+        "working_branch": working_branch,
     }
 
 

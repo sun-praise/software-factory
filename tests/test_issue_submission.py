@@ -39,6 +39,17 @@ def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
             source_url=target.source_url,
         ),
     )
+    monkeypatch.setattr(
+        web,
+        "_fetch_issue_details",
+        lambda target: web.GitHubIssueDetails(
+            issue_number=42,
+            title="Broken issue",
+            body="Please fix it.",
+            html_url=target.source_url,
+        ),
+    )
+    monkeypatch.setattr(web, "_fetch_repo_default_branch", lambda repo: "main")
 
     payload = {
         "url": "https://github.com/acme/widgets/issues/42",
@@ -50,17 +61,24 @@ def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["queue_status"] == "queued"
+    assert data["source_kind"] == "issue"
+    assert data["pr_number"] is None
     assert isinstance(data["queued_run_id"], int)
     run_id = data["queued_run_id"]
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT trigger_source, normalized_review_json FROM autofix_runs WHERE id = ?",
+            "SELECT trigger_source, pr_number, source_kind, issue_number, base_branch, working_branch, normalized_review_json FROM autofix_runs WHERE id = ?",
             (run_id,),
         ).fetchone()
 
     assert row is not None
     assert str(row["trigger_source"]) == "manual_issue"
+    assert row["pr_number"] == 0
+    assert row["source_kind"] == "issue"
+    assert row["issue_number"] == 42
+    assert row["base_branch"] == "main"
+    assert str(row["working_branch"]).startswith("autofix/issue-42-")
 
 
 def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
@@ -238,6 +256,17 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
             source_url=target.source_url,
         ),
     )
+    monkeypatch.setattr(
+        web,
+        "_fetch_issue_details",
+        lambda target: web.GitHubIssueDetails(
+            issue_number=99,
+            title="Broken issue",
+            body="Please fix it.",
+            html_url=target.source_url,
+        ),
+    )
+    monkeypatch.setattr(web, "_fetch_repo_default_branch", lambda repo: "main")
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
 
@@ -247,8 +276,9 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["queue_status"] == "queued"
-    assert data["pr_number"] == 99
+    assert data["pr_number"] is None
     assert data["issue_number"] == 99
+    assert data["source_kind"] == "issue"
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -260,6 +290,8 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
     assert str(row["trigger_source"]) == "manual_issue"
     normalized = json.loads(str(row["normalized_review_json"]))
     assert normalized["must_fix"][0]["context_resolved"] is True
+    assert normalized["source_kind"] == "issue"
+    assert normalized["base_branch"] == "main"
 
 
 def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(
@@ -290,6 +322,7 @@ def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(
     data = response.json()
     assert data["pr_number"] == 88
     assert data["issue_number"] == 99
+    assert data["source_kind"] == "pull_request"
 
 
 def test_submit_issue_api_rejects_pull_request_url_without_actionable_feedback(

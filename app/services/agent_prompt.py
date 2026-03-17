@@ -16,19 +16,40 @@ def build_autofix_prompt(
     must_fix = _as_issue_list(normalized_review.get("must_fix"))
     should_fix = _as_issue_list(normalized_review.get("should_fix"))
     metadata = pr_metadata or {}
+    source_kind = _safe_text(normalized_review.get("source_kind"), "pull_request")
+    issue_number = _positive_int_text(normalized_review.get("issue_number"))
+    issue_title = _safe_text(normalized_review.get("issue_title"), "")
+    base_branch = _safe_text(normalized_review.get("base_branch"), "")
+    working_branch = _safe_text(normalized_review.get("working_branch"), "")
 
     must_fix_summary = _format_issue_summary("must_fix", must_fix)
     should_fix_summary = _format_issue_summary("should_fix", should_fix)
 
-    lines = [
-        "You are an autofix agent working on a pull request.",
-        "",
-        "Context:",
-        f"- Repository: {repo}",
-        f"- Pull Request: #{pr_number}",
-        f"- Head SHA: {head_sha}",
-    ]
-    _append_pr_metadata(lines, metadata)
+    if source_kind == "issue" and issue_number:
+        lines = [
+            "You are an autofix agent implementing a standalone GitHub issue and preparing a new pull request.",
+            "",
+            "Context:",
+            f"- Repository: {repo}",
+            f"- Issue: #{issue_number}",
+            f"- Head SHA: {head_sha}",
+        ]
+        if issue_title:
+            lines.append(f"- Issue Title: {issue_title}")
+        if base_branch:
+            lines.append(f"- Base Branch: {base_branch}")
+        if working_branch:
+            lines.append(f"- Working Branch: {working_branch}")
+    else:
+        lines = [
+            "You are an autofix agent working on a pull request.",
+            "",
+            "Context:",
+            f"- Repository: {repo}",
+            f"- Pull Request: #{pr_number}",
+            f"- Head SHA: {head_sha}",
+        ]
+        _append_pr_metadata(lines, metadata)
     lines.extend(
         [
             "",

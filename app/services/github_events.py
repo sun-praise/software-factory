@@ -58,7 +58,13 @@ def build_task_idempotency_key(
     pr_number: int,
     head_sha: str | None,
     review_batch_id: str,
+    *,
+    source_kind: str = "pull_request",
+    issue_number: int | None = None,
 ) -> str:
+    if source_kind == "issue":
+        stable_issue_number = issue_number or 0
+        return f"task:{repo}:issue:{stable_issue_number}:{review_batch_id}"
     stable_head_sha = (head_sha or "unknown").strip() or "unknown"
     return f"task:{repo}:{pr_number}:{stable_head_sha}:{review_batch_id}"
 
