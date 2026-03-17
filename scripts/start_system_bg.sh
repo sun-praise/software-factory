@@ -28,7 +28,7 @@ WEB_LOG_FILE="${LOG_DIR}/web.log"
 WORKER_LOG_FILE="${LOG_DIR}/worker.log"
 
 HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-8001}"
 DB_PATH="${DB_PATH:-${REPO_ROOT}/data/software_factory.db}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-${REPO_ROOT}}"
 WORKER_INTERVAL_SECONDS="${WORKER_INTERVAL_SECONDS:-2}"
@@ -56,7 +56,7 @@ Environment overrides:
   LOAD_ENV_FILE=0            Skip sourcing ${REPO_ROOT}/.env
   PYTHON_BIN=/path/python    Python interpreter to use
   HOST=127.0.0.1             Web bind host
-  PORT=8000                  Web bind port
+  PORT=8001                  Web bind port
   DB_PATH=/path/app.db       Shared SQLite path for web and worker
   WORKSPACE_DIR=/path/repo   Worker runtime root
   WORKER_INTERVAL_SECONDS=2  Worker polling interval
