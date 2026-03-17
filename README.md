@@ -163,7 +163,7 @@ python scripts/init_db.py
 4) 启动服务
 
 ```bash
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
 后台快速启动 `web + worker`：
@@ -189,22 +189,22 @@ chmod +x scripts/start_system_bg.sh
 
 常用页面：
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/runs`
-- `http://127.0.0.1:8000/runs/demo-run`
+- `http://127.0.0.1:8001/`
+- `http://127.0.0.1:8001/runs`
+- `http://127.0.0.1:8001/runs/demo-run`
 
 ## 开发与调试命令
 
 健康检查：
 
 ```bash
-curl -i http://127.0.0.1:8000/healthz
+curl -i http://127.0.0.1:8001/healthz
 ```
 
 模拟 Hook 事件（`/hook-events`）：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8000/hook-events \
+curl -i -X POST http://127.0.0.1:8001/hook-events \
   -H 'content-type: application/json' \
   -d '{"event":"UserPromptSubmit","session_id":"sess_demo","repo":"owner/repo","branch":"feat/demo","cwd":"/tmp/software-factory","timestamp":"2026-03-12T12:00:00Z"}'
 ```
@@ -214,7 +214,7 @@ curl -i -X POST http://127.0.0.1:8000/hook-events \
 模拟 GitHub Webhook（`/github/webhook`）：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8000/github/webhook \
+curl -i -X POST http://127.0.0.1:8001/github/webhook \
   -H 'content-type: application/json' \
   -H 'x-github-event: pull_request_review' \
   -d '{"action":"submitted","review":{"id":123},"pull_request":{"number":10}}'
