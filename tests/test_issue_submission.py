@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from json import JSONDecodeError
 import os
 import sqlite3
@@ -22,11 +23,25 @@ def _setup_db(tmp_path):
     return db_path
 
 
-def test_submit_issue_api_queues_autofix_run(tmp_path) -> None:
+def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
     db_path = _setup_db(tmp_path)
 
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
+            source_url=target.source_url,
+        ),
+    )
+
     payload = {
-        "url": "https://github.com/acme/widgets/pull/42",
+        "url": "https://github.com/acme/widgets/issues/42",
     }
 
     with TestClient(app) as client:
@@ -48,8 +63,86 @@ def test_submit_issue_api_queues_autofix_run(tmp_path) -> None:
     assert str(row["trigger_source"]) == "manual_issue"
 
 
+def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_fetch_pull_request_feedback_review",
+        lambda target: {
+            "repo": target.repo,
+            "pr_number": target.pr_number,
+            "head_sha": None,
+            "must_fix": [
+                {
+                    "source": "pull_request_review_comment",
+                    "path": "app/routes/web.py",
+                    "line": 42,
+                    "text": "Fix the review finding",
+                    "severity": "P1",
+                }
+            ],
+            "should_fix": [],
+            "ignore": [],
+            "summary": "1 blocking issues, 0 suggestions, 0 ignored",
+            "project_type": "python",
+            "issue_number": None,
+            "manual_issue_source_url": target.source_url,
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/issues",
+            json={"url": "https://github.com/acme/widgets/pull/42"},
+        )
+
+    assert response.status_code == 200
+    run_id = response.json()["queued_run_id"]
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT normalized_review_json FROM autofix_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+
+    assert row is not None
+    normalized = json.loads(str(row["normalized_review_json"]))
+    assert normalized["must_fix"][0]["text"] == "Fix the review finding"
+    assert normalized["must_fix"][0]["path"] == "app/routes/web.py"
+
+
 def test_submit_issue_api_duplicates_are_deduplicated(tmp_path) -> None:
     _setup_db(tmp_path)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        web,
+        "_fetch_pull_request_feedback_review",
+        lambda target: {
+            "repo": target.repo,
+            "pr_number": target.pr_number,
+            "head_sha": None,
+            "must_fix": [
+                {
+                    "source": "pull_request_review_comment",
+                    "path": "app/routes/web.py",
+                    "line": 42,
+                    "text": "Fix the review finding",
+                    "severity": "P1",
+                }
+            ],
+            "should_fix": [],
+            "ignore": [],
+            "summary": "1 blocking issues, 0 suggestions, 0 ignored",
+            "project_type": "python",
+            "issue_number": None,
+            "manual_issue_source_url": target.source_url,
+        },
+    )
 
     payload = {
         "url": "https://github.com/acme/widgets/pull/42",
@@ -63,10 +156,37 @@ def test_submit_issue_api_duplicates_are_deduplicated(tmp_path) -> None:
     assert second.status_code == 200
     assert first.json()["queue_status"] == "queued"
     assert second.json()["queue_status"] == "duplicate_task"
+    monkeypatch.undo()
 
 
 def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
     _setup_db(tmp_path)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        web,
+        "_fetch_pull_request_feedback_review",
+        lambda target: {
+            "repo": target.repo,
+            "pr_number": target.pr_number,
+            "head_sha": None,
+            "must_fix": [
+                {
+                    "source": "pull_request_review_comment",
+                    "path": None,
+                    "line": None,
+                    "text": "Fix",
+                    "severity": "P1",
+                }
+            ],
+            "should_fix": [],
+            "ignore": [],
+            "summary": "1 blocking issues, 0 suggestions, 0 ignored",
+            "project_type": "python",
+            "issue_number": None,
+            "manual_issue_source_url": target.source_url,
+        },
+    )
 
     db_path = tmp_path / "software_factory.db"
     with sqlite3.connect(db_path) as conn:
@@ -88,6 +208,7 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["queue_status"] == "autofix_limit_reached"
+    monkeypatch.undo()
 
 
 def test_submit_issue_api_rejects_invalid_links(tmp_path) -> None:
@@ -109,6 +230,14 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
         "_resolve_pr_number_from_issue",
         lambda *, owner, repo_name, issue_number: None,
     )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
+            source_url=target.source_url,
+        ),
+    )
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
 
@@ -129,15 +258,27 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
 
     assert row is not None
     assert str(row["trigger_source"]) == "manual_issue"
+    normalized = json.loads(str(row["normalized_review_json"]))
+    assert normalized["must_fix"][0]["context_resolved"] is True
 
 
-def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(tmp_path, monkeypatch) -> None:
+def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(
+    tmp_path, monkeypatch
+) -> None:
     _setup_db(tmp_path)
 
     monkeypatch.setattr(
         web,
         "_resolve_pr_number_from_issue",
         lambda *, owner, repo_name, issue_number: 88,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nPlease fix it.",
+            source_url=target.source_url,
+        ),
     )
 
     payload = {"url": "https://github.com/acme/widgets/issues/99"}
@@ -149,6 +290,39 @@ def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(tmp_path,
     data = response.json()
     assert data["pr_number"] == 88
     assert data["issue_number"] == 99
+
+
+def test_submit_issue_api_rejects_pull_request_url_without_actionable_feedback(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_fetch_pull_request_feedback_review",
+        lambda target: {
+            "repo": target.repo,
+            "pr_number": target.pr_number,
+            "head_sha": None,
+            "must_fix": [],
+            "should_fix": [],
+            "ignore": [],
+            "summary": "0 blocking issues, 0 suggestions, 0 ignored",
+            "project_type": "python",
+            "issue_number": None,
+            "manual_issue_source_url": target.source_url,
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/issues",
+            json={"url": "https://github.com/acme/widgets/pull/42"},
+        )
+
+    assert response.status_code == 400
+    assert "No actionable pull request comments" in response.json()["detail"]
 
 
 def test_resolve_pr_number_from_issue_rejects_invalid_json(monkeypatch) -> None:

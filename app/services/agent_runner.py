@@ -57,7 +57,9 @@ OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
 RUN_CANCELLED_CODE = "cancelled"
-BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
+BOOTSTRAP_STATE_DIRNAME = "software-factory"
+BOOTSTRAP_STATE_FILENAME = "bootstrap-state.json"
+LEGACY_BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
 PR_FETCH_TIMEOUT_SECONDS = 30
 
 _REDACTION_PATTERNS = (
@@ -221,6 +223,40 @@ def run_once(
         f"fix: apply autofix updates for PR #{pr_number}"
     )
     feature_flags = resolve_agent_feature_flags(conn)
+    manual_issue_error = _manual_issue_context_error(payload)
+    if manual_issue_error:
+        logs_path = _write_logs(
+            workspace_dir=runtime_root,
+            run_id=run_id,
+            lines=[
+                f"run_id={run_id}",
+                f"repo={repo}",
+                f"pr_number={pr_number}",
+                manual_issue_error,
+            ],
+        )
+        mark_run_finished(
+            conn=conn,
+            run_id=run_id,
+            status="failed",
+            error_summary=manual_issue_error,
+            logs_path=logs_path,
+            last_error_code="manual_issue_context_missing",
+        )
+        return {
+            "run_id": run_id,
+            "status": "failed",
+            "error_summary": manual_issue_error,
+            "logs_path": logs_path,
+            "commit_sha": None,
+            "checks": {
+                "overall_status": "failed",
+                "passed_count": 0,
+                "failed_count": 0,
+                "failed_commands": [],
+            },
+            "comment_posted": False,
+        }
     pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
     head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
@@ -1653,7 +1689,7 @@ def _render_claude_stream_record(
     return [], None, None, False
 
 
-def _render_claude_assistant_event(payload: dict[str, Any]) -> list[str]:
+def _render_claude_assistant_event(payload: Mapping[str, Any]) -> list[str]:
     message = payload.get("message")
     if not isinstance(message, dict):
         return []
@@ -2386,6 +2422,27 @@ def _parse_payload(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _manual_issue_context_error(payload: Mapping[str, Any]) -> str | None:
+    must_fix = payload.get("must_fix")
+    if not isinstance(must_fix, list):
+        return None
+    for item in must_fix:
+        if not isinstance(item, Mapping):
+            continue
+        if _safe_text(item.get("source")) != "manual_issue":
+            continue
+        if item.get("context_resolved") is True:
+            continue
+        text = _safe_text(item.get("text")) or ""
+        if "Operator note:" in text or "GitHub context:" in text:
+            continue
+        return (
+            "manual_issue_context_missing: provide a specific GitHub comment/issue link "
+            "or store explicit manual issue text before running autofix"
+        )
+    return None
+
+
 def _default_executor(
     command: str, workspace_dir: str
 ) -> subprocess.CompletedProcess[str]:
@@ -2431,10 +2488,14 @@ def _bootstrap_workspace_runtime(
     if plan is None:
         return WorkspaceBootstrapResult(ok=True, skipped=True)
 
-    state_file = workspace / BOOTSTRAP_STATE_FILENAME
+    legacy_state_file = workspace / LEGACY_BOOTSTRAP_STATE_FILENAME
+    state_file = _bootstrap_state_file(workspace)
+    _clear_bootstrap_state(legacy_state_file)
     signature = _compute_bootstrap_signature(plan.manifest_paths, plan.signature_inputs)
-    if _bootstrap_state_matches(state_file, kind=plan.kind, signature=signature) and (
-        _workspace_bootstrap_ready(plan)
+    if (
+        state_file is not None
+        and _bootstrap_state_matches(state_file, kind=plan.kind, signature=signature)
+        and (_workspace_bootstrap_ready(plan))
     ):
         return WorkspaceBootstrapResult(ok=True, skipped=True, kind=plan.kind)
 
@@ -2451,7 +2512,8 @@ def _bootstrap_workspace_runtime(
                 timeout=BOOTSTRAP_COMMAND_TIMEOUT_SECONDS,
             )
         except FileNotFoundError as exc:
-            _clear_bootstrap_state(state_file)
+            if state_file is not None:
+                _clear_bootstrap_state(state_file)
             details.append(
                 {
                     "command": command_text,
@@ -2477,7 +2539,8 @@ def _bootstrap_workspace_runtime(
             }
         )
         if result.returncode != 0:
-            _clear_bootstrap_state(state_file)
+            if state_file is not None:
+                _clear_bootstrap_state(state_file)
             return WorkspaceBootstrapResult(
                 ok=False,
                 skipped=False,
@@ -2487,7 +2550,8 @@ def _bootstrap_workspace_runtime(
             )
 
     if not _workspace_bootstrap_ready(plan):
-        _clear_bootstrap_state(state_file)
+        if state_file is not None:
+            _clear_bootstrap_state(state_file)
         return WorkspaceBootstrapResult(
             ok=False,
             skipped=False,
@@ -2499,7 +2563,8 @@ def _bootstrap_workspace_runtime(
             ),
         )
 
-    _write_bootstrap_state(state_file, kind=plan.kind, signature=signature)
+    if state_file is not None:
+        _write_bootstrap_state(state_file, kind=plan.kind, signature=signature)
     return WorkspaceBootstrapResult(
         ok=True,
         skipped=False,
@@ -2659,6 +2724,57 @@ def _collect_python_check_modules(check_commands: list[str]) -> tuple[str, ...]:
     return tuple(modules)
 
 
+def _bootstrap_state_file(workspace: Path) -> Path | None:
+    git_dir = _resolve_repo_git_dir(workspace)
+    if git_dir is None:
+        return None
+    return git_dir / BOOTSTRAP_STATE_DIRNAME / BOOTSTRAP_STATE_FILENAME
+
+
+def _resolve_repo_git_dir(workspace: Path) -> Path | None:
+    try:
+        result = _run_git_command(
+            repo_dir=str(workspace),
+            args=["rev-parse", "--absolute-git-dir"],
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+
+    if result is not None and result.returncode == 0:
+        git_dir = result.stdout.strip()
+        if git_dir:
+            return Path(git_dir).resolve()
+
+    return _resolve_repo_git_dir_from_workspace_entry(workspace)
+
+
+def _resolve_repo_git_dir_from_workspace_entry(workspace: Path) -> Path | None:
+    git_entry = workspace / ".git"
+    if git_entry.is_dir():
+        return git_entry.resolve()
+    if not git_entry.is_file():
+        return None
+
+    try:
+        git_text = git_entry.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not git_text.startswith("gitdir:"):
+        return None
+
+    git_dir_text = git_text.split("gitdir:", 1)[1].strip()
+    if not git_dir_text:
+        return None
+
+    git_dir = Path(git_dir_text).expanduser()
+    if not git_dir.is_absolute():
+        git_dir = (git_entry.parent / git_dir).resolve()
+    if not git_dir.exists():
+        return None
+    return git_dir.resolve()
+
+
 def _bootstrap_state_matches(state_file: Path, *, kind: str, signature: str) -> bool:
     if not state_file.is_file():
         return False
@@ -2673,7 +2789,10 @@ def _bootstrap_state_matches(state_file: Path, *, kind: str, signature: str) -> 
 
 def _write_bootstrap_state(state_file: Path, *, kind: str, signature: str) -> None:
     payload = {"kind": kind, "signature": signature}
-    state_file.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = state_file.with_name(f"{state_file.name}.tmp")
+    temp_file.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temp_file.replace(state_file)
 
 
 def _clear_bootstrap_state(state_file: Path) -> None:

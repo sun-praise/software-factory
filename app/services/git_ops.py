@@ -6,6 +6,7 @@ from typing import Sequence
 
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 GH_COMMAND_TIMEOUT_SECONDS = 30
+EXCLUDED_COMMIT_PATHS = (".software_factory_bootstrap_state.json",)
 
 
 def _run_git(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -73,6 +74,38 @@ def commit_and_push(
             "branch": branch,
             "pushed_ref": None,
         }
+
+    for excluded_path in EXCLUDED_COMMIT_PATHS:
+        staged_path_result = _run_git(
+            repo_dir,
+            ["diff", "--cached", "--name-only", "--", excluded_path],
+        )
+        if staged_path_result.returncode != 0:
+            return {
+                "success": False,
+                "commit_sha": None,
+                "error": _pick_message(staged_path_result),
+                "error_stage": "git_exclude",
+                "remote": remote,
+                "branch": branch,
+                "pushed_ref": None,
+            }
+        if not staged_path_result.stdout.strip():
+            continue
+        unstage_result = _run_git(
+            repo_dir,
+            ["reset", "--quiet", "HEAD", "--", excluded_path],
+        )
+        if unstage_result.returncode != 0:
+            return {
+                "success": False,
+                "commit_sha": None,
+                "error": _pick_message(unstage_result),
+                "error_stage": "git_exclude",
+                "remote": remote,
+                "branch": branch,
+                "pushed_ref": None,
+            }
 
     diff_result = _run_git(repo_dir, ["diff", "--cached", "--quiet"])
     if diff_result.returncode == 0:

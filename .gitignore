@@ -1,5 +1,6 @@
 .env
 .venv/
+.software_factory_bootstrap_state.json
 __pycache__/
 *.pyc
 data/*.db
