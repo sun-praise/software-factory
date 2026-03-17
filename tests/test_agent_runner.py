@@ -218,6 +218,196 @@ def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) ->
     assert "manual_issue_context_missing" in str(result["error_summary"])
 
 
+def test_run_once_issue_mode_creates_pull_request_and_comments_on_issue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=0,
+        head_sha=None,
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "source_kind": "issue",
+            "issue_number": 12,
+            "issue_title": "Broken widget",
+            "issue_url": "https://github.com/acme/widgets/issues/12",
+            "base_branch": "main",
+            "working_branch": "autofix/issue-12-broken-widget",
+            "must_fix": [
+                {
+                    "source": "manual_issue",
+                    "path": "app/main.py",
+                    "line": 12,
+                    "text": "Fix bug",
+                    "context_resolved": True,
+                }
+            ],
+            "should_fix": [],
+        },
+        source_kind="issue",
+        issue_number=12,
+        base_branch="main",
+        working_branch="autofix/issue-12-broken-widget",
+    )
+    assert run_id is not None
+    run = claim_next_queued_run(conn)
+    assert run is not None
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_issue_run_workspace",
+        lambda **kwargs: (
+            str(tmp_path),
+            str(tmp_path),
+            "autofix/issue-12-broken-widget",
+            "basehead123",
+        ),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/issue-12-broken-widget",
+            "pushed_ref": "origin/autofix/issue-12-broken-widget",
+        },
+        create_pull_request=lambda **_: {
+            "success": True,
+            "number": 77,
+            "url": "https://github.com/acme/widgets/pull/77",
+            "error": None,
+        },
+        post_issue_comment=lambda *_: (True, "ok"),
+        post_pr_comment=lambda *_: (_ for _ in ()).throw(
+            AssertionError("post_pr_comment should not be used for issue flow")
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert result["commit_sha"] == "deadbeef"
+    row = conn.execute(
+        "SELECT pr_number, created_pr_url, status, commit_sha FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["pr_number"] == 77
+    assert row["created_pr_url"] == "https://github.com/acme/widgets/pull/77"
+    assert row["status"] == "success"
+    pr_row = conn.execute(
+        "SELECT branch, autofix_count FROM pull_requests WHERE repo = ? AND pr_number = ?",
+        ("acme/widgets", 77),
+    ).fetchone()
+    assert pr_row is not None
+    assert pr_row["branch"] == "autofix/issue-12-broken-widget"
+    assert pr_row["autofix_count"] == 1
+
+
+def test_run_once_issue_mode_fails_when_pr_creation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=0,
+        head_sha=None,
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "source_kind": "issue",
+            "issue_number": 15,
+            "issue_title": "Broken widget",
+            "issue_url": "https://github.com/acme/widgets/issues/15",
+            "base_branch": "main",
+            "working_branch": "autofix/issue-15-broken-widget",
+            "must_fix": [
+                {
+                    "source": "manual_issue",
+                    "path": "app/main.py",
+                    "line": 12,
+                    "text": "Fix bug",
+                    "context_resolved": True,
+                }
+            ],
+            "should_fix": [],
+        },
+        source_kind="issue",
+        issue_number=15,
+        base_branch="main",
+        working_branch="autofix/issue-15-broken-widget",
+    )
+    assert run_id is not None
+    run = claim_next_queued_run(conn)
+    assert run is not None
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_issue_run_workspace",
+        lambda **kwargs: (
+            str(tmp_path),
+            str(tmp_path),
+            "autofix/issue-15-broken-widget",
+            "basehead123",
+        ),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/issue-15-broken-widget",
+            "pushed_ref": "origin/autofix/issue-15-broken-widget",
+        },
+        create_pull_request=lambda **_: {
+            "success": False,
+            "number": None,
+            "url": None,
+            "error": "bad credentials",
+        },
+        post_issue_comment=lambda *_: (True, "ok"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    assert "pr_creation_failed" in str(result["error_summary"])
+
+
 def test_collect_pull_request_metadata_returns_empty_when_gh_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

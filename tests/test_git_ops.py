@@ -363,6 +363,61 @@ def test_commit_and_push_excludes_runtime_state_file(monkeypatch) -> None:
     ] in calls
 
 
+def test_commit_and_push_uses_upstream_flag_when_requested(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
+                ["git", "diff", "--cached", "--quiet"],
+                _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
+            ),
+            (
+                ["git", "commit", "-m", "feat: m5"],
+                _cp(["git", "commit", "-m", "feat: m5"]),
+            ),
+            (
+                ["git", "rev-parse", "HEAD"],
+                _cp(["git", "rev-parse", "HEAD"], stdout="deadbeef\n"),
+            ),
+            (
+                ["git", "push", "-u", "origin", "feature/m5"],
+                _cp(["git", "push", "-u", "origin", "feature/m5"]),
+            ),
+        ],
+    )
+
+    result = git_ops.commit_and_push(
+        "/repo",
+        "feat: m5",
+        branch="feature/m5",
+        set_upstream=True,
+    )
+
+    assert result["success"] is True
+    assert calls[-1] == ["git", "push", "-u", "origin", "feature/m5"]
+
+
 def test_post_pr_comment_success(monkeypatch) -> None:
     _patch_run(
         monkeypatch,
@@ -421,3 +476,75 @@ def test_post_pr_comment_failure(monkeypatch) -> None:
     )
     assert ok is False
     assert "authorized" in message
+
+
+def test_post_issue_comment_success(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    "42",
+                    "--repo",
+                    "acme/widgets",
+                    "--body",
+                    "done",
+                ],
+                _cp(["gh"], stdout="https://example.test/issuecomment/1\n"),
+            )
+        ],
+    )
+
+    ok, message = git_ops.post_issue_comment(
+        repo_dir="/repo",
+        repo="acme/widgets",
+        issue_number=42,
+        body="done",
+    )
+    assert ok is True
+    assert "issuecomment" in message
+
+
+def test_create_pull_request_success(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--repo",
+                    "acme/widgets",
+                    "--base",
+                    "main",
+                    "--head",
+                    "autofix/issue-7-broken-issue",
+                    "--title",
+                    "fix: address issue #7 - Broken issue",
+                    "--body",
+                    "Closes #7\n\n## Summary\n- Autofix run #5 implements the issue requirements from https://github.com/acme/widgets/issues/7\n- Working branch: `autofix/issue-7-broken-issue`",
+                ],
+                _cp(["gh"], stdout="https://github.com/acme/widgets/pull/19\n"),
+            )
+        ],
+    )
+
+    result = git_ops.create_pull_request(
+        "/repo",
+        "acme/widgets",
+        "main",
+        "autofix/issue-7-broken-issue",
+        "fix: address issue #7 - Broken issue",
+        "Closes #7\n\n## Summary\n- Autofix run #5 implements the issue requirements from https://github.com/acme/widgets/issues/7\n- Working branch: `autofix/issue-7-broken-issue`",
+    )
+
+    assert result == {
+        "success": True,
+        "number": 19,
+        "url": "https://github.com/acme/widgets/pull/19",
+        "error": None,
+    }

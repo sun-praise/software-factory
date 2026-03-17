@@ -17,6 +17,10 @@ def enqueue_autofix_run(
     normalized_review_json: Mapping[str, Any],
     trigger_source: str = "github_webhook",
     *,
+    source_kind: str = "pull_request",
+    issue_number: int | None = None,
+    base_branch: str | None = None,
+    working_branch: str | None = None,
     idempotency_key: str | None = None,
     max_attempts: int = 3,
     retryable: bool = True,
@@ -28,7 +32,11 @@ def enqueue_autofix_run(
             INSERT INTO autofix_runs (
                 repo,
                 pr_number,
+                source_kind,
+                issue_number,
                 head_sha,
+                base_branch,
+                working_branch,
                 status,
                 trigger_source,
                 idempotency_key,
@@ -37,12 +45,16 @@ def enqueue_autofix_run(
                 retryable,
                 updated_at
             )
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 repo,
                 pr_number,
+                source_kind,
+                issue_number,
                 head_sha,
+                base_branch,
+                working_branch,
                 trigger_source,
                 idempotency_key,
                 payload_json,
@@ -174,6 +186,28 @@ def mark_run_finished(
             last_error_code,
             run_id,
         ),
+    )
+    conn.commit()
+
+
+def update_run_issue_pull_request(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    pr_number: int,
+    created_pr_url: str,
+    working_branch: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE autofix_runs
+        SET pr_number = ?,
+            created_pr_url = ?,
+            working_branch = COALESCE(?, working_branch),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (pr_number, created_pr_url, working_branch, run_id),
     )
     conn.commit()
 

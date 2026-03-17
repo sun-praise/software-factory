@@ -30,6 +30,8 @@ class Settings(BaseSettings):
         "ai_invalid_response",
         "ai_request_client_error",
         "patch_apply_failed",
+        "pr_creation_failed",
+        "issue_run_no_code_changes",
     )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"
