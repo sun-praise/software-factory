@@ -17,6 +17,17 @@ class IssueItem(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class CICheckItem(BaseModel):
+    source: NonEmptyStr
+    name: NonEmptyStr
+    status: NonEmptyStr
+    conclusion: NonEmptyStr
+    details_url: str | None = None
+    head_sha: str | None = None
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
 class NormalizedReview(BaseModel):
     repo: NonEmptyStr
     pr_number: PositiveInt
@@ -25,6 +36,8 @@ class NormalizedReview(BaseModel):
     must_fix: list[IssueItem] = Field(default_factory=list)
     should_fix: list[IssueItem] = Field(default_factory=list)
     ignore: list[IssueItem] = Field(default_factory=list)
+    ci_status: NonEmptyStr | None = None
+    ci_checks: list[CICheckItem] = Field(default_factory=list)
     summary: str
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

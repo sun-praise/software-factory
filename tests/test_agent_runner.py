@@ -12,6 +12,7 @@ from app.models import SCHEMA_SQL
 from app.services.agent_runner import (
     CHECK_COMMAND_TIMEOUT_SECONDS,
     RunnerOps,
+    _build_agent_env,
     _consume_claude_stream,
     _default_executor,
     _build_run_progress_callback,
@@ -968,6 +969,7 @@ def test_execute_agent_sdks_falls_back_to_claude(
         repo: str,
         pr_number: int,
         prompt: str,
+        normalized_review: dict[str, object],
         *,
         command: str,
         timeout_seconds: int,
@@ -983,6 +985,7 @@ def test_execute_agent_sdks_falls_back_to_claude(
         repo: str,
         pr_number: int,
         prompt: str,
+        normalized_review: dict[str, object],
         *,
         command: str,
         provider: str,
@@ -1006,6 +1009,7 @@ def test_execute_agent_sdks_falls_back_to_claude(
         repo="owner/repo",
         pr_number=1,
         prompt="fix this",
+        normalized_review={},
         modes=("openhands", "claude_agent_sdk"),
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
@@ -1035,6 +1039,7 @@ def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure
         repo: str,
         pr_number: int,
         prompt: str,
+        normalized_review: dict[str, object],
         *,
         command: str,
         provider: str,
@@ -1062,6 +1067,7 @@ def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure
         repo="owner/repo",
         pr_number=1,
         prompt="fix this",
+        normalized_review={},
         modes=("claude_agent_sdk", "openhands"),
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
@@ -1124,6 +1130,7 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         repo="acme/widgets",
         pr_number=7,
         prompt="fix this",
+        normalized_review={},
         command="  claude --print  ",
         provider="openrouter",
         base_url="https://openrouter.ai/api",
@@ -1219,6 +1226,7 @@ def test_run_claude_agent_supports_docker_runtime(
         repo="acme/widgets",
         pr_number=7,
         prompt="fix this",
+        normalized_review={},
         command="claude",
         provider="openrouter",
         base_url="https://openrouter.ai/api",
@@ -1277,6 +1285,7 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
         repo="acme/widgets",
         pr_number=7,
         prompt="fix this",
+        normalized_review={},
         command="claude && whoami",
         provider="openrouter",
         base_url="https://openrouter.ai/api",
@@ -1302,7 +1311,6 @@ def test_sanitize_log_text_redacts_tokens() -> None:
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
     assert "test-openai-key" not in masked
     assert "[REDACTED]" in masked
-
 
 def test_render_claude_stream_record_handles_non_object_json() -> None:
     lines, result_text, error_text, saw_events = _render_claude_stream_record(
@@ -1380,3 +1388,39 @@ def test_build_run_progress_callback_updates_file_database_from_worker_thread(
     ).fetchone()
     assert row is not None
     assert row["logs_path"] == "logs/autofix-run-42.log"
+
+
+def test_build_agent_env_includes_ci_context() -> None:
+    env = _build_agent_env(
+        run_id=19,
+        repo="acme/widgets",
+        pr_number=24,
+        normalized_review={
+            "ci_status": "failed",
+            "ci_checks": [
+                {
+                    "source": "workflow_run",
+                    "name": "CI / unit",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "details_url": "https://example.test/runs/1",
+                    "head_sha": "abc123",
+                },
+                {
+                    "source": "check_run",
+                    "name": "lint",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "details_url": "https://example.test/runs/2",
+                    "head_sha": "abc123",
+                },
+            ],
+        },
+    )
+
+    assert env["SOFTWARE_FACTORY_REPO"] == "acme/widgets"
+    assert env["SOFTWARE_FACTORY_PR_NUMBER"] == "24"
+    assert env["SOFTWARE_FACTORY_RUN_ID"] == "19"
+    assert env["SOFTWARE_FACTORY_CI_STATUS"] == "failed"
+    assert env["SOFTWARE_FACTORY_CI_FAILED_CHECKS"] == "CI / unit"
+    assert '"name": "CI / unit"' in env["SOFTWARE_FACTORY_CI_CHECKS_JSON"]
