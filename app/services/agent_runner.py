@@ -61,6 +61,14 @@ BOOTSTRAP_STATE_DIRNAME = "software-factory"
 BOOTSTRAP_STATE_FILENAME = "bootstrap-state.json"
 LEGACY_BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
 PR_FETCH_TIMEOUT_SECONDS = 30
+FAILED_CI_CONCLUSIONS = {
+    "failure",
+    "cancelled",
+    "timed_out",
+    "action_required",
+    "startup_failure",
+    "stale",
+}
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -479,6 +487,7 @@ def run_once(
                     repo=repo,
                     pr_number=pr_number,
                     prompt=prompt_for_attempt,
+                    normalized_review=payload,
                     modes=agent_modes,
                     openhands_command=feature_flags.openhands_command,
                     openhands_command_timeout_seconds=(
@@ -959,6 +968,7 @@ def _execute_agent_sdks(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     modes: tuple[str, ...],
     openhands_command: str,
     openhands_command_timeout_seconds: int,
@@ -982,6 +992,7 @@ def _execute_agent_sdks(
                 "repo": repo,
                 "pr_number": pr_number,
                 "prompt": prompt,
+                "normalized_review": normalized_review,
                 "command": openhands_command,
                 "timeout_seconds": openhands_command_timeout_seconds,
             }
@@ -1020,6 +1031,7 @@ def _execute_agent_sdks(
                 claude_kwargs["on_log_line"] = on_log_line
             if should_cancel is not None:
                 claude_kwargs["should_cancel"] = should_cancel
+            claude_kwargs["normalized_review"] = normalized_review
             claude_ok, claude_message, claude_error_code = _run_claude_agent(
                 **claude_kwargs,
             )
@@ -1037,6 +1049,7 @@ def _run_openhands_agent(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     *,
     command: str,
     timeout_seconds: int,
@@ -1049,6 +1062,7 @@ def _run_openhands_agent(
         repo=repo,
         pr_number=pr_number,
         prompt=prompt,
+        normalized_review=normalized_review,
         command=command,
         timeout_seconds=timeout_seconds,
         agent_name="OpenHands",
@@ -1064,6 +1078,7 @@ def _run_claude_agent(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     *,
     command: str,
     provider: str,
@@ -1082,6 +1097,7 @@ def _run_claude_agent(
             repo=repo,
             pr_number=pr_number,
             prompt=prompt,
+            normalized_review=normalized_review,
             command=command,
             provider=provider,
             base_url=base_url,
@@ -1099,6 +1115,7 @@ def _run_claude_agent(
         repo=repo,
         pr_number=pr_number,
         prompt=prompt,
+        normalized_review=normalized_review,
         command=command,
         provider=provider,
         base_url=base_url,
@@ -1118,6 +1135,7 @@ def _run_claude_container_command(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     command: str,
     provider: str,
     base_url: str,
@@ -1154,6 +1172,7 @@ def _run_claude_container_command(
         repo=repo,
         pr_number=pr_number,
         run_id=run_id,
+        normalized_review=normalized_review,
         provider=provider,
         base_url=base_url,
         model=model,
@@ -1191,6 +1210,7 @@ def _run_claude_stream_command(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     command: str,
     provider: str,
     base_url: str,
@@ -1234,6 +1254,7 @@ def _run_claude_stream_command(
             repo=repo,
             pr_number=pr_number,
             run_id=run_id,
+            normalized_review=normalized_review,
             provider=provider,
             base_url=base_url,
             model=model,
@@ -1435,6 +1456,7 @@ def _build_claude_container_environment(
     repo: str,
     pr_number: int,
     run_id: int,
+    normalized_review: Mapping[str, Any],
     provider: str,
     base_url: str,
     model: str,
@@ -1443,6 +1465,7 @@ def _build_claude_container_environment(
         repo=repo,
         pr_number=pr_number,
         run_id=run_id,
+        normalized_review=normalized_review,
         provider=provider,
         base_url=base_url,
         model=model,
@@ -1490,6 +1513,7 @@ def _run_agent_command(
     repo: str,
     pr_number: int,
     prompt: str,
+    normalized_review: Mapping[str, Any],
     command: str,
     timeout_seconds: int,
     agent_name: str,
@@ -1525,7 +1549,12 @@ def _run_agent_command(
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             text=True,
-            env=_build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id),
+            env=_build_agent_env(
+                run_id=run_id,
+                repo=repo,
+                pr_number=pr_number,
+                normalized_review=normalized_review,
+            ),
             start_new_session=True,
         )
     except FileNotFoundError:
@@ -1859,16 +1888,60 @@ def _build_agent_environment(
     return env
 
 
+def _build_agent_env(
+    *,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    normalized_review: Mapping[str, Any],
+) -> dict[str, str]:
+    env = _build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id)
+
+    ci_status, ci_checks = _extract_ci_context(normalized_review)
+    env["SOFTWARE_FACTORY_CI_STATUS"] = ci_status
+    env["SOFTWARE_FACTORY_CI_CHECKS_JSON"] = json.dumps(
+        ci_checks,
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+    env["SOFTWARE_FACTORY_CI_FAILED_CHECKS"] = ", ".join(
+        str(item.get("name") or "").strip()
+        for item in ci_checks
+        if str(item.get("conclusion") or "").strip() in FAILED_CI_CONCLUSIONS
+        and str(item.get("name") or "").strip()
+    )
+    return env
+
+
+def _extract_ci_context(
+    normalized_review: Mapping[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    raw_checks = normalized_review.get("ci_checks")
+    ci_checks: list[dict[str, Any]] = []
+    if isinstance(raw_checks, list):
+        for item in raw_checks:
+            if isinstance(item, Mapping):
+                ci_checks.append(dict(item))
+    ci_status = _safe_text(normalized_review.get("ci_status")) or "unknown"
+    return ci_status, ci_checks
+
+
 def _build_claude_agent_environment(
     *,
     repo: str,
     pr_number: int,
     run_id: int,
+    normalized_review: Mapping[str, Any],
     provider: str,
     base_url: str,
     model: str,
 ) -> dict[str, str]:
-    env = _build_agent_environment(repo=repo, pr_number=pr_number, run_id=run_id)
+    env = _build_agent_env(
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        normalized_review=normalized_review,
+    )
     normalized_provider = str(provider).strip().lower()
     normalized_base_url = str(base_url).strip()
     normalized_model = str(model).strip()

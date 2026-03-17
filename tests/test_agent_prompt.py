@@ -25,6 +25,15 @@ def test_build_autofix_prompt_contains_required_constraints_and_summaries() -> N
                 "text": "Consider improving message clarity",
             }
         ],
+        "ci_status": "failed",
+        "ci_checks": [
+            {
+                "source": "workflow_run",
+                "name": "CI / unit",
+                "status": "completed",
+                "conclusion": "failure",
+            }
+        ],
     }
 
     prompt = build_autofix_prompt(
@@ -41,6 +50,8 @@ def test_build_autofix_prompt_contains_required_constraints_and_summaries() -> N
     assert "output the reason and stop" in prompt
     assert "must_fix" in prompt
     assert "should_fix" in prompt
+    assert "CI status: failed" in prompt
+    assert "CI / unit" in prompt
     assert "acme/widgets" in prompt
     assert "#24" in prompt
 

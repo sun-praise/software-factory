@@ -11,6 +11,9 @@ SUPPORTED_EVENT_TYPES = {
     "pull_request_review",
     "pull_request_review_comment",
     "issue_comment",
+    "check_run",
+    "check_suite",
+    "workflow_run",
 }
 
 
@@ -125,6 +128,9 @@ def build_event_key(
         "review": payload.get("review"),
         "comment": payload.get("comment"),
         "issue": payload.get("issue"),
+        "check_run": payload.get("check_run"),
+        "check_suite": payload.get("check_suite"),
+        "workflow_run": payload.get("workflow_run"),
     }
     digest = hashlib.sha256(
         json.dumps(stable_fields, ensure_ascii=True, sort_keys=True).encode("utf-8")
@@ -185,6 +191,18 @@ def _extract_pr_number(event_type: str, payload: Mapping[str, Any]) -> int | Non
         if isinstance(issue, Mapping):
             return _as_int(issue.get("number"))
 
+    if event_type in {"check_run", "check_suite", "workflow_run"}:
+        nested = payload.get(event_type)
+        if isinstance(nested, Mapping):
+            pull_requests = nested.get("pull_requests")
+            if isinstance(pull_requests, list):
+                for item in pull_requests:
+                    if not isinstance(item, Mapping):
+                        continue
+                    number = _as_int(item.get("number"))
+                    if number is not None:
+                        return number
+
     return _as_int(payload.get("number"))
 
 
@@ -208,6 +226,13 @@ def _extract_head_sha(payload: Mapping[str, Any]) -> str | None:
         commit_id = _as_str(comment.get("commit_id"))
         if commit_id:
             return commit_id
+
+    for key in ("check_run", "check_suite", "workflow_run"):
+        nested = payload.get(key)
+        if isinstance(nested, Mapping):
+            sha = _as_str(nested.get("head_sha"))
+            if sha:
+                return sha
 
     return _as_str(payload.get("head_sha"))
 
@@ -236,6 +261,9 @@ def _extract_event_id(event_type: str, payload: Mapping[str, Any]) -> str | None
         "pull_request_review": "review",
         "pull_request_review_comment": "comment",
         "issue_comment": "comment",
+        "check_run": "check_run",
+        "check_suite": "check_suite",
+        "workflow_run": "workflow_run",
     }.get(event_type)
 
     if object_key:

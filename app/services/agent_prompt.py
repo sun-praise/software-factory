@@ -16,9 +16,14 @@ def build_autofix_prompt(
     must_fix = _as_issue_list(normalized_review.get("must_fix"))
     should_fix = _as_issue_list(normalized_review.get("should_fix"))
     metadata = pr_metadata or {}
+    ci_checks = _as_ci_check_list(normalized_review.get("ci_checks"))
 
     must_fix_summary = _format_issue_summary("must_fix", must_fix)
     should_fix_summary = _format_issue_summary("should_fix", should_fix)
+    ci_summary = _format_ci_summary(
+        ci_status=_safe_text(normalized_review.get("ci_status"), "unknown"),
+        ci_checks=ci_checks,
+    )
 
     lines = [
         "You are an autofix agent working on a pull request.",
@@ -31,22 +36,24 @@ def build_autofix_prompt(
     _append_pr_metadata(lines, metadata)
     lines.extend(
         [
-            "",
-            "Hard constraints:",
-            "- Only fix issues explicitly listed in review feedback.",
-            "- Do not perform unrelated refactors.",
-            "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
-            "- Prioritize passing existing tests before any optional improvement.",
-            "- If a required fix cannot be completed, output the reason and stop.",
-            "",
-            "Work items:",
-            must_fix_summary,
-            should_fix_summary,
-            "",
-            "Execution policy:",
-            "- Apply must_fix items first.",
-            "- Apply should_fix items only if they do not risk breaking tests.",
-            "- Keep patches minimal and directly traceable to review comments.",
+        ci_summary,
+        "",
+        "Hard constraints:",
+        "- Only fix issues explicitly listed in review feedback.",
+        "- Do not perform unrelated refactors.",
+        "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
+        "- Prioritize passing existing tests before any optional improvement.",
+        "- If a required fix cannot be completed, output the reason and stop.",
+        "- Treat CI failures as supporting context, not as permission for unrelated changes.",
+        "",
+        "Work items:",
+        must_fix_summary,
+        should_fix_summary,
+        "",
+        "Execution policy:",
+        "- Apply must_fix items first.",
+        "- Apply should_fix items only if they do not risk breaking tests.",
+        "- Keep patches minimal and directly traceable to review comments.",
         ]
     )
     return "\n".join(lines)
@@ -119,6 +126,16 @@ def _as_issue_list(value: Any) -> list[Mapping[str, Any]]:
     return issue_items
 
 
+def _as_ci_check_list(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    check_items: list[Mapping[str, Any]] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            check_items.append(item)
+    return check_items
+
+
 def _format_issue_summary(title: str, items: list[Mapping[str, Any]]) -> str:
     if not items:
         return f"- {title}: 0 items"
@@ -159,6 +176,23 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
         if len(compact_body) > PR_BODY_PREVIEW_LIMIT:
             compact_body = f"{compact_body[:PR_BODY_PREVIEW_LIMIT].rstrip()}..."
         lines.append(f"- PR Body: {compact_body}")
+
+
+def _format_ci_summary(ci_status: str, ci_checks: list[Mapping[str, Any]]) -> str:
+    if not ci_checks:
+        return "- CI status: unknown (no CI checks captured)"
+
+    formatted_checks: list[str] = []
+    for item in ci_checks[:6]:
+        source = _safe_text(item.get("source"), "unknown")
+        name = _safe_text(item.get("name"), "unnamed")
+        status = _safe_text(item.get("status"), "unknown")
+        conclusion = _safe_text(item.get("conclusion"), "unknown")
+        formatted_checks.append(
+            f"[{source}] {name} => status={status}, conclusion={conclusion}"
+        )
+    joined = " | ".join(formatted_checks)
+    return f"- CI status: {ci_status} -> {joined}"
 
 
 def _safe_text(value: Any, fallback: str) -> str:
