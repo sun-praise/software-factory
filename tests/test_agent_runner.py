@@ -218,6 +218,86 @@ def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) ->
     assert "manual_issue_context_missing" in str(result["error_summary"])
 
 
+def test_collect_pull_request_metadata_returns_empty_when_gh_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    assert (
+        agent_runner._collect_pull_request_metadata(repo="acme/widgets", pr_number=7)
+        == {}
+    )
+
+
+def test_collect_pull_request_metadata_returns_empty_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise agent_runner.subprocess.TimeoutExpired(cmd="gh pr view", timeout=30)
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    assert (
+        agent_runner._collect_pull_request_metadata(repo="acme/widgets", pr_number=7)
+        == {}
+    )
+
+
+def test_prepare_run_workspace_skips_pr_refetch_when_branch_and_head_known(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cloned_workspace = tmp_path / "run-workspace"
+    cloned_workspace.mkdir()
+    checkout_calls: list[tuple[str | None, str | None]] = []
+
+    monkeypatch.setattr(agent_runner, "_ensure_repo_cache", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agent_runner,
+        "_create_run_workspace_clone",
+        lambda **kwargs: str(cloned_workspace),
+    )
+
+    def fake_checkout_run_workspace_target(**kwargs) -> None:
+        checkout_calls.append(
+            (kwargs.get("resolved_branch"), kwargs.get("resolved_head_sha"))
+        )
+
+    def fail_fetch_pull_request_head(**kwargs):
+        raise AssertionError("_fetch_pull_request_head should not be called")
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_run_workspace_target",
+        fake_checkout_run_workspace_target,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_fetch_pull_request_head",
+        fail_fetch_pull_request_head,
+    )
+
+    workspace_dir, agent_workspace, resolved_branch, resolved_head_sha = (
+        agent_runner._prepare_run_workspace(
+            runtime_root=str(tmp_path),
+            repo="acme/widgets",
+            pr_number=7,
+            run_id=123,
+            branch="feature/test",
+            head_sha="abc123",
+        )
+    )
+
+    assert workspace_dir == str(cloned_workspace)
+    assert agent_workspace == str(cloned_workspace)
+    assert resolved_branch == "feature/test"
+    assert resolved_head_sha == "abc123"
+    assert checkout_calls == [("feature/test", "abc123")]
+
+
 def test_run_once_returns_failed_checks_to_agent_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

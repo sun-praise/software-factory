@@ -257,12 +257,16 @@ def run_once(
             },
             "comment_posted": False,
         }
+    pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+    head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
+    branch = branch or _safe_text(pr_metadata.get("head_ref"))
 
     prompt = active_ops.build_autofix_prompt(
         repo=repo,
         pr_number=pr_number,
         head_sha=head_sha or "unknown",
         normalized_review=payload,
+        pr_metadata=pr_metadata,
     )
     commands = active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
@@ -1938,15 +1942,15 @@ def _prepare_run_workspace(
 
     resolved_branch = branch
     resolved_head_sha = head_sha
-    if pr_number > 0:
+    if pr_number > 0 and (not resolved_branch or not resolved_head_sha):
         pr_branch, pr_head_sha = _fetch_pull_request_head(
             repo=repo, pr_number=pr_number
         )
         resolved_branch = resolved_branch or pr_branch
         resolved_head_sha = resolved_head_sha or pr_head_sha
-        if not resolved_branch:
-            shutil.rmtree(run_workspace_dir, ignore_errors=True)
-            raise ValueError("unable to resolve PR head branch")
+    if pr_number > 0 and not resolved_branch:
+        shutil.rmtree(run_workspace_dir, ignore_errors=True)
+        raise ValueError("unable to resolve PR head branch")
     _checkout_run_workspace_target(
         run_workspace_dir=run_workspace_dir,
         resolved_branch=resolved_branch,
@@ -2013,6 +2017,7 @@ def _create_run_workspace_clone(
             repo_dir=str(runtime_path),
             args=[
                 "clone",
+                "--dissociate",
                 "--reference-if-able",
                 str(cache_repo_dir),
                 remote_url,
@@ -2120,44 +2125,83 @@ def _cleanup_openhands_workspace(runtime_root: str, worktree_dir: str) -> None:
 def _fetch_pull_request_head(
     *, repo: str, pr_number: int
 ) -> tuple[str | None, str | None]:
-    result = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "view",
-            str(pr_number),
-            "--repo",
+    metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+    return _safe_text(metadata.get("head_ref")) or None, _safe_text(
+        metadata.get("head_sha")
+    ) or None
+
+
+def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
+    if pr_number <= 0:
+        return {}
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--json",
+                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        logger.warning(
+            "failed to fetch PR metadata via gh: repo=%s pr=%s error=gh not installed",
             repo,
-            "--json",
-            "headRefName,headRefOid",
-            "--jq",
-            '.headRefName + "\\n" + .headRefOid',
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=PR_FETCH_TIMEOUT_SECONDS,
-    )
+            pr_number,
+        )
+        return {}
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
+            repo,
+            pr_number,
+        )
+        return {}
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
         logger.warning(
-            "failed to fetch PR head via gh: repo=%s pr=%s error=%s",
+            "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
             repo,
             pr_number,
             details,
         )
-        return None, None
-
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if len(lines) != 2:
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
         logger.warning(
-            "invalid PR head payload from gh: repo=%s pr=%s payload=%r",
+            "invalid PR metadata payload from gh: repo=%s pr=%s error=%s",
             repo,
             pr_number,
-            result.stdout,
+            exc,
         )
-        return None, None
-    return lines[0] or None, lines[1] or None
+        return {}
+    if not isinstance(payload, Mapping):
+        logger.warning(
+            "unexpected PR metadata payload type from gh: repo=%s pr=%s payload=%r",
+            repo,
+            pr_number,
+            payload,
+        )
+        return {}
+    return {
+        "title": _safe_text(payload.get("title")),
+        "body": _safe_text(payload.get("body")),
+        "base_ref": _safe_text(payload.get("baseRefName")),
+        "head_ref": _safe_text(payload.get("headRefName")),
+        "head_sha": _safe_text(payload.get("headRefOid")),
+        "changed_files": payload.get("changedFiles"),
+        "additions": payload.get("additions"),
+        "deletions": payload.get("deletions"),
+    }
 
 
 def _run_git_command(
