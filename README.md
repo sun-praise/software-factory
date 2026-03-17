@@ -166,6 +166,27 @@ python scripts/init_db.py
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+后台快速启动 `web + worker`：
+
+```bash
+chmod +x scripts/start_system_bg.sh
+./scripts/start_system_bg.sh start
+```
+
+常用管理命令：
+
+```bash
+./scripts/start_system_bg.sh status
+./scripts/start_system_bg.sh logs
+./scripts/start_system_bg.sh stop
+```
+
+说明：
+
+- 脚本会优先加载仓库根目录 `.env`
+- `web` 和 `worker` 会强制共用同一个 `DB_PATH`
+- PID / 日志默认写到 `.runtime/local/`
+
 常用页面：
 
 - `http://127.0.0.1:8000/`
