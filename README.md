@@ -217,6 +217,22 @@ python scripts/run_worker.py --once
 
 说明：MVP 默认单 worker 串行执行；多 worker 并发执行通过 `MAX_CONCURRENT_RUNS` 控制。
 
+## Requirements Workflow
+
+This repository now uses OpenSpec to track product requirements, missed review
+items, and implementation scope before code changes land.
+
+Useful commands:
+
+```bash
+openspec list
+openspec show issue-to-pr-autofix
+openspec status --change issue-to-pr-autofix
+openspec validate issue-to-pr-autofix
+```
+
+See `openspec/README.md` for the repository workflow.
+
 ## CI 说明
 
 仓库当前包含两个工作流：
