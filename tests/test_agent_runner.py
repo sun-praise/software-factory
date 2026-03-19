@@ -247,6 +247,55 @@ def test_collect_pull_request_metadata_returns_empty_on_timeout(
     )
 
 
+def test_run_once_injects_repo_agents_md_into_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    prompts: list[str] = []
+    (tmp_path / "AGENTS.md").write_text(
+        "Do not edit generated files.\nRun pytest before finishing.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+
+    def fake_execute_agent_sdks(**kwargs):
+        prompts.append(str(kwargs["prompt"]))
+        return True, None, None, "claude_agent_sdk"
+
+    monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=RunnerOps(
+            commit_and_push=lambda **_: {
+                "success": True,
+                "commit_sha": "deadbeef",
+                "error": None,
+                "error_stage": None,
+                "remote": "origin",
+                "branch": "feature/test",
+                "pushed_ref": "origin/feature/test",
+            },
+            post_pr_comment=lambda *_: (True, "ok"),
+        ),
+    )
+
+    assert result["status"] == "success"
+    assert len(prompts) == 1
+    assert "Repository Instructions (AGENTS.md)" in prompts[0]
+    assert "Do not edit generated files." in prompts[0]
+
+
 def test_prepare_run_workspace_skips_pr_refetch_when_branch_and_head_known(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -820,6 +869,7 @@ def test_run_once_fails_when_agent_sdk_not_configured(
 ) -> None:
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
+    posted_comments: list[str] = []
 
     ops = RunnerOps(
         checkout_branch=lambda *_: (True, "checked out"),
@@ -829,7 +879,10 @@ def test_run_once_fails_when_agent_sdk_not_configured(
             "commit_sha": "deadbeef",
             "error": None,
         },
-        post_pr_comment=lambda *_: (True, "ok"),
+        post_pr_comment=lambda *_args: (
+            posted_comments.append(str(_args[3])) or True,
+            "ok",
+        ),
     )
     monkeypatch.setattr(
         agent_runner,
@@ -852,6 +905,10 @@ def test_run_once_fails_when_agent_sdk_not_configured(
 
     assert result["status"] == "failed"
     assert "ai_not_configured" in str(result["error_summary"])
+    assert result["comment_posted"] is True
+    assert len(posted_comments) == 1
+    assert "Status: failed" in posted_comments[0]
+    assert "ai_not_configured" in posted_comments[0]
 
 
 def test_run_once_marks_agent_error_as_non_retryable(
