@@ -268,14 +268,6 @@ def run_once(
     pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
     head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
-
-    prompt = active_ops.build_autofix_prompt(
-        repo=repo,
-        pr_number=pr_number,
-        head_sha=head_sha or "unknown",
-        normalized_review=payload,
-        pr_metadata=pr_metadata,
-    )
     commands = active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
         base_dir=runtime_root,
@@ -332,9 +324,6 @@ def run_once(
         f"head_sha={head_sha or 'unknown'}",
         f"branch={branch or 'unknown'}",
         f"agent_modes={','.join(agent_modes)}",
-        "prompt:",
-        prompt,
-        "",
     ]
     logger = RunLogger(
         workspace_dir=runtime_root,
@@ -343,6 +332,41 @@ def run_once(
         on_progress=_build_run_progress_callback(conn, run_id),
     )
     update_run_logs_path(conn, run_id, logger.logs_path)
+
+    def _build_terminal_result(
+        *,
+        status: str,
+        error_summary: str | None,
+        logs_path: str,
+        commit_sha: str | None,
+        checks: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        final_error_summary, comment_posted = _post_run_comment_if_supported(
+            conn=conn,
+            run=run,
+            payload=payload,
+            active_ops=active_ops,
+            workspace_dir=runtime_root,
+            run_id=run_id,
+            repo=repo,
+            pr_number=pr_number,
+            status=status,
+            summary=checks,
+            commit_sha=commit_sha,
+            error_summary=error_summary,
+            logs_path=logs_path,
+            on_log_line=logger.append,
+        )
+        return {
+            "run_id": run_id,
+            "status": status,
+            "error_summary": final_error_summary,
+            "logs_path": logs_path,
+            "commit_sha": commit_sha,
+            "checks": dict(checks),
+            "comment_posted": comment_posted,
+        }
+
     lock_acquired = acquire_pr_lock(
         conn=conn,
         repo=repo,
@@ -361,20 +385,13 @@ def run_once(
             logs_path,
             error_code="pr_locked",
         )
-        return {
-            "run_id": run_id,
-            "status": status,
-            "error_summary": error_summary,
-            "logs_path": logs_path,
-            "commit_sha": None,
-            "checks": {
-                "overall_status": "failed",
-                "passed_count": 0,
-                "failed_count": 0,
-                "failed_commands": [],
-            },
-            "comment_posted": False,
-        }
+        return _build_terminal_result(
+            status=status,
+            error_summary=error_summary,
+            logs_path=logs_path,
+            commit_sha=None,
+            checks=checks_summary,
+        )
 
     if is_run_cancel_requested(conn, run_id):
         logger.append("cancel_requested: stopping run before execution")
@@ -384,15 +401,13 @@ def run_once(
             run_id,
             logs_path,
         )
-        return {
-            "run_id": run_id,
-            "status": status,
-            "error_summary": run_error_summary,
-            "logs_path": logs_path,
-            "commit_sha": None,
-            "checks": checks_summary,
-            "comment_posted": False,
-        }
+        return _build_terminal_result(
+            status=status,
+            error_summary=run_error_summary,
+            logs_path=logs_path,
+            commit_sha=None,
+            checks=checks_summary,
+        )
 
     agent_workspace = runtime_root
     agent_worktree: str | None = None
@@ -419,20 +434,24 @@ def run_once(
                     logs_path=logs_path,
                     error_code=OPENHANDS_FAILURE_CODE_WORKTREE,
                 )
-                return {
-                    "run_id": run_id,
-                    "status": status,
-                    "error_summary": scheduled_error,
-                    "logs_path": logs_path,
-                    "commit_sha": None,
-                    "checks": {
-                        "overall_status": "failed",
-                        "passed_count": 0,
-                        "failed_count": 0,
-                        "failed_commands": [],
-                    },
-                    "comment_posted": False,
-                }
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=scheduled_error,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
+
+    repo_instructions = _read_repo_instructions(agent_workspace)
+    prompt = active_ops.build_autofix_prompt(
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha or "unknown",
+        normalized_review=payload,
+        pr_metadata=pr_metadata,
+        repo_instructions=repo_instructions,
+    )
+    logger.extend(["prompt:", prompt, ""])
 
     try:
         status = "failed"
@@ -461,15 +480,13 @@ def run_once(
                 run_id,
                 logs_path,
             )
-            return {
-                "run_id": run_id,
-                "status": status,
-                "error_summary": run_error_summary,
-                "logs_path": logs_path,
-                "commit_sha": None,
-                "checks": checks_summary,
-                "comment_posted": False,
-            }
+            return _build_terminal_result(
+                status=status,
+                error_summary=run_error_summary,
+                logs_path=logs_path,
+                commit_sha=None,
+                checks=checks_summary,
+            )
         baseline_failure_index = _build_check_failure_index(baseline_check_results)
         if baseline_failure_index:
             logger.append(
@@ -522,15 +539,13 @@ def run_once(
                         run_id,
                         logs_path,
                     )
-                    return {
-                        "run_id": run_id,
-                        "status": status,
-                        "error_summary": run_error_summary,
-                        "logs_path": logs_path,
-                        "commit_sha": None,
-                        "checks": checks_summary,
-                        "comment_posted": False,
-                    }
+                    return _build_terminal_result(
+                        status=status,
+                        error_summary=run_error_summary,
+                        logs_path=logs_path,
+                        commit_sha=None,
+                        checks=checks_summary,
+                    )
                 failure_summary = (
                     f"{sdk_error_code}: {sdk_error_message}"
                     if sdk_error_code
@@ -546,20 +561,13 @@ def run_once(
                     logs_path=logs_path,
                     error_code=sdk_error_code or "agent_sdk_failed",
                 )
-                return {
-                    "run_id": run_id,
-                    "status": status,
-                    "error_summary": run_error_summary,
-                    "logs_path": logs_path,
-                    "commit_sha": None,
-                    "checks": {
-                        "overall_status": "failed",
-                        "passed_count": 0,
-                        "failed_count": 0,
-                        "failed_commands": [],
-                    },
-                    "comment_posted": False,
-                }
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=run_error_summary,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
 
             try:
                 check_results, checks_summary = _run_validation_cycle(
@@ -580,15 +588,13 @@ def run_once(
                     run_id,
                     logs_path,
                 )
-                return {
-                    "run_id": run_id,
-                    "status": status,
-                    "error_summary": run_error_summary,
-                    "logs_path": logs_path,
-                    "commit_sha": None,
-                    "checks": checks_summary,
-                    "comment_posted": False,
-                }
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=run_error_summary,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
             new_failure_results = _filter_new_check_failures(
                 baseline_check_results=baseline_check_results,
                 current_check_results=check_results,
@@ -674,52 +680,21 @@ def run_once(
         )
 
     if status == "retry_scheduled":
-        return {
-            "run_id": run_id,
-            "status": status,
-            "error_summary": run_error_summary,
-            "logs_path": logs_path,
-            "commit_sha": commit_sha,
-            "checks": checks_summary,
-            "comment_posted": False,
-        }
-
-    comment_body = _build_pr_comment(
-        run_id=run_id,
-        status=status,
-        summary=checks_summary,
-        commit_sha=commit_sha,
-        error_summary=run_error_summary,
-        logs_path=logs_path,
-    )
-    posted, comment_message = active_ops.post_pr_comment(
-        runtime_root,
-        repo,
-        pr_number,
-        comment_body,
-    )
-    if not posted:
-        comment_failure = f"pr_comment_failed: {comment_message}"
-        logger.append(comment_failure)
-        run_error_summary = _merge_error_summary(run_error_summary, comment_failure)
-        mark_run_finished(
-            conn=conn,
-            run_id=run_id,
+        return _build_terminal_result(
             status=status,
-            commit_sha=commit_sha,
             error_summary=run_error_summary,
             logs_path=logs_path,
+            commit_sha=commit_sha,
+            checks=checks_summary,
         )
 
-    return {
-        "run_id": run_id,
-        "status": status,
-        "error_summary": run_error_summary,
-        "logs_path": logs_path,
-        "commit_sha": commit_sha,
-        "checks": checks_summary,
-        "comment_posted": posted,
-    }
+    return _build_terminal_result(
+        status=status,
+        error_summary=run_error_summary,
+        logs_path=logs_path,
+        commit_sha=commit_sha,
+        checks=checks_summary,
+    )
 
 
 def _finalize_git_changes(
@@ -2455,6 +2430,86 @@ def _build_pr_comment(
         lines.append(f"Error: {error_summary}")
     lines.append(f"Logs: {logs_path}")
     return "\n".join(lines)
+
+
+def _read_repo_instructions(workspace_dir: str) -> str | None:
+    path = Path(workspace_dir) / "AGENTS.md"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    normalized = content.strip()
+    return normalized or None
+
+
+def _post_run_comment_if_supported(
+    *,
+    conn: sqlite3.Connection,
+    run: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    active_ops: RunnerOps,
+    workspace_dir: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    status: str,
+    summary: Mapping[str, Any],
+    commit_sha: str | None,
+    error_summary: str | None,
+    logs_path: str,
+    on_log_line: Callable[[str], None] | None = None,
+) -> tuple[str | None, bool]:
+    if not _should_post_run_comment(run=run, payload=payload, status=status):
+        return error_summary, False
+
+    comment_body = _build_pr_comment(
+        run_id=run_id,
+        status=status,
+        summary=summary,
+        commit_sha=commit_sha,
+        error_summary=error_summary,
+        logs_path=logs_path,
+    )
+    posted, comment_message = active_ops.post_pr_comment(
+        workspace_dir,
+        repo,
+        pr_number,
+        comment_body,
+    )
+    if posted:
+        return error_summary, True
+
+    comment_failure = f"pr_comment_failed: {comment_message}"
+    if on_log_line is not None:
+        on_log_line(comment_failure)
+    merged_error_summary = _merge_error_summary(error_summary, comment_failure)
+    mark_run_finished(
+        conn=conn,
+        run_id=run_id,
+        status=status,
+        commit_sha=commit_sha,
+        error_summary=merged_error_summary,
+        logs_path=logs_path,
+    )
+    return merged_error_summary, False
+
+
+def _should_post_run_comment(
+    *,
+    run: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    status: str,
+) -> bool:
+    if status == "retry_scheduled":
+        return False
+    if _safe_text(run.get("trigger_source")) == "manual_issue":
+        return False
+    if _safe_text(payload.get("source_kind")) == "issue":
+        return False
+    pr_number = run.get("pr_number")
+    if not isinstance(pr_number, int):
+        return False
+    return pr_number > 0
 
 
 def _resolve_branch(

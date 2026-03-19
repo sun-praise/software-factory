@@ -4,6 +4,7 @@ from typing import Any, Mapping
 
 
 PR_BODY_PREVIEW_LIMIT = 600
+REPO_INSTRUCTIONS_PREVIEW_LIMIT = 4_000
 
 
 def build_autofix_prompt(
@@ -12,6 +13,7 @@ def build_autofix_prompt(
     head_sha: str,
     normalized_review: Mapping[str, Any],
     pr_metadata: Mapping[str, Any] | None = None,
+    repo_instructions: str | None = None,
 ) -> str:
     must_fix = _as_issue_list(normalized_review.get("must_fix"))
     should_fix = _as_issue_list(normalized_review.get("should_fix"))
@@ -34,6 +36,7 @@ def build_autofix_prompt(
         f"- Head SHA: {head_sha}",
     ]
     _append_pr_metadata(lines, metadata)
+    _append_repo_instructions(lines, repo_instructions)
     lines.extend(
         [
         ci_summary,
@@ -193,6 +196,21 @@ def _format_ci_summary(ci_status: str, ci_checks: list[Mapping[str, Any]]) -> st
         )
     joined = " | ".join(formatted_checks)
     return f"- CI status: {ci_status} -> {joined}"
+
+
+def _append_repo_instructions(lines: list[str], repo_instructions: str | None) -> None:
+    instructions = _safe_text(repo_instructions, "")
+    if not instructions:
+        return
+    compact = instructions.strip()
+    if len(compact) > REPO_INSTRUCTIONS_PREVIEW_LIMIT:
+        compact = f"{compact[:REPO_INSTRUCTIONS_PREVIEW_LIMIT].rstrip()}..."
+    lines.extend(
+        [
+            "- Repository Instructions (AGENTS.md):",
+            compact,
+        ]
+    )
 
 
 def _safe_text(value: Any, fallback: str) -> str:

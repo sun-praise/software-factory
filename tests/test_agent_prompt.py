@@ -90,6 +90,20 @@ def test_build_autofix_prompt_shows_positive_pr_stats() -> None:
     assert "- Diff Stats: +5 / -2" in prompt
 
 
+def test_build_autofix_prompt_includes_repo_instructions_when_present() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        repo_instructions="Do not edit generated files.\nRun pytest before finishing.",
+    )
+
+    assert "Repository Instructions (AGENTS.md)" in prompt
+    assert "Do not edit generated files." in prompt
+    assert "Run pytest before finishing." in prompt
+
+
 def test_collect_check_commands_defaults_to_python_commands() -> None:
     assert collect_check_commands() == [
         "python -m pytest -q",
