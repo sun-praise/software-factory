@@ -152,6 +152,35 @@ queued -> running -> success
 
 **核心模块**: `app/routes/web.py`
 
+## 后续演进方向
+
+### 按仓库构建可复用的运行时镜像
+
+当前 agent 在独立 worktree 中执行时，最大的非代码风险是运行环境不稳定：
+- Python 项目可能缺 `pytest` / `ruff` / `mypy`
+- Node 项目可能缺 `pnpm` / `npm` 依赖
+- 容器本身有基础工具，但不一定具备目标仓库的开发时依赖
+
+一个可行的后续方案是：根据当前仓库内容，自动构建一个“可反复复用”的仓库运行时镜像，而不是每次 run 都临时补环境。
+
+建议方向：
+- 识别仓库技术栈与依赖声明：
+  - Python: `pyproject.toml`、`requirements*.txt`
+  - Node: `package.json`、`pnpm-lock.yaml`、`package-lock.json`、`yarn.lock`
+- 生成与仓库绑定的 runtime image：
+  - 基于通用 agent 基础镜像
+  - 预装该仓库运行检查所需的开发依赖
+  - 产出可缓存、可重复使用的镜像 tag
+- 后续 run 直接复用该镜像：
+  - 降低每次 `pip install` / `pnpm install` 的时间成本
+  - 减少“宿主机环境”和“临时 worktree 环境”不一致的问题
+  - 让 agent 把时间花在修代码，而不是反复补环境
+
+边界说明：
+- 这不是当前版本已实现的能力
+- 当前版本仍然依赖运行时 bootstrap 和 agent 自行补环境
+- 该方案应作为后续增强项推进，优先解决“环境可复用”和“环境可预测”两个问题
+
 ## 数据模型
 
 ### sessions (开发会话)
