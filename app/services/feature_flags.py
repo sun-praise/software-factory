@@ -24,6 +24,7 @@ FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 OPENHANDS_AGENT_MODE = "openhands"
 CLAUDE_AGENT_MODE = "claude_agent_sdk"
 LEGACY_AGENT_MODE = "legacy"
+CLAUDE_AGENT_PROVIDER_ZHIPU = "zhipu"
 CLAUDE_AGENT_PROVIDER_OPENROUTER = "openrouter"
 CLAUDE_AGENT_PROVIDER_DEEPSEEK = "deepseek"
 CLAUDE_AGENT_RUNTIME_HOST = "host"
@@ -347,6 +348,8 @@ def _normalize_runtime(value: str | None) -> str:
 
 def _normalize_provider(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
+    if normalized == CLAUDE_AGENT_PROVIDER_ZHIPU:
+        return CLAUDE_AGENT_PROVIDER_ZHIPU
     if normalized == CLAUDE_AGENT_PROVIDER_DEEPSEEK:
         return CLAUDE_AGENT_PROVIDER_DEEPSEEK
     return CLAUDE_AGENT_PROVIDER_OPENROUTER

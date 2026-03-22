@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     agent_sdks: tuple[str, ...] = ("claude_agent_sdk", "openhands")
     openhands_command: str = "openhands"
     claude_agent_sdk_command: str = "claude"
-    claude_agent_sdk_provider: str = "openrouter"
-    claude_agent_sdk_base_url: str = "https://openrouter.ai/api"
-    claude_agent_sdk_model: str = "openrouter/hunter-alpha"
+    claude_agent_sdk_provider: str = "zhipu"
+    claude_agent_sdk_base_url: str = "https://open.bigmodel.cn/api/anthropic"
+    claude_agent_sdk_model: str = "glm-5"
     claude_agent_sdk_runtime: str = "host"
     claude_agent_sdk_container_image: str = "software-factory/claude-agent:latest"
     openhands_command_timeout_seconds: int = 600
