@@ -365,3 +365,169 @@ def test_resolve_pr_number_from_issue_returns_none_for_invalid_pull_request_url(
         )
         is None
     )
+
+
+def test_submit_issue_api_dry_run_validates_without_creating_run(
+    tmp_path, monkeypatch
+) -> None:
+    _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Test\nBody: Test.",
+            source_url=target.source_url,
+        ),
+    )
+
+    payload = {
+        "url": "https://github.com/acme/widgets/issues/42",
+        "dry_run": True,
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/api/issues", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["queue_status"] == "validated"
+    assert data["queued_run_id"] is None
+
+
+def test_submit_issue_api_reuses_existing_active_run_same_source_url(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Test\nBody: Test.",
+            source_url=target.source_url,
+        ),
+    )
+
+    source_url = "https://github.com/acme/widgets/issues/42"
+
+    with TestClient(app) as client:
+        first = client.post("/api/issues", json={"url": source_url})
+        assert first.status_code == 200
+        first_data = first.json()
+        assert first_data["queue_status"] == "queued"
+        first_run_id = first_data["queued_run_id"]
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE autofix_runs SET status = 'running' WHERE id = ?",
+                (first_run_id,),
+            )
+            conn.commit()
+
+        second = client.post("/api/issues", json={"url": source_url})
+        assert second.status_code == 200
+        second_data = second.json()
+        assert second_data["queue_status"] == "reused_active_run"
+        assert second_data["queued_run_id"] == first_run_id
+        assert second_data["existing_run_id"] == first_run_id
+        assert second_data["existing_run_status"] == "running"
+
+
+def test_submit_issue_api_creates_new_run_after_previous_stops(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Test\nBody: Test.",
+            source_url=target.source_url,
+        ),
+    )
+
+    source_url = "https://github.com/acme/widgets/issues/42"
+
+    with TestClient(app) as client:
+        first = client.post("/api/issues", json={"url": source_url})
+        assert first.status_code == 200
+        first_data = first.json()
+        assert first_data["queue_status"] == "queued"
+        first_run_id = first_data["queued_run_id"]
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE autofix_runs SET status = 'failed' WHERE id = ?",
+                (first_run_id,),
+            )
+            conn.commit()
+
+        second = client.post("/api/issues", json={"url": source_url})
+        assert second.status_code == 200
+        second_data = second.json()
+        assert second_data["queue_status"] == "queued"
+        assert second_data["queued_run_id"] != first_run_id
+
+
+def test_submit_issue_batch_csv_endpoint(tmp_path, monkeypatch) -> None:
+    _setup_db(tmp_path)
+
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: None,
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_manual_issue_context",
+        lambda target, description_present: web.ManualIssueContext(
+            text="GitHub issue context\nTitle: Test\nBody: Test.",
+            source_url=target.source_url,
+        ),
+    )
+
+    csv_content = "url,description\nhttps://github.com/acme/widgets/issues/42,Fix bug\nhttps://github.com/acme/widgets/issues/43,Fix another"
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/issues/batch",
+            files={"file": ("issues.csv", csv_content, "text/csv")},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["summary"]["created"] == 2
+    assert len(data["results"]) == 2
+
+
+def test_submit_issue_batch_csv_validates_required_columns(tmp_path) -> None:
+    _setup_db(tmp_path)
+
+    csv_content = "description\nJust a description"
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/issues/batch",
+            files={"file": ("issues.csv", csv_content, "text/csv")},
+        )
+
+    assert response.status_code == 400
+    assert "required columns" in response.json()["detail"].lower()

@@ -515,7 +515,7 @@ def test_run_once_allows_push_when_only_preexisting_failures_remain(
 
     assert result["status"] == "success"
     assert result["commit_sha"] == "deadbeef"
-    assert "preexisting_checks_failed" in str(result["error_summary"])
+    assert result["error_summary"] is None
     assert calls["count"] == 2
 
 
@@ -1436,6 +1436,7 @@ def test_sanitize_log_text_redacts_tokens() -> None:
     assert "ghp_abcdefghijklmnopqrstuvwxyz" not in masked
     assert "test-openai-key" not in masked
     assert "[REDACTED]" in masked
+
 
 def test_render_claude_stream_record_handles_non_object_json() -> None:
     lines, result_text, error_text, saw_events = _render_claude_stream_record(
