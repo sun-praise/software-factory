@@ -191,6 +191,40 @@ def update_run_logs_path(conn: sqlite3.Connection, run_id: int, logs_path: str) 
     conn.commit()
 
 
+def get_run_operator_hints(conn: sqlite3.Connection, run_id: int) -> str:
+    row = conn.execute(
+        "SELECT operator_hints FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return ""
+    return str(row["operator_hints"] or "").strip()
+
+
+def append_run_operator_hint(
+    conn: sqlite3.Connection,
+    run_id: int,
+    text: str,
+) -> str | None:
+    normalized = str(text).strip()
+    if not normalized:
+        return None
+
+    existing = get_run_operator_hints(conn, run_id)
+    combined = normalized if not existing else f"{existing}\n\n---\n{normalized}"
+    conn.execute(
+        """
+        UPDATE autofix_runs
+        SET operator_hints = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (combined, run_id),
+    )
+    conn.commit()
+    return combined
+
+
 def touch_run_progress(
     conn: sqlite3.Connection,
     run_id: int,

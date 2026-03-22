@@ -23,7 +23,11 @@ from app.services.agent_runner import (
     _normalize_agent_modes,
     run_once,
 )
-from app.services.queue import claim_next_queued_run, enqueue_autofix_run
+from app.services.queue import (
+    append_run_operator_hint,
+    claim_next_queued_run,
+    enqueue_autofix_run,
+)
 from app.services import agent_runner
 
 
@@ -401,6 +405,64 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
     assert "Validation feedback from the previous attempt:" in prompts[1]
     assert "[failed-check] python -m ruff check ." in prompts[1]
     assert "lint failed" in prompts[1]
+
+
+def test_run_once_rereads_operator_hints_between_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    prompts: list[str] = []
+    executor_calls = {"count": 0}
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        executor_calls["count"] += 1
+        if executor_calls["count"] == 2:
+            return {"returncode": 1, "stdout": "", "stderr": "lint failed"}
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m ruff check ."],
+    )
+
+    def fake_execute_agent_sdks(**kwargs):
+        prompts.append(str(kwargs["prompt"]))
+        if len(prompts) == 1:
+            append_run_operator_hint(
+                conn,
+                int(run["id"]),
+                "Only touch app/services/filter.py",
+            )
+        return True, None, None, "claude_agent_sdk"
+
+    monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert len(prompts) == 2
+    assert "Operator Hints:" not in prompts[0]
+    assert "Operator Hints:" in prompts[1]
+    assert "Only touch app/services/filter.py" in prompts[1]
 
 
 def test_run_once_allows_push_when_only_preexisting_failures_remain(

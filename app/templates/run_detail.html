@@ -66,6 +66,26 @@
         </div>
         <pre id="run-log" class="log log-live">{{ run.log_preview | default("No log data yet.") }}</pre>
       </section>
+
+      <section class="panel issue-form">
+        <div class="log-toolbar">
+          <div>
+            <h2>Operator Hints</h2>
+            <p class="muted tiny">Append steering context for queued or running runs. New hints are picked up on later attempts.</p>
+          </div>
+          <div class="log-toolbar-meta">
+            <span id="hint-status" class="muted tiny"></span>
+          </div>
+        </div>
+        <pre id="operator-hints-preview" class="log hint-preview">{{ run.operator_hints | default("") or "No operator hints yet." }}</pre>
+        <div id="operator-hints-editor" hidden>
+          <label for="operator-hints-input" class="run-hint-label">Append hint</label>
+          <textarea id="operator-hints-input" class="run-hint-textarea" rows="5" placeholder="Example: only touch app/services/filter.py and preserve the existing API shape."></textarea>
+          <div class="actions">
+            <button id="save-hint-button" type="button">Append hint</button>
+          </div>
+        </div>
+      </section>
     </main>
     <script>
       (() => {
@@ -85,6 +105,11 @@
         const pollingIndicator = document.getElementById("polling-indicator");
         const stopButton = document.getElementById("stop-run-button");
         const deleteButton = document.getElementById("delete-run-button");
+        const hintPreview = document.getElementById("operator-hints-preview");
+        const hintEditor = document.getElementById("operator-hints-editor");
+        const hintInput = document.getElementById("operator-hints-input");
+        const hintSaveButton = document.getElementById("save-hint-button");
+        const hintStatus = document.getElementById("hint-status");
         const activeStatuses = new Set(["queued", "running", "cancel_requested"]);
         let pollHandle = null;
 
@@ -133,6 +158,20 @@
           deleteButton.textContent = "Delete run";
         };
 
+        const updateHintControls = (run) => {
+          if (!hintPreview || !hintEditor || !hintStatus) {
+            return;
+          }
+          const hints = (run.operator_hints || "").trim();
+          hintPreview.textContent = hints || "No operator hints yet.";
+          const editable = run.operator_hints_editable === "true";
+          hintEditor.hidden = !editable;
+          hintStatus.textContent = editable ? "Editable" : "Read only";
+          if (!editable && hintInput) {
+            hintInput.value = "";
+          }
+        };
+
         const setPrUrl = (url, prNumber) => {
           if (!url) {
             prText.textContent = "-";
@@ -157,6 +196,7 @@
           updatedAt.textContent = run.updated_at || "-";
           logNode.textContent = run.log_preview || "No log data yet.";
           logNode.scrollTop = logNode.scrollHeight;
+          updateHintControls(run);
 
           const shouldKeepPolling = activeStatuses.has(run.status);
           pollingIndicator.textContent = shouldKeepPolling ? "Live" : "Final";
@@ -204,6 +244,38 @@
           updateView(await response.json());
         };
 
+        const saveHint = async () => {
+          if (!hintInput || !hintSaveButton) {
+            return;
+          }
+          const text = hintInput.value.trim();
+          if (!text) {
+            hintStatus.textContent = "Hint cannot be empty";
+            return;
+          }
+          hintSaveButton.disabled = true;
+          hintStatus.textContent = "Saving...";
+          const body = new URLSearchParams();
+          body.set("text", text);
+          const response = await fetch(`/api/runs/${runId}/operator-hints`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded;charset=UTF-8"
+            },
+            body: body.toString(),
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            hintSaveButton.disabled = false;
+            hintStatus.textContent = "Save failed";
+            return;
+          }
+          hintInput.value = "";
+          hintSaveButton.disabled = false;
+          hintStatus.textContent = "Saved";
+          updateView(await response.json());
+        };
+
         const fetchRun = async () => {
           const response = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
           if (!response.ok) {
@@ -224,6 +296,9 @@
         }
         if (deleteButton) {
           deleteButton.addEventListener("click", deleteRun);
+        }
+        if (hintSaveButton) {
+          hintSaveButton.addEventListener("click", saveHint);
         }
       })();
     </script>

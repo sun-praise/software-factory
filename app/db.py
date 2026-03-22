@@ -31,6 +31,7 @@ def init_db() -> None:
     with connect_db() as conn:
         conn.executescript(SCHEMA_SQL)
         _migrate_m6_columns(conn)
+        _migrate_operator_hint_columns(conn)
         _migrate_app_feature_flags(conn)
 
 
@@ -86,6 +87,17 @@ def _migrate_app_feature_flags(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
+    )
+    conn.commit()
+
+
+def _migrate_operator_hint_columns(conn: sqlite3.Connection) -> None:
+    _ensure_columns(
+        conn,
+        "autofix_runs",
+        {
+            "operator_hints": "TEXT NOT NULL DEFAULT ''",
+        },
     )
     conn.commit()
 

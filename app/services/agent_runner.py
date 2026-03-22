@@ -35,6 +35,7 @@ from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.feature_flags import resolve_agent_feature_flags
 from app.services.policy import increment_autofix_count
 from app.services.queue import (
+    get_run_operator_hints,
     get_run_status,
     is_run_cancel_requested,
     mark_run_finished,
@@ -443,15 +444,6 @@ def run_once(
                 )
 
     repo_instructions = _read_repo_instructions(agent_workspace)
-    prompt = active_ops.build_autofix_prompt(
-        repo=repo,
-        pr_number=pr_number,
-        head_sha=head_sha or "unknown",
-        normalized_review=payload,
-        pr_metadata=pr_metadata,
-        repo_instructions=repo_instructions,
-    )
-    logger.extend(["prompt:", prompt, ""])
 
     try:
         status = "failed"
@@ -494,9 +486,25 @@ def run_once(
                 + ", ".join(sorted(baseline_failure_index))
             )
 
-        prompt_for_attempt = prompt
+        new_failure_results: list[dict[str, Any]] = []
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
+            operator_hints = get_run_operator_hints(conn, run_id)
+            prompt_for_attempt = active_ops.build_autofix_prompt(
+                repo=repo,
+                pr_number=pr_number,
+                head_sha=head_sha or "unknown",
+                normalized_review=payload,
+                pr_metadata=pr_metadata,
+                repo_instructions=repo_instructions,
+                operator_hints=operator_hints,
+            )
+            if attempt > 1 and new_failure_results:
+                prompt_for_attempt = _build_check_feedback_prompt(
+                    base_prompt=prompt_for_attempt,
+                    check_results=new_failure_results,
+                )
             logger.append(f"agent_attempt={attempt}/{MAX_CHECK_FEEDBACK_ATTEMPTS}")
+            logger.extend([f"prompt_attempt={attempt}:", prompt_for_attempt, ""])
             sdk_ok, sdk_error_code, sdk_error_message, used_agent_mode = (
                 _execute_agent_sdks(
                     workspace=agent_workspace,
@@ -633,10 +641,6 @@ def run_once(
             logger.append(run_error_summary)
             if attempt >= MAX_CHECK_FEEDBACK_ATTEMPTS:
                 break
-            prompt_for_attempt = _build_check_feedback_prompt(
-                base_prompt=prompt,
-                check_results=new_failure_results,
-            )
             logger.append("agent_feedback: rerunning agent with failed check output")
 
         logs_path = logger.flush()
