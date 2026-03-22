@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
+
 
 PR_BODY_PREVIEW_LIMIT = 600
 REPO_INSTRUCTIONS_PREVIEW_LIMIT = 4_000
@@ -14,6 +16,7 @@ def build_autofix_prompt(
     normalized_review: Mapping[str, Any],
     pr_metadata: Mapping[str, Any] | None = None,
     repo_instructions: str | None = None,
+    operator_hints: str | None = None,
 ) -> str:
     must_fix = _as_issue_list(normalized_review.get("must_fix"))
     should_fix = _as_issue_list(normalized_review.get("should_fix"))
@@ -37,6 +40,7 @@ def build_autofix_prompt(
     ]
     _append_pr_metadata(lines, metadata)
     _append_repo_instructions(lines, repo_instructions)
+    _append_operator_hints(lines, operator_hints)
     lines.extend(
         [
         ci_summary,
@@ -208,6 +212,21 @@ def _append_repo_instructions(lines: list[str], repo_instructions: str | None) -
     lines.extend(
         [
             "- Repository Instructions (AGENTS.md):",
+            compact,
+        ]
+    )
+
+
+def _append_operator_hints(lines: list[str], operator_hints: str | None) -> None:
+    hints = _safe_text(operator_hints, "")
+    if not hints:
+        return
+    compact = hints.strip()
+    if len(compact) > OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT:
+        compact = f"{compact[:OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT].rstrip()}..."
+    lines.extend(
+        [
+            "- Operator Hints:",
             compact,
         ]
     )

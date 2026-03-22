@@ -28,7 +28,12 @@ from app.services.policy import (
     reset_autofix_count_on_sha_change,
 )
 from app.services.normalizer import normalize_review_events
-from app.services.queue import enqueue_autofix_run, request_run_cancel
+from app.services.queue import (
+    append_run_operator_hint,
+    enqueue_autofix_run,
+    request_run_cancel,
+)
+from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 router = APIRouter(tags=["web"])
@@ -177,7 +182,7 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     with connect_db() as conn:
         row = conn.execute(
             """
-            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path
+            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path, operator_hints
             FROM autofix_runs
             WHERE id = ?
             """,
@@ -194,6 +199,8 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
             "created_at": "-",
             "updated_at": "-",
             "log_preview": "No log data yet.",
+            "operator_hints": "",
+            "operator_hints_editable": "false",
         }
 
     repo = str(row["repo"])
@@ -210,6 +217,10 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "log_preview": _read_run_log(row["logs_path"]),
+        "operator_hints": str(row["operator_hints"] or ""),
+        "operator_hints_editable": (
+            "true" if str(row["status"]) in RUN_HINT_EDITABLE_STATUSES else "false"
+        ),
     }
 
 
@@ -780,7 +791,11 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="run_detail.html",
-        context={"request": request, "run": run},
+        context={
+            "request": request,
+            "run": run,
+            "hint_editable_statuses": sorted(RUN_HINT_EDITABLE_STATUSES),
+        },
     )
 
 
@@ -814,6 +829,53 @@ async def api_cancel_run(run_id: str) -> JSONResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="run not found",
         )
+    return JSONResponse(_load_run_detail(run_id_value))
+
+
+@router.post("/api/runs/{run_id}/operator-hints")
+async def api_append_run_operator_hints(run_id: str, request: Request) -> JSONResponse:
+    try:
+        run_id_value = int(run_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="run_id must be an integer",
+        )
+
+    form = await request.form()
+    text = str(form.get("text", "")).strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="text is required",
+        )
+
+    with connect_db() as conn:
+        row = conn.execute(
+            "SELECT status FROM autofix_runs WHERE id = ?",
+            (run_id_value,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="run not found",
+            )
+
+        current_status = str(row["status"])
+        if current_status not in RUN_HINT_EDITABLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="operator hints can only be appended to active runs",
+            )
+
+        try:
+            append_run_operator_hint(conn, run_id_value, text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
     return JSONResponse(_load_run_detail(run_id_value))
 
 

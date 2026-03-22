@@ -5,6 +5,7 @@ from app.services.agent_prompt import (
     collect_check_commands,
     summarize_check_results,
 )
+from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
 
 
 def test_build_autofix_prompt_contains_required_constraints_and_summaries() -> None:
@@ -102,6 +103,33 @@ def test_build_autofix_prompt_includes_repo_instructions_when_present() -> None:
     assert "Repository Instructions (AGENTS.md)" in prompt
     assert "Do not edit generated files." in prompt
     assert "Run pytest before finishing." in prompt
+
+
+def test_build_autofix_prompt_includes_operator_hints_when_present() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        operator_hints="Only touch app/services/filter.py",
+    )
+
+    assert "Operator Hints:" in prompt
+    assert "Only touch app/services/filter.py" in prompt
+
+
+def test_build_autofix_prompt_truncates_operator_hints() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        operator_hints="x" * (OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT + 50),
+    )
+
+    assert "Operator Hints:" in prompt
+    assert ("x" * (OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT + 50)) not in prompt
+    assert "..." in prompt
 
 
 def test_collect_check_commands_defaults_to_python_commands() -> None:

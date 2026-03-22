@@ -262,6 +262,26 @@ a:hover {
   overflow: auto;
 }
 
+.hint-preview {
+  min-height: 120px;
+  margin-bottom: 0.8rem;
+}
+
+.run-hint-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.run-hint-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
 @media (max-width: 680px) {
   .container {
     margin: 1rem;
