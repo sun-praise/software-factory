@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
+
 
 PR_BODY_PREVIEW_LIMIT = 600
 REPO_INSTRUCTIONS_PREVIEW_LIMIT = 4_000
@@ -219,10 +221,13 @@ def _append_operator_hints(lines: list[str], operator_hints: str | None) -> None
     hints = _safe_text(operator_hints, "")
     if not hints:
         return
+    compact = hints.strip()
+    if len(compact) > OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT:
+        compact = f"{compact[:OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT].rstrip()}..."
     lines.extend(
         [
             "- Operator Hints:",
-            hints,
+            compact,
         ]
     )
 

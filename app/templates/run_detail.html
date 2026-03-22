@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
-    <main class="container run-detail-page" data-run-id="{{ run.id }}">
+    <main class="container run-detail-page" data-run-id="{{ run.id }}" data-hint-editable-statuses='{{ hint_editable_statuses | tojson }}'>
       <p class="breadcrumbs">
         <a href="/">Back to runs</a> ·
         <a href="/settings">Settings</a>
@@ -110,7 +110,9 @@
         const hintInput = document.getElementById("operator-hints-input");
         const hintSaveButton = document.getElementById("save-hint-button");
         const hintStatus = document.getElementById("hint-status");
-        const activeStatuses = new Set(["queued", "running", "cancel_requested"]);
+        const activeStatuses = new Set(
+          JSON.parse(root.dataset.hintEditableStatuses || "[]")
+        );
         let pollHandle = null;
 
         const setStatus = (status) => {

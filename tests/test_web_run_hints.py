@@ -72,3 +72,53 @@ def test_append_run_operator_hint_api_rejects_finished_run(tmp_path: Path) -> No
         )
 
     assert response.status_code == 409
+
+
+def test_append_run_operator_hint_api_returns_404_for_missing_run(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs/999/operator-hints",
+            data={"text": "Only touch app/services/filter.py"},
+        )
+
+    assert response.status_code == 404
+
+
+def test_append_run_operator_hint_api_rejects_invalid_run_id(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/runs/not-a-number/operator-hints",
+            data={"text": "Only touch app/services/filter.py"},
+        )
+
+    assert response.status_code == 400
+
+
+def test_append_run_operator_hint_api_rejects_empty_text(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+    run_id = _insert_run(db_path, status="queued")
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/operator-hints",
+            data={"text": "   "},
+        )
+
+    assert response.status_code == 400
+
+
+def test_append_run_operator_hint_api_rejects_oversized_text(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+    run_id = _insert_run(db_path, status="queued")
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/runs/{run_id}/operator-hints",
+            data={"text": "x" * 1001},
+        )
+
+    assert response.status_code == 400

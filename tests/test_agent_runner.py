@@ -1027,6 +1027,12 @@ def test_run_once_schedules_retry_for_retryable_agent_error(
     conn = _make_conn()
     run = _enqueue_and_claim(conn)
 
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+
     ops = RunnerOps(
         checkout_branch=lambda *_: (True, "checked out"),
         ensure_head_sha=lambda *_: True,

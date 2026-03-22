@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 from app.services.concurrency import can_start_new_run
+from app.services.run_hints import (
+    OPERATOR_HINTS_MAX_CHARS,
+    OPERATOR_HINT_APPEND_MAX_CHARS,
+    OPERATOR_HINT_SEPARATOR,
+)
 
 
 def enqueue_autofix_run(
@@ -209,9 +214,17 @@ def append_run_operator_hint(
     normalized = str(text).strip()
     if not normalized:
         return None
+    if len(normalized) > OPERATOR_HINT_APPEND_MAX_CHARS:
+        raise ValueError(
+            f"operator hint exceeds max length of {OPERATOR_HINT_APPEND_MAX_CHARS} characters"
+        )
 
     existing = get_run_operator_hints(conn, run_id)
-    combined = normalized if not existing else f"{existing}\n\n---\n{normalized}"
+    combined = normalized if not existing else f"{existing}{OPERATOR_HINT_SEPARATOR}{normalized}"
+    if len(combined) > OPERATOR_HINTS_MAX_CHARS:
+        raise ValueError(
+            f"combined operator hints exceed max length of {OPERATOR_HINTS_MAX_CHARS} characters"
+        )
     conn.execute(
         """
         UPDATE autofix_runs

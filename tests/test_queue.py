@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from app.models import SCHEMA_SQL
 from app.services.queue import (
     append_run_operator_hint,
@@ -179,3 +181,18 @@ def test_append_run_operator_hint_accumulates_entries() -> None:
         "Only touch app/services/filter.py\n\n---\nPreserve the existing API shape"
     )
     assert get_run_operator_hints(conn, run_id) == second
+
+
+def test_append_run_operator_hint_rejects_oversized_append() -> None:
+    conn = _make_conn()
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha="abc123",
+        normalized_review_json={"summary": "1 blocking issue"},
+    )
+    assert run_id is not None
+
+    with pytest.raises(ValueError, match="operator hint exceeds max length"):
+        append_run_operator_hint(conn, run_id, "x" * 1001)

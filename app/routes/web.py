@@ -33,10 +33,10 @@ from app.services.queue import (
     enqueue_autofix_run,
     request_run_cancel,
 )
+from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 router = APIRouter(tags=["web"])
-RUN_HINT_EDITABLE_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
 
 
 @dataclass(frozen=True)
@@ -791,7 +791,11 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="run_detail.html",
-        context={"request": request, "run": run},
+        context={
+            "request": request,
+            "run": run,
+            "hint_editable_statuses": sorted(RUN_HINT_EDITABLE_STATUSES),
+        },
     )
 
 
@@ -864,7 +868,13 @@ async def api_append_run_operator_hints(run_id: str, request: Request) -> JSONRe
                 detail="operator hints can only be appended to active runs",
             )
 
-        append_run_operator_hint(conn, run_id_value, text)
+        try:
+            append_run_operator_hint(conn, run_id_value, text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
     return JSONResponse(_load_run_detail(run_id_value))
 
