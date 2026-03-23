@@ -2277,19 +2277,11 @@ def _fetch_pull_request_head(
     ) or None
 
 
-def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
-    if pr_number <= 0:
-        return {}
-    primary_fields = (
-        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
-        "additions,deletions,mergeStateStatus,canBeRebased,mergeable"
-    )
-    fallback_fields = (
-        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
-        "additions,deletions,mergeStateStatus,mergeable"
-    )
+def _run_gh_pr_view(
+    *, repo: str, pr_number: int, json_fields: str
+) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             [
                 "gh",
                 "pr",
@@ -2298,7 +2290,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 "--repo",
                 repo,
                 "--json",
-                primary_fields,
+                json_fields,
             ],
             check=False,
             capture_output=True,
@@ -2311,13 +2303,28 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             repo,
             pr_number,
         )
-        return {}
     except subprocess.TimeoutExpired:
         logger.warning(
             "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
             repo,
             pr_number,
         )
+    return None
+
+
+def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
+    if pr_number <= 0:
+        return {}
+    primary_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,canBeRebased,mergeable"
+    )
+    fallback_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,mergeable"
+    )
+    result = _run_gh_pr_view(repo=repo, pr_number=pr_number, json_fields=primary_fields)
+    if result is None:
         return {}
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
@@ -2327,36 +2334,10 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 repo,
                 pr_number,
             )
-            try:
-                result = subprocess.run(
-                    [
-                        "gh",
-                        "pr",
-                        "view",
-                        str(pr_number),
-                        "--repo",
-                        repo,
-                        "--json",
-                        fallback_fields,
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=PR_FETCH_TIMEOUT_SECONDS,
-                )
-            except FileNotFoundError:
-                logger.warning(
-                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=gh not installed",
-                    repo,
-                    pr_number,
-                )
-                return {}
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
-                    repo,
-                    pr_number,
-                )
+            result = _run_gh_pr_view(
+                repo=repo, pr_number=pr_number, json_fields=fallback_fields
+            )
+            if result is None:
                 return {}
             if result.returncode != 0:
                 details = (
