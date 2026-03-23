@@ -558,7 +558,7 @@ def test_rebase_onto_base_fetch_failure(monkeypatch) -> None:
 
 
 def test_rebase_onto_base_detects_conflict(monkeypatch) -> None:
-    calls = _patch_run(
+    _patch_run(
         monkeypatch,
         [
             (

@@ -1,7 +1,9 @@
+from typing import Any, cast
+
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.normalizer import NormalizedReview
+from app.schemas.normalizer import CICheckItem, IssueItem, NormalizedReview
 
 
 def test_normalized_review_valid_object() -> None:
@@ -10,26 +12,26 @@ def test_normalized_review_valid_object() -> None:
         pr_number=42,
         head_sha="  abc123  ",
         must_fix=[
-            {
-                "source": "  review_comment  ",
-                "path": "app/main.py",
-                "line": 10,
-                "severity": "P1",
-                "text": "  Please handle timeout.  ",
-            }
+            IssueItem(
+                source="  review_comment  ",
+                path="app/main.py",
+                line=10,
+                severity="P1",
+                text="  Please handle timeout.  ",
+            )
         ],
         should_fix=[],
         ignore=[],
         ci_status=" failed ",
         ci_checks=[
-            {
-                "source": "workflow_run",
-                "name": "CI / unit",
-                "status": "completed",
-                "conclusion": "failure",
-                "details_url": " https://example.test/runs/1 ",
-                "head_sha": " abc123 ",
-            }
+            CICheckItem(
+                source="workflow_run",
+                name="CI / unit",
+                status="completed",
+                conclusion="failure",
+                details_url=" https://example.test/runs/1 ",
+                head_sha=" abc123 ",
+            )
         ],
         summary="  Needs one critical fix.  ",
     )
@@ -74,13 +76,16 @@ def test_issue_item_invalid_severity_raises_error() -> None:
             pr_number=42,
             head_sha=None,
             must_fix=[
-                {
-                    "source": "review_body",
-                    "path": None,
-                    "line": 1,
-                    "severity": "P4",
-                    "text": "invalid severity",
-                }
+                cast(
+                    Any,
+                    {
+                        "source": "review_body",
+                        "path": None,
+                        "line": 1,
+                        "severity": "P4",
+                        "text": "invalid severity",
+                    },
+                )
             ],
             should_fix=[],
             ignore=[],
@@ -95,13 +100,16 @@ def test_issue_item_non_positive_line_raises_error() -> None:
             pr_number=42,
             head_sha=None,
             must_fix=[
-                {
-                    "source": "review_body",
-                    "path": "app/main.py",
-                    "line": 0,
-                    "severity": "P2",
-                    "text": "line must be positive",
-                }
+                cast(
+                    Any,
+                    {
+                        "source": "review_body",
+                        "path": "app/main.py",
+                        "line": 0,
+                        "severity": "P2",
+                        "text": "line must be positive",
+                    },
+                )
             ],
             should_fix=[],
             ignore=[],
@@ -116,14 +124,17 @@ def test_extra_field_raises_error() -> None:
             pr_number=42,
             head_sha=None,
             must_fix=[
-                {
-                    "source": "review_body",
-                    "path": None,
-                    "line": None,
-                    "severity": "P2",
-                    "text": "ok",
-                    "extra": "not allowed",
-                }
+                cast(
+                    Any,
+                    {
+                        "source": "review_body",
+                        "path": None,
+                        "line": None,
+                        "severity": "P2",
+                        "text": "ok",
+                        "extra": "not allowed",
+                    },
+                )
             ],
             should_fix=[],
             ignore=[],

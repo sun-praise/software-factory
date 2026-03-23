@@ -57,7 +57,8 @@ def test_schedule_retry_updates_retry_fields() -> None:
         ("acme/widgets", 42, "failed", 1, 3, 1),
     )
     conn.commit()
-    run_id = int(cursor.lastrowid)
+    run_id = cursor.lastrowid
+    assert run_id is not None
 
     config = RetryConfig(base_delay_seconds=15, max_delay_seconds=120)
     plan = schedule_retry(
@@ -92,7 +93,8 @@ def test_schedule_retry_marks_non_retryable_failure() -> None:
         ("acme/widgets", 43, "failed", 1, 3, 1),
     )
     conn.commit()
-    run_id = int(cursor.lastrowid)
+    run_id = cursor.lastrowid
+    assert run_id is not None
 
     config = RetryConfig(non_retryable_error_codes={"fatal"})
     plan = schedule_retry(
@@ -123,7 +125,8 @@ def test_schedule_retry_backward_compat_individual_params() -> None:
         ("acme/widgets", 44, "failed", 1, 3, 1),
     )
     conn.commit()
-    run_id = int(cursor.lastrowid)
+    run_id = cursor.lastrowid
+    assert run_id is not None
 
     plan = schedule_retry(
         conn,

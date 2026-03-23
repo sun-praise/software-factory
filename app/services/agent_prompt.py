@@ -217,9 +217,6 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
     deletions = _positive_int_text(metadata.get("deletions"))
     body = _safe_text(metadata.get("body"), "")
     merge_state_status = _safe_text(metadata.get("merge_state_status"), "")
-    is_merge_conflict = metadata.get("is_merge_conflict")
-    is_behind = metadata.get("is_behind")
-    is_blocked = metadata.get("is_blocked")
     can_be_rebased = metadata.get("can_be_rebased")
     mergeable = metadata.get("mergeable")
 

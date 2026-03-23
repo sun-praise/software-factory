@@ -36,6 +36,7 @@ from app.services.queue import (
     enqueue_autofix_run,
     request_run_cancel,
 )
+from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
@@ -81,9 +82,6 @@ def _find_existing_run_by_source_url(
                 "status": row["status"],
             }
     return None
-
-
-from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 router = APIRouter(tags=["web"])
@@ -164,9 +162,9 @@ def _fetch_runs(
     runs = [
         {
             "id": str(row["id"]),
-            "repo": str(row["repo"]),
-            "pr_number": str(row["pr_number"]),
-            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}",
+            "repo": str(row["repo"]) if row["repo"] is not None else "-",
+            "pr_number": str(row["pr_number"]) if row["pr_number"] is not None else "-",
+            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}" if row["repo"] and row["pr_number"] and row["pr_number"] != 0 else "",
             "status": str(row["status"]),
             "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
@@ -253,10 +251,10 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
             "operator_hints_editable": "false",
         }
 
-    repo = str(row["repo"])
-    pr_number = str(row["pr_number"])
+    repo = str(row["repo"]) if row["repo"] is not None else "-"
+    pr_number = str(row["pr_number"]) if row["pr_number"] is not None else "-"
     pr_url = ""
-    if repo and pr_number and pr_number != "0":
+    if row["repo"] and row["pr_number"] and row["pr_number"] != 0:
         pr_url = f"https://github.com/{repo}/pull/{pr_number}"
     return {
         "id": str(row["id"]),
@@ -782,7 +780,7 @@ def _enqueue_issue_fix(
 
     source_url = normalized_review.get("manual_issue_source_url")
 
-    final_idempotency_key = idempotency_key
+    final_idempotency_key: str | None = idempotency_key
 
     with connect_db() as conn:
         if source_url and target.url_kind == "issue":
@@ -1323,7 +1321,6 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
         )
 
     required_fields = {"url"}
-    optional_fields = {"description", "dry_run"}
     missing_fields = required_fields - set(reader.fieldnames)
     if missing_fields:
         raise HTTPException(

@@ -13,16 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.db import connect_db, init_db
-from app.config import get_settings
-from app.services.agent_runner import (
-    cleanup_active_agent_processes,
-    run_once,
-)
-from app.services.queue import claim_next_queued_run, mark_run_finished
-from app.services.queue import recover_stale_runs
-from app.services.retry import RetryConfig, schedule_retry
-from app.services.logging_config import get_run_log_path
+from app.db import connect_db, init_db  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.services.agent_runner import cleanup_active_agent_processes, run_once  # noqa: E402
+from app.services.queue import claim_next_queued_run, mark_run_finished  # noqa: E402
+from app.services.queue import recover_stale_runs  # noqa: E402
+from app.services.retry import RetryConfig, schedule_retry  # noqa: E402
+from app.services.logging_config import get_run_log_path  # noqa: E402
 
 
 _STOP_WORKER = False

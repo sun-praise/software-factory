@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.db import connect_db, get_db_path, init_db
+from app.db import connect_db, get_db_path, init_db  # noqa: E402
 
 
 def main() -> int:
