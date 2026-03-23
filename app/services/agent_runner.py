@@ -71,6 +71,8 @@ FAILED_CI_CONCLUSIONS = {
     "startup_failure",
     "stale",
 }
+MERGEABILITY_RECHECK_ATTEMPTS = 3
+MERGEABILITY_RECHECK_DELAY_SECONDS = 2.0
 
 _REDACTION_PATTERNS = (
     re.compile(r"(ghp_[A-Za-z0-9]{16,})"),
@@ -713,6 +715,17 @@ def run_once(
                     log_lines=log_lines,
                 )
                 run_error_summary = git_error_summary
+                if status == "success":
+                    mergeability_error = _ensure_pr_is_mergeable_after_run(
+                        repo=repo,
+                        pr_number=pr_number,
+                        initial_metadata=pr_metadata,
+                        logger=logger,
+                    )
+                    if mergeability_error:
+                        status = "failed"
+                        run_error_summary = mergeability_error
+                        run_error_code = "pr_not_mergeable_after_run"
                 logger.flush()
                 break
 
@@ -2403,6 +2416,78 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         "is_behind": is_behind,
         "is_blocked": is_blocked,
     }
+
+
+def _pr_requires_mergeability_gate(metadata: Mapping[str, Any] | None) -> bool:
+    if not metadata:
+        return False
+    if metadata.get("is_merge_conflict") or metadata.get("is_behind"):
+        return True
+    mergeable = metadata.get("mergeable")
+    if isinstance(mergeable, bool):
+        return not mergeable
+    mergeable_state = (_safe_text(mergeable) or "").upper()
+    return mergeable_state in {"CONFLICTING"}
+
+
+def _pr_mergeability_verdict(metadata: Mapping[str, Any] | None) -> str:
+    if not metadata:
+        return "unknown"
+    if metadata.get("is_merge_conflict") or metadata.get("is_behind"):
+        return "blocked"
+    mergeable = metadata.get("mergeable")
+    if isinstance(mergeable, bool):
+        return "mergeable" if mergeable else "blocked"
+    mergeable_state = (_safe_text(mergeable) or "").upper()
+    if mergeable_state == "MERGEABLE":
+        return "mergeable"
+    if mergeable_state == "CONFLICTING":
+        return "blocked"
+    merge_state_status = (_safe_text(metadata.get("merge_state_status")) or "").upper()
+    if merge_state_status in {"UNKNOWN", "UNSTABLE"}:
+        return "unknown"
+    return "unknown"
+
+
+def _format_pr_mergeability_status(metadata: Mapping[str, Any] | None) -> str:
+    if not metadata:
+        return "mergeability metadata unavailable"
+    merge_state_status = _safe_text(metadata.get("merge_state_status")) or "unknown"
+    mergeable = metadata.get("mergeable")
+    mergeable_text = str(mergeable) if mergeable is not None else "unknown"
+    return f"merge_state={merge_state_status} mergeable={mergeable_text}"
+
+
+def _ensure_pr_is_mergeable_after_run(
+    *,
+    repo: str,
+    pr_number: int,
+    initial_metadata: Mapping[str, Any] | None,
+    logger: RunLogger,
+) -> str | None:
+    latest_metadata: Mapping[str, Any] | None = None
+    gate_required = _pr_requires_mergeability_gate(initial_metadata)
+    for attempt in range(1, MERGEABILITY_RECHECK_ATTEMPTS + 1):
+        latest_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+        gate_required = gate_required or _pr_requires_mergeability_gate(latest_metadata)
+        if not gate_required:
+            return None
+        verdict = _pr_mergeability_verdict(latest_metadata)
+        summary = _format_pr_mergeability_status(latest_metadata)
+        if verdict == "mergeable":
+            logger.append(f"pr_mergeability_verified: {summary}")
+            return None
+        if verdict == "unknown" and attempt < MERGEABILITY_RECHECK_ATTEMPTS:
+            logger.append(
+                f"pr_mergeability_recheck: attempt={attempt}/{MERGEABILITY_RECHECK_ATTEMPTS} {summary}"
+            )
+            time.sleep(MERGEABILITY_RECHECK_DELAY_SECONDS)
+            continue
+        logger.append(f"pr_mergeability_blocker: {summary}")
+        if verdict == "unknown":
+            return f"pr_mergeability_unverified: {summary}"
+        return f"pr_not_mergeable_after_run: {summary}"
+    return None
 
 
 def _run_git_command(

@@ -177,6 +177,7 @@ def _append_pr_merge_state_context(
                 "⚠️ PR Conflict State:",
                 "- This pull request has merge conflicts with the base branch.",
                 "- Automatic merging is not possible until conflicts are resolved.",
+                "- Do not treat the run as complete until the PR is mergeable again.",
             ]
         )
         if can_be_rebased:
@@ -195,6 +196,7 @@ def _append_pr_merge_state_context(
                 "⚠️ PR Behind Base Branch:",
                 "- This pull request is behind the base branch.",
                 "- Consider updating the PR branch before applying fixes.",
+                "- The run is only complete once the PR is mergeable again.",
             ]
         )
         if can_be_rebased:

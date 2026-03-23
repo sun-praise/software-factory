@@ -40,6 +40,20 @@ def _pick_message(result: subprocess.CompletedProcess[str]) -> str:
     return f"git exited with code {result.returncode}"
 
 
+def _resolve_target_branch(
+    repo_dir: str, branch: str | None
+) -> tuple[str | None, str | None]:
+    if branch is not None:
+        return branch, None
+    branch_result = _run_git(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if branch_result.returncode != 0:
+        return None, _pick_message(branch_result)
+    target_branch = branch_result.stdout.strip()
+    if not target_branch or target_branch == "HEAD":
+        return None, "detached_head"
+    return target_branch, None
+
+
 def ensure_head_sha(repo_dir: str, expected_sha: str) -> bool:
     result = _run_git(repo_dir, ["rev-parse", "HEAD"])
     if result.returncode != 0:
@@ -109,13 +123,69 @@ def commit_and_push(
 
     diff_result = _run_git(repo_dir, ["diff", "--cached", "--quiet"])
     if diff_result.returncode == 0:
+        target_branch, branch_error = _resolve_target_branch(repo_dir, branch)
+        if target_branch and not branch_error:
+            ahead_result = _run_git(
+                repo_dir,
+                ["rev-list", "--left-right", "--count", f"{remote}/{target_branch}...HEAD"],
+            )
+            if ahead_result.returncode == 0:
+                counts = ahead_result.stdout.strip().split()
+                if len(counts) == 2:
+                    try:
+                        ahead_count = int(counts[1])
+                    except ValueError:
+                        ahead_count = 0
+                    if ahead_count > 0:
+                        sha_result = _run_git(repo_dir, ["rev-parse", "HEAD"])
+                        if sha_result.returncode != 0:
+                            return {
+                                "success": False,
+                                "commit_sha": None,
+                                "error": _pick_message(sha_result),
+                                "error_stage": "git_rev_parse",
+                                "remote": remote,
+                                "branch": target_branch,
+                                "pushed_ref": None,
+                            }
+                        commit_sha = sha_result.stdout.strip()
+                        if not commit_sha:
+                            return {
+                                "success": False,
+                                "commit_sha": None,
+                                "error": "empty_commit_sha",
+                                "error_stage": "git_rev_parse",
+                                "remote": remote,
+                                "branch": target_branch,
+                                "pushed_ref": None,
+                            }
+                        push_result = _run_git(repo_dir, ["push", remote, target_branch])
+                        if push_result.returncode != 0:
+                            return {
+                                "success": False,
+                                "commit_sha": commit_sha,
+                                "error": _pick_message(push_result),
+                                "error_stage": "git_push",
+                                "remote": remote,
+                                "branch": target_branch,
+                                "pushed_ref": f"{remote}/{target_branch}",
+                            }
+                        return {
+                            "success": True,
+                            "commit_sha": commit_sha,
+                            "error": None,
+                            "error_stage": None,
+                            "remote": remote,
+                            "branch": target_branch,
+                            "pushed_ref": f"{remote}/{target_branch}",
+                        }
         return {
             "success": False,
             "commit_sha": None,
             "error": "no_changes",
             "error_stage": "git_diff",
             "remote": remote,
-            "branch": branch,
+            "branch": target_branch if target_branch else branch,
             "pushed_ref": None,
         }
     if diff_result.returncode != 1:
@@ -165,30 +235,17 @@ def commit_and_push(
             "pushed_ref": None,
         }
 
-    target_branch = branch
-    if target_branch is None:
-        branch_result = _run_git(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
-        if branch_result.returncode != 0:
-            return {
-                "success": False,
-                "commit_sha": commit_sha,
-                "error": _pick_message(branch_result),
-                "error_stage": "git_branch",
-                "remote": remote,
-                "branch": None,
-                "pushed_ref": None,
-            }
-        target_branch = branch_result.stdout.strip()
-        if not target_branch or target_branch == "HEAD":
-            return {
-                "success": False,
-                "commit_sha": commit_sha,
-                "error": "detached_head",
-                "error_stage": "git_branch",
-                "remote": remote,
-                "branch": target_branch or None,
-                "pushed_ref": None,
-            }
+    target_branch, branch_error = _resolve_target_branch(repo_dir, branch)
+    if branch_error or not target_branch:
+        return {
+            "success": False,
+            "commit_sha": commit_sha,
+            "error": branch_error or "detached_head",
+            "error_stage": "git_branch",
+            "remote": remote,
+            "branch": target_branch or None,
+            "pushed_ref": None,
+        }
 
     push_result = _run_git(repo_dir, ["push", remote, target_branch])
     if push_result.returncode != 0:
