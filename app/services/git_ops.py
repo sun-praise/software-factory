@@ -213,6 +213,28 @@ def commit_and_push(
     }
 
 
+def rebase_onto_base(
+    repo_dir: str, base_ref: str, remote: str = "origin"
+) -> tuple[bool, str, bool]:
+    fetch_result = _run_git(repo_dir, ["fetch", remote, base_ref])
+    if fetch_result.returncode != 0:
+        remote_ref = base_ref
+    else:
+        remote_ref = f"{remote}/{base_ref}"
+
+    rebase_result = _run_git(repo_dir, ["rebase", remote_ref])
+    if rebase_result.returncode == 0:
+        return True, rebase_result.stdout.strip() or f"rebased onto {remote_ref}", False
+
+    abort_result = _run_git(repo_dir, ["rebase", "--abort"])
+    conflict_message = rebase_result.stderr.strip() or rebase_result.stdout.strip()
+    if abort_result.returncode != 0:
+        conflict_message = (
+            f"{conflict_message}; abort also failed: {_pick_message(abort_result)}"
+        )
+    return False, f"rebase_conflict: {conflict_message}", True
+
+
 def post_pr_comment(
     repo_dir: str,
     repo: str,

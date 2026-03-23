@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import subprocess
 import threading
 from pathlib import Path
 
@@ -1686,3 +1687,379 @@ def test_build_agent_env_includes_ci_context() -> None:
     assert env["SOFTWARE_FACTORY_CI_STATUS"] == "failed"
     assert env["SOFTWARE_FACTORY_CI_FAILED_CHECKS"] == "CI / unit"
     assert '"name": "CI / unit"' in env["SOFTWARE_FACTORY_CI_CHECKS_JSON"]
+
+
+def test_rebase_onto_base_success(tmp_path: Path) -> None:
+    from app.services.git_ops import rebase_onto_base
+
+    git_dir = tmp_path / "repo"
+    git_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=git_dir, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    (git_dir / "file.txt").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"], cwd=git_dir, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "feature"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    (git_dir / "feature_only.txt").write_text("feature change\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feature change"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "main"], cwd=git_dir, check=True, capture_output=True
+    )
+    (git_dir / "main_only.txt").write_text("main change\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "main change"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "feature"], cwd=git_dir, check=True, capture_output=True
+    )
+    ok, message, is_conflict = rebase_onto_base(str(git_dir), "main")
+    assert ok is True
+    assert is_conflict is False
+
+
+def test_rebase_onto_base_conflict(tmp_path: Path) -> None:
+    from app.services.git_ops import rebase_onto_base
+
+    git_dir = tmp_path / "repo"
+    git_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=git_dir, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    (git_dir / "file.txt").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"], cwd=git_dir, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "feature"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    (git_dir / "file.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feature"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "main"], cwd=git_dir, check=True, capture_output=True
+    )
+    (git_dir / "file.txt").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "main"],
+        cwd=git_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "feature"], cwd=git_dir, check=True, capture_output=True
+    )
+    ok, message, is_conflict = rebase_onto_base(str(git_dir), "main")
+    assert ok is False
+    assert is_conflict is True
+    assert "rebase_conflict" in message
+
+
+def test_run_once_rebases_when_pr_is_behind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    (tmp_path / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
+
+    def fake_pr_metadata(repo, pr_number):
+        return {
+            "title": "Behind PR",
+            "base_ref": "main",
+            "head_ref": "feature/test",
+            "head_sha": "abc123",
+            "is_merge_conflict": False,
+            "is_behind": True,
+            "can_be_rebased": True,
+        }
+
+    rebase_calls: list[tuple[str, str, str]] = []
+
+    def fake_rebase(repo_dir, base_ref, remote):
+        rebase_calls.append((repo_dir, base_ref, remote))
+        return (True, "rebased onto origin/main", False)
+
+    monkeypatch.setattr(
+        agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        rebase_onto_base=fake_rebase,
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert len(rebase_calls) == 1
+    assert rebase_calls[0][1] == "main"
+
+
+def test_run_once_rebases_when_pr_has_merge_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    (tmp_path / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
+
+    def fake_pr_metadata(repo, pr_number):
+        return {
+            "title": "Conflict PR",
+            "base_ref": "main",
+            "head_ref": "feature/test",
+            "head_sha": "abc123",
+            "is_merge_conflict": True,
+            "is_behind": False,
+            "can_be_rebased": True,
+        }
+
+    rebase_calls: list[tuple[str, str, str]] = []
+
+    def fake_rebase(repo_dir, base_ref, remote):
+        rebase_calls.append((repo_dir, base_ref, remote))
+        return (True, "rebased onto origin/main", False)
+
+    monkeypatch.setattr(
+        agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        rebase_onto_base=fake_rebase,
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert len(rebase_calls) == 1
+
+
+def test_run_once_blocks_on_rebase_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    def fake_pr_metadata(repo, pr_number):
+        return {
+            "title": "Conflict PR",
+            "base_ref": "main",
+            "head_ref": "feature/test",
+            "head_sha": "abc123",
+            "is_merge_conflict": True,
+            "is_behind": False,
+            "can_be_rebased": True,
+        }
+
+    def fake_rebase(repo_dir, base_ref, remote):
+        return (False, "rebase_conflict: CONFLICT (content): file.txt", True)
+
+    monkeypatch.setattr(
+        agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        rebase_onto_base=fake_rebase,
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    assert "rebase_conflict" in result["error_summary"]
+    logs_path = Path(result["logs_path"])
+    logs_text = logs_path.read_text(encoding="utf-8")
+    assert "rebase_blocker" in logs_text
+
+
+def test_run_once_skips_rebase_when_pr_is_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    (tmp_path / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
+
+    def fake_pr_metadata(repo, pr_number):
+        return {
+            "title": "Clean PR",
+            "base_ref": "main",
+            "head_ref": "feature/test",
+            "head_sha": "abc123",
+            "is_merge_conflict": False,
+            "is_behind": False,
+            "can_be_rebased": True,
+        }
+
+    rebase_calls: list[tuple[str, str, str]] = []
+
+    def fake_rebase(repo_dir, base_ref, remote):
+        rebase_calls.append((repo_dir, base_ref, remote))
+        return (True, "rebased", False)
+
+    monkeypatch.setattr(
+        agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        rebase_onto_base=fake_rebase,
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert len(rebase_calls) == 0
