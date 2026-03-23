@@ -1936,19 +1936,25 @@ def test_run_once_rebases_when_pr_is_behind(
         rebase_calls.append((repo_dir, base_ref, remote))
         return (True, "rebased onto origin/main", False)
 
+    def fake_run_git_command(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0] if args else [], returncode=0, stdout="newsha123\n", stderr=""
+        )
+
     monkeypatch.setattr(
         agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
     )
     monkeypatch.setattr(
         agent_runner,
         "_prepare_run_workspace",
-        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+        lambda **kwargs: (str(tmp_path), str(tmp_path), "feature/test", "abc123"),
     )
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
         lambda **kwargs: (True, None, None, "claude_agent_sdk"),
     )
+    monkeypatch.setattr(agent_runner, "_run_git_command", fake_run_git_command)
 
     ops = RunnerOps(
         commit_and_push=lambda **_: {
@@ -2002,19 +2008,25 @@ def test_run_once_rebases_when_pr_has_merge_conflict(
         rebase_calls.append((repo_dir, base_ref, remote))
         return (True, "rebased onto origin/main", False)
 
+    def fake_run_git_command(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0] if args else [], returncode=0, stdout="newsha123\n", stderr=""
+        )
+
     monkeypatch.setattr(
         agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
     )
     monkeypatch.setattr(
         agent_runner,
         "_prepare_run_workspace",
-        lambda **kwargs: (str(tmp_path), None, "feature/test", "abc123"),
+        lambda **kwargs: (str(tmp_path), str(tmp_path), "feature/test", "abc123"),
     )
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
         lambda **kwargs: (True, None, None, "claude_agent_sdk"),
     )
+    monkeypatch.setattr(agent_runner, "_run_git_command", fake_run_git_command)
 
     ops = RunnerOps(
         commit_and_push=lambda **_: {
@@ -2298,3 +2310,163 @@ def test_run_once_blocks_on_rebase_non_conflict_failure(
     logs_path = Path(result["logs_path"])
     logs_text = logs_path.read_text(encoding="utf-8")
     assert "rebase_blocker" in logs_text
+
+
+def test_run_once_rebase_succeeds_but_sha_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    (tmp_path / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
+
+    def fake_pr_metadata(repo, pr_number):
+        return {
+            "title": "Behind PR",
+            "base_ref": "main",
+            "head_ref": "feature/test",
+            "head_sha": "abc123",
+            "is_merge_conflict": False,
+            "is_behind": True,
+            "can_be_rebased": True,
+        }
+
+    rebase_calls: list[tuple[str, str, str]] = []
+
+    def fake_rebase(repo_dir, base_ref, remote):
+        rebase_calls.append((repo_dir, base_ref, remote))
+        return (True, "rebased onto origin/main", False)
+
+    def fake_run_git_command(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0] if args else [],
+            returncode=1,
+            stdout="",
+            stderr="fatal: not a git repository",
+        )
+
+    monkeypatch.setattr(
+        agent_runner, "_collect_pull_request_metadata", fake_pr_metadata
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (str(tmp_path), str(tmp_path), "feature/test", "abc123"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+    monkeypatch.setattr(agent_runner, "_run_git_command", fake_run_git_command)
+
+    ops = RunnerOps(
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        rebase_onto_base=fake_rebase,
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "failed"
+    assert "failed to read HEAD SHA" in result["error_summary"]
+    assert len(rebase_calls) == 1
+
+
+def test_collect_pull_request_metadata_logs_unknown_state(
+    monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    import json
+
+    def fake_run(*args, **kwargs):
+        result = subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "title": "Test PR",
+                    "body": "",
+                    "baseRefName": "main",
+                    "headRefName": "feature/test",
+                    "headRefOid": "abc123",
+                    "changedFiles": 1,
+                    "additions": 10,
+                    "deletions": 5,
+                    "mergeStateStatus": "UNKNOWN",
+                    "canBeRebased": True,
+                    "mergeable": True,
+                }
+            ),
+            stderr="",
+        )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        metadata = agent_runner._collect_pull_request_metadata(
+            repo="owner/repo", pr_number=123
+        )
+
+    assert metadata["merge_state_status"] == "UNKNOWN"
+    assert metadata["is_merge_conflict"] is False
+    assert metadata["is_behind"] is False
+    assert any("pr_merge_state_unknown" in record.message for record in caplog.records)
+
+
+def test_collect_pull_request_metadata_logs_unstable_state(
+    monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    import json
+
+    def fake_run(*args, **kwargs):
+        result = subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "title": "Test PR",
+                    "body": "",
+                    "baseRefName": "main",
+                    "headRefName": "feature/test",
+                    "headRefOid": "abc123",
+                    "changedFiles": 1,
+                    "additions": 10,
+                    "deletions": 5,
+                    "mergeStateStatus": "UNSTABLE",
+                    "canBeRebased": True,
+                    "mergeable": True,
+                }
+            ),
+            stderr="",
+        )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        metadata = agent_runner._collect_pull_request_metadata(
+            repo="owner/repo", pr_number=123
+        )
+
+    assert metadata["merge_state_status"] == "UNSTABLE"
+    assert metadata["is_merge_conflict"] is False
+    assert metadata["is_behind"] is False
+    assert any("pr_merge_state_unknown" in record.message for record in caplog.records)

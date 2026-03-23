@@ -572,3 +572,69 @@ def test_is_rebase_conflict_returns_false_for_other_errors() -> None:
     assert not git_ops._is_rebase_conflict(
         _cp(["git", "rebase"], returncode=1, stderr="")
     )
+
+
+def test_rebase_onto_base_fetch_failure_but_rebase_succeeds_locally(
+    monkeypatch,
+) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(
+                    ["git", "fetch", "origin", "main"],
+                    returncode=1,
+                    stderr="fatal: could not resolve host\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "main"],
+                _cp(
+                    ["git", "rebase", "main"],
+                    returncode=0,
+                    stdout="Successfully rebased onto main\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is True
+    assert is_conflict is False
+    assert "rebase succeeded but fetch had failed" in message
+    assert "rebased to local main" in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "main"],
+    ]
+
+
+def test_rebase_onto_base_success_message_includes_remote_ref(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=0,
+                    stdout="Successfully rebased\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is True
+    assert is_conflict is False
+    assert "Successfully rebased" in message
+    assert "fetch had failed" not in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "origin/main"],
+    ]

@@ -469,6 +469,28 @@ def run_once(
             if updated_sha_result.returncode == 0:
                 head_sha = updated_sha_result.stdout.strip()
                 logger.append(f"rebase_head_sha={head_sha}")
+            else:
+                sha_error = (
+                    updated_sha_result.stderr.strip()
+                    or updated_sha_result.stdout.strip()
+                    or "unknown error"
+                )
+                logger.append(f"rebase_sha_failed: {sha_error}")
+                logs_path = logger.logs_path
+                status, scheduled_error = _finish_failed_run(
+                    conn=conn,
+                    run_id=run_id,
+                    error_summary=f"rebase succeeded but failed to read HEAD SHA: {sha_error}",
+                    logs_path=logs_path,
+                    error_code="rebase_sha_read_failed",
+                )
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=scheduled_error,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
         elif rebase_is_conflict:
             logger.append(f"rebase_blocker: {rebase_message}")
             logs_path = logger.logs_path
@@ -2322,6 +2344,14 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
     is_merge_conflict = merge_state_status in {"CONFLICTING", "DIRTY"}
     is_behind = merge_state_status == "BEHIND"
     is_blocked = merge_state_status == "BLOCKED"
+    is_unknown_state = merge_state_status in {"UNKNOWN", "UNSTABLE"}
+    if is_unknown_state:
+        logger.warning(
+            "pr_merge_state_unknown: repo=%s pr=%s merge_state_status=%s",
+            repo,
+            pr_number,
+            merge_state_status,
+        )
     return {
         "title": _safe_text(payload.get("title")),
         "body": _safe_text(payload.get("body")),

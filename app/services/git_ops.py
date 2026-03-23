@@ -225,7 +225,10 @@ def rebase_onto_base(
 
     rebase_result = _run_git(repo_dir, ["rebase", remote_ref])
     if rebase_result.returncode == 0:
-        return True, rebase_result.stdout.strip() or f"rebased onto {remote_ref}", False
+        message = rebase_result.stdout.strip() or f"rebased onto {remote_ref}"
+        if fetch_failed:
+            message = f"rebase succeeded but fetch had failed (rebased to local {base_ref}): {message}"
+        return True, message, False
 
     abort_result = _run_git(repo_dir, ["rebase", "--abort"])
     raw_message = rebase_result.stderr.strip() or rebase_result.stdout.strip() or ""
