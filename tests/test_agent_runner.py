@@ -224,6 +224,62 @@ def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) ->
     assert "manual_issue_context_missing" in str(result["error_summary"])
 
 
+def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    executor_called = False
+
+    def fail_prepare_run_workspace(**kwargs):
+        raise ValueError("unable to resolve PR head branch")
+
+    def executor(*args, **kwargs):
+        nonlocal executor_called
+        executor_called = True
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        fail_prepare_run_workspace,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("_execute_agent_sdks should not be called")
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=RunnerOps(
+            commit_and_push=lambda **_: (_ for _ in ()).throw(
+                AssertionError("commit_and_push should not be called")
+            ),
+            post_pr_comment=lambda *_: (True, "ok"),
+        ),
+    )
+
+    assert result["status"] in {"failed", "retry_scheduled"}
+    assert "agent workspace init failed" in str(result["error_summary"])
+    assert executor_called is False
+
+    row = conn.execute(
+        "SELECT status, last_error_code, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == result["status"]
+    assert row["last_error_code"] == agent_runner.OPENHANDS_FAILURE_CODE_WORKTREE
+    assert "unable to resolve PR head branch" in str(row["error_summary"])
+
+
 def test_collect_pull_request_metadata_returns_empty_when_gh_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -569,6 +625,69 @@ def test_prepare_run_workspace_skips_pr_refetch_when_branch_and_head_known(
     assert resolved_branch == "feature/test"
     assert resolved_head_sha == "abc123"
     assert checkout_calls == [("feature/test", "abc123")]
+
+
+def test_prepare_run_workspace_creates_branch_for_plain_issue_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cloned_workspace = tmp_path / "run-workspace"
+    cloned_workspace.mkdir()
+    checkout_calls: list[tuple[str | None, str | None]] = []
+    issue_branch_calls: list[str] = []
+
+    monkeypatch.setattr(agent_runner, "_ensure_repo_cache", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agent_runner,
+        "_create_run_workspace_clone",
+        lambda **kwargs: str(cloned_workspace),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_fetch_pull_request_head",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("_fetch_pull_request_head should not be called")
+        ),
+    )
+
+    def fake_checkout_run_workspace_target(**kwargs) -> None:
+        checkout_calls.append(
+            (kwargs.get("resolved_branch"), kwargs.get("resolved_head_sha"))
+        )
+
+    def fake_checkout_manual_issue_branch(**kwargs) -> None:
+        issue_branch_calls.append(str(kwargs["branch_name"]))
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_run_workspace_target",
+        fake_checkout_run_workspace_target,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_manual_issue_branch",
+        fake_checkout_manual_issue_branch,
+    )
+
+    workspace_dir, agent_workspace, resolved_branch, resolved_head_sha = (
+        agent_runner._prepare_run_workspace(
+            runtime_root=str(tmp_path),
+            repo="acme/widgets",
+            pr_number=0,
+            run_id=123,
+            branch=None,
+            head_sha=None,
+            source_kind="issue",
+            issue_number=42,
+        )
+    )
+
+    assert workspace_dir == str(cloned_workspace)
+    assert agent_workspace == str(cloned_workspace)
+    assert resolved_branch == "autofix/run-123-issue-42"
+    assert resolved_head_sha is None
+    assert checkout_calls == [(None, None)]
+    assert issue_branch_calls == ["autofix/run-123-issue-42"]
 
 
 def test_run_once_returns_failed_checks_to_agent_and_retries(

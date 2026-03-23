@@ -93,6 +93,7 @@ class ParsedIssueTarget:
     owner: str
     repo_name: str
     pr_number: int
+    resolved_pr_number: int | None
     issue_number: int | None
     source_url: str
     source_fragment: str
@@ -302,6 +303,7 @@ def _parse_issue_url(url: str) -> ParsedIssueTarget:
             owner=owner,
             repo_name=repo_name,
             pr_number=pr_number,
+            resolved_pr_number=pr_number,
             issue_number=None,
             source_url=normalized_url,
             source_fragment=fragment,
@@ -332,6 +334,7 @@ def _parse_issue_url(url: str) -> ParsedIssueTarget:
         owner=owner,
         repo_name=repo_name,
         pr_number=resolved_pr_number or issue_number,
+        resolved_pr_number=resolved_pr_number,
         issue_number=issue_number,
         source_url=normalized_url,
         source_fragment=fragment,
@@ -642,6 +645,8 @@ def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, 
         head_sha=None,
     )
     normalized["project_type"] = "python"
+    normalized["source_kind"] = target.url_kind
+    normalized["resolved_pr_number"] = target.resolved_pr_number
     normalized["manual_issue_source_url"] = target.source_url
     normalized["issue_number"] = target.issue_number
     return normalized
@@ -714,6 +719,8 @@ def _build_issue_normalized_review(
         "ignore": [],
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
+        "source_kind": target.url_kind,
+        "resolved_pr_number": target.resolved_pr_number,
         "issue_number": target.issue_number,
         "manual_issue_source_url": target.source_url,
     }
@@ -751,6 +758,10 @@ def _enqueue_issue_fix(
             description=description,
             resolved_context=resolved_context,
         )
+    normalized_review.setdefault("source_kind", target.url_kind)
+    normalized_review.setdefault("resolved_pr_number", target.resolved_pr_number)
+    normalized_review.setdefault("issue_number", target.issue_number)
+    normalized_review.setdefault("manual_issue_source_url", target.source_url)
     head_sha = None
 
     review_batch_id = build_review_batch_id(normalized_review)

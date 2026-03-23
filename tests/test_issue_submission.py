@@ -61,6 +61,9 @@ def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
 
     assert row is not None
     assert str(row["trigger_source"]) == "manual_issue"
+    normalized = json.loads(str(row["normalized_review_json"]))
+    assert normalized["source_kind"] == "issue"
+    assert normalized["resolved_pr_number"] is None
 
 
 def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
@@ -113,6 +116,8 @@ def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
     normalized = json.loads(str(row["normalized_review_json"]))
     assert normalized["must_fix"][0]["text"] == "Fix the review finding"
     assert normalized["must_fix"][0]["path"] == "app/routes/web.py"
+    assert normalized["source_kind"] == "pull"
+    assert normalized["resolved_pr_number"] == 42
 
 
 def test_submit_issue_api_duplicates_are_deduplicated(tmp_path) -> None:
@@ -290,6 +295,17 @@ def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(
     data = response.json()
     assert data["pr_number"] == 88
     assert data["issue_number"] == 99
+
+    with sqlite3.connect(tmp_path / "software_factory.db") as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT normalized_review_json FROM autofix_runs ORDER BY id DESC LIMIT 1",
+        ).fetchone()
+
+    assert row is not None
+    normalized = json.loads(str(row["normalized_review_json"]))
+    assert normalized["source_kind"] == "issue"
+    assert normalized["resolved_pr_number"] == 88
 
 
 def test_submit_issue_api_rejects_pull_request_url_without_actionable_feedback(
