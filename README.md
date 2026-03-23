@@ -112,6 +112,69 @@ Milestone overview:
 
 Anything not explicitly described here should be treated as out of scope for the current project stage.
 
+## Install
+
+1. Create a Python 3.11 virtual environment and install dependencies.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+2. Create local environment config.
+
+```bash
+cp example.env .env
+```
+
+3. Set one shared `DB_PATH` for every local process. See [docs/local-runtime.md](docs/local-runtime.md) for the rule and failure mode.
+
+```bash
+export DB_PATH="$(pwd)/data/software_factory.db"
+```
+
+4. Initialize the database.
+
+```bash
+python scripts/init_db.py
+```
+
+5. Start the app.
+
+```bash
+env DB_PATH="$DB_PATH" uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+```
+
+6. Optionally start the worker with the same `DB_PATH`.
+
+```bash
+env DB_PATH="$DB_PATH" python scripts/run_worker.py --loop --workspace-dir "$(pwd)"
+```
+
+### LLM-Friendly Install Prompt
+
+Copy this into Codex / Claude / OpenCode when you want an agent to install and verify the project locally:
+
+```text
+Install and verify this repository locally.
+
+Requirements:
+- Follow README.md and docs/local-runtime.md exactly.
+- Use Python 3.11+ and install dependencies from requirements.txt in a virtual environment.
+- Copy example.env to .env if needed.
+- Choose one writable DB_PATH and use the exact same DB_PATH for every local process.
+- Do not let the web service use ./data/software_factory.db while the worker uses a different database.
+- Initialize the SQLite database with python scripts/init_db.py.
+- Start the web service on port 8001.
+- If you start the worker, it must use the same DB_PATH as the web service.
+- Verify the setup with curl -i http://127.0.0.1:8001/healthz.
+- If both web and worker are running, verify that both processes expose the same DB_PATH.
+- Do not modify application code just to make local setup pass. Only change local env/config when needed.
+- If something fails, report the exact failing command, the root cause, and the smallest fix.
+```
+
 ## Local Run
 
 See [docs/local-runtime.md](docs/local-runtime.md) for local runtime details and `DB_PATH` constraints.
@@ -292,6 +355,7 @@ openspec/   requirement tracking and change specs
 - [Architecture](docs/architecture.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Hook Samples](docs/hook-samples.md)
+- [Local runtime notes](docs/local-runtime.md)
 - [OpenSpec workflow](openspec/README.md)
 - [Chinese translation](README.zh-CN.md)
 - [Contributing guide](CONTRIBUTING.md)

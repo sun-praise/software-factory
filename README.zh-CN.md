@@ -106,6 +106,69 @@ Milestone 概览：
 
 本文档未明确列出的能力，默认视为不在当前项目阶段范围内。
 
+## 安装
+
+1. 创建 Python 3.11 虚拟环境并安装依赖。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+2. 创建本地环境配置。
+
+```bash
+cp example.env .env
+```
+
+3. 为所有本地进程设置同一个 `DB_PATH`。规则和错误模式见 [docs/local-runtime.md](docs/local-runtime.md)。
+
+```bash
+export DB_PATH="$(pwd)/data/software_factory.db"
+```
+
+4. 初始化数据库。
+
+```bash
+python scripts/init_db.py
+```
+
+5. 启动 Web 服务。
+
+```bash
+env DB_PATH="$DB_PATH" uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+```
+
+6. 如有需要，用相同的 `DB_PATH` 启动 worker。
+
+```bash
+env DB_PATH="$DB_PATH" python scripts/run_worker.py --loop --workspace-dir "$(pwd)"
+```
+
+### 面向 LLM 的安装 Prompt
+
+当你想让 Codex / Claude / OpenCode 帮你本地安装并验证项目时，可以直接复制下面这段：
+
+```text
+Install and verify this repository locally.
+
+Requirements:
+- Follow README.md and docs/local-runtime.md exactly.
+- Use Python 3.11+ and install dependencies from requirements.txt in a virtual environment.
+- Copy example.env to .env if needed.
+- Choose one writable DB_PATH and use the exact same DB_PATH for every local process.
+- Do not let the web service use ./data/software_factory.db while the worker uses a different database.
+- Initialize the SQLite database with python scripts/init_db.py.
+- Start the web service on port 8001.
+- If you start the worker, it must use the same DB_PATH as the web service.
+- Verify the setup with curl -i http://127.0.0.1:8001/healthz.
+- If both web and worker are running, verify that both processes expose the same DB_PATH.
+- Do not modify application code just to make local setup pass. Only change local env/config when needed.
+- If something fails, report the exact failing command, the root cause, and the smallest fix.
+```
+
 ## 本地运行
 
 本地运行细节和 `DB_PATH` 约束见 [docs/local-runtime.md](docs/local-runtime.md)。
@@ -286,6 +349,7 @@ openspec/   需求跟踪和变更规格
 - [系统架构文档](docs/architecture.md)
 - [故障排除指南](docs/troubleshooting.md)
 - [Hook 示例](docs/hook-samples.md)
+- [本地运行说明](docs/local-runtime.md)
 - [OpenSpec 工作流](openspec/README.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)
