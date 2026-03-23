@@ -101,6 +101,27 @@ a:hover {
   background: var(--surface);
 }
 
+.warning-banner {
+  margin-bottom: 1.25rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid #f3c98b;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff8eb 0%, #fff2d6 100%);
+}
+
+.warning-banner strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #8a4b00;
+  font-size: 0.95rem;
+}
+
+.warning-banner p {
+  margin: 0;
+  color: #6f4a1e;
+  line-height: 1.5;
+}
+
 .meta {
   display: grid;
   grid-template-columns: 130px 1fr;
