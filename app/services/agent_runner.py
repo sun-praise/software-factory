@@ -2207,7 +2207,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 "--repo",
                 repo,
                 "--json",
-                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions",
+                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions,mergeStateStatus,canBeRebased,mergeable",
             ],
             check=False,
             capture_output=True,
@@ -2255,6 +2255,12 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             payload,
         )
         return {}
+    merge_state_status = _safe_text(payload.get("mergeStateStatus"))
+    can_be_rebased = payload.get("canBeRebased")
+    mergeable = payload.get("mergeable")
+    is_merge_conflict = merge_state_status in {"CONFLICTING", "DIRTY"}
+    is_behind = merge_state_status == "BEHIND"
+    is_blocked = merge_state_status == "BLOCKED"
     return {
         "title": _safe_text(payload.get("title")),
         "body": _safe_text(payload.get("body")),
@@ -2264,6 +2270,12 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         "changed_files": payload.get("changedFiles"),
         "additions": payload.get("additions"),
         "deletions": payload.get("deletions"),
+        "merge_state_status": merge_state_status,
+        "can_be_rebased": can_be_rebased,
+        "mergeable": mergeable,
+        "is_merge_conflict": is_merge_conflict,
+        "is_behind": is_behind,
+        "is_blocked": is_blocked,
     }
 
 

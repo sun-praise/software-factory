@@ -251,6 +251,78 @@ def test_collect_pull_request_metadata_returns_empty_on_timeout(
     )
 
 
+def test_collect_pull_request_metadata_includes_merge_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='{"title": "Fix bug", "body": "desc", "baseRefName": "main", "headRefName": "feature", "headRefOid": "abc123", "changedFiles": 3, "additions": 10, "deletions": 5, "mergeStateStatus": "CONFLICTING", "canBeRebased": true, "mergeable": false}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["title"] == "Fix bug"
+    assert result["base_ref"] == "main"
+    assert result["merge_state_status"] == "CONFLICTING"
+    assert result["is_merge_conflict"] is True
+    assert result["is_behind"] is False
+    assert result["can_be_rebased"] is True
+    assert result["mergeable"] is False
+
+
+def test_collect_pull_request_metadata_detects_behind_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='{"title": "Feature", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BEHIND", "canBeRebased": true, "mergeable": true}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["merge_state_status"] == "BEHIND"
+    assert result["is_merge_conflict"] is False
+    assert result["is_behind"] is True
+    assert result["can_be_rebased"] is True
+
+
+def test_collect_pull_request_metadata_detects_clean_mergeable_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='{"title": "Clean PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "MERGEABLE", "canBeRebased": true, "mergeable": true}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["merge_state_status"] == "MERGEABLE"
+    assert result["is_merge_conflict"] is False
+    assert result["is_behind"] is False
+    assert result["is_blocked"] is False
+
+
 def test_run_once_injects_repo_agents_md_into_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

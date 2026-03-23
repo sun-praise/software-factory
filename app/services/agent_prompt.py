@@ -43,24 +43,24 @@ def build_autofix_prompt(
     _append_operator_hints(lines, operator_hints)
     lines.extend(
         [
-        ci_summary,
-        "",
-        "Hard constraints:",
-        "- Only fix issues explicitly listed in review feedback.",
-        "- Do not perform unrelated refactors.",
-        "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
-        "- Prioritize passing existing tests before any optional improvement.",
-        "- If a required fix cannot be completed, output the reason and stop.",
-        "- Treat CI failures as supporting context, not as permission for unrelated changes.",
-        "",
-        "Work items:",
-        must_fix_summary,
-        should_fix_summary,
-        "",
-        "Execution policy:",
-        "- Apply must_fix items first.",
-        "- Apply should_fix items only if they do not risk breaking tests.",
-        "- Keep patches minimal and directly traceable to review comments.",
+            ci_summary,
+            "",
+            "Hard constraints:",
+            "- Only fix issues explicitly listed in review feedback.",
+            "- Do not perform unrelated refactors.",
+            "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
+            "- Prioritize passing existing tests before any optional improvement.",
+            "- If a required fix cannot be completed, output the reason and stop.",
+            "- Treat CI failures as supporting context, not as permission for unrelated changes.",
+            "",
+            "Work items:",
+            must_fix_summary,
+            should_fix_summary,
+            "",
+            "Execution policy:",
+            "- Apply must_fix items first.",
+            "- Apply should_fix items only if they do not risk breaking tests.",
+            "- Keep patches minimal and directly traceable to review comments.",
         ]
     )
     return "\n".join(lines)
@@ -167,6 +167,12 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
     additions = _positive_int_text(metadata.get("additions"))
     deletions = _positive_int_text(metadata.get("deletions"))
     body = _safe_text(metadata.get("body"), "")
+    merge_state_status = _safe_text(metadata.get("merge_state_status"), "")
+    is_merge_conflict = metadata.get("is_merge_conflict")
+    is_behind = metadata.get("is_behind")
+    is_blocked = metadata.get("is_blocked")
+    can_be_rebased = metadata.get("can_be_rebased")
+    mergeable = metadata.get("mergeable")
 
     if title:
         lines.append(f"- PR Title: {title}")
@@ -178,6 +184,20 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
         lines.append(f"- Changed Files: {changed_files}")
     if additions or deletions:
         lines.append(f"- Diff Stats: +{additions or '0'} / -{deletions or '0'}")
+    if merge_state_status:
+        lines.append(f"- Merge State: {merge_state_status}")
+    if is_merge_conflict:
+        lines.append(
+            "- Merge Conflict: This PR has conflicts with the base branch and cannot be merged automatically"
+        )
+    elif is_behind:
+        lines.append(
+            "- Behind Base: This PR is behind the base branch and should be updated before fixing"
+        )
+    if can_be_rebased is not None:
+        lines.append(f"- Can Be Rebased: {can_be_rebased}")
+    if mergeable is not None:
+        lines.append(f"- Mergeable: {mergeable}")
     if body:
         compact_body = " ".join(body.split())
         if len(compact_body) > PR_BODY_PREVIEW_LIMIT:

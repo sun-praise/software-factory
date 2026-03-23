@@ -211,3 +211,83 @@ def test_summarize_check_results_with_failures() -> None:
     assert summary["passed_count"] == 1
     assert summary["failed_count"] == 2
     assert summary["failed_commands"] == ["npm test", "npm run typecheck"]
+
+
+def test_build_autofix_prompt_shows_merge_conflict_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Fix bug",
+            "merge_state_status": "CONFLICTING",
+            "is_merge_conflict": True,
+            "can_be_rebased": True,
+            "mergeable": False,
+        },
+    )
+
+    assert "- Merge State: CONFLICTING" in prompt
+    assert "- Merge Conflict:" in prompt
+    assert "cannot be merged automatically" in prompt
+    assert "- Can Be Rebased: True" in prompt
+    assert "- Mergeable: False" in prompt
+
+
+def test_build_autofix_prompt_shows_behind_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Feature",
+            "merge_state_status": "BEHIND",
+            "is_behind": True,
+            "is_merge_conflict": False,
+            "can_be_rebased": True,
+        },
+    )
+
+    assert "- Merge State: BEHIND" in prompt
+    assert "- Behind Base:" in prompt
+    assert "should be updated before fixing" in prompt
+    assert "- Can Be Rebased: True" in prompt
+
+
+def test_build_autofix_prompt_shows_clean_mergeable_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Clean PR",
+            "merge_state_status": "MERGEABLE",
+            "is_merge_conflict": False,
+            "is_behind": False,
+            "mergeable": True,
+        },
+    )
+
+    assert "- Merge State: MERGEABLE" in prompt
+    assert "- Merge Conflict:" not in prompt
+    assert "- Behind Base:" not in prompt
+    assert "- Mergeable: True" in prompt
+
+
+def test_build_autofix_prompt_hides_merge_state_when_missing() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={"title": "No merge state"},
+    )
+
+    assert "Merge State:" not in prompt
+    assert "Merge Conflict:" not in prompt
+    assert "Behind Base:" not in prompt
+    assert "Can Be Rebased:" not in prompt
+    assert "Mergeable:" not in prompt
