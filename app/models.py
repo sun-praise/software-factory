@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS autofix_runs (
     last_error_code TEXT,
     last_error_at TEXT,
     error_summary TEXT,
+    operator_hints TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at TEXT

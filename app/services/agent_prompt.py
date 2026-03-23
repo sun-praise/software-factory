@@ -2,18 +2,33 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
+
+
+PR_BODY_PREVIEW_LIMIT = 600
+REPO_INSTRUCTIONS_PREVIEW_LIMIT = 4_000
+
 
 def build_autofix_prompt(
     repo: str,
     pr_number: int,
     head_sha: str,
     normalized_review: Mapping[str, Any],
+    pr_metadata: Mapping[str, Any] | None = None,
+    repo_instructions: str | None = None,
+    operator_hints: str | None = None,
 ) -> str:
     must_fix = _as_issue_list(normalized_review.get("must_fix"))
     should_fix = _as_issue_list(normalized_review.get("should_fix"))
+    metadata = pr_metadata or {}
+    ci_checks = _as_ci_check_list(normalized_review.get("ci_checks"))
 
     must_fix_summary = _format_issue_summary("must_fix", must_fix)
     should_fix_summary = _format_issue_summary("should_fix", should_fix)
+    ci_summary = _format_ci_summary(
+        ci_status=_safe_text(normalized_review.get("ci_status"), "unknown"),
+        ci_checks=ci_checks,
+    )
 
     lines = [
         "You are an autofix agent working on a pull request.",
@@ -22,23 +37,33 @@ def build_autofix_prompt(
         f"- Repository: {repo}",
         f"- Pull Request: #{pr_number}",
         f"- Head SHA: {head_sha}",
-        "",
-        "Hard constraints:",
-        "- Only fix issues explicitly listed in review feedback.",
-        "- Do not perform unrelated refactors.",
-        "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
-        "- Prioritize passing existing tests before any optional improvement.",
-        "- If a required fix cannot be completed, output the reason and stop.",
-        "",
-        "Work items:",
-        must_fix_summary,
-        should_fix_summary,
-        "",
-        "Execution policy:",
-        "- Apply must_fix items first.",
-        "- Apply should_fix items only if they do not risk breaking tests.",
-        "- Keep patches minimal and directly traceable to review comments.",
     ]
+    _append_pr_merge_state_context(lines, metadata)
+    _append_pr_metadata(lines, metadata)
+    _append_repo_instructions(lines, repo_instructions)
+    _append_operator_hints(lines, operator_hints)
+    lines.extend(
+        [
+            ci_summary,
+            "",
+            "Hard constraints:",
+            "- Only fix issues explicitly listed in review feedback.",
+            "- Do not perform unrelated refactors.",
+            "- Do not expand the scope of changes beyond touched files/lines that are required for the listed issues.",
+            "- Prioritize passing existing tests before any optional improvement.",
+            "- If a required fix cannot be completed, output the reason and stop.",
+            "- Treat CI failures as supporting context, not as permission for unrelated changes.",
+            "",
+            "Work items:",
+            must_fix_summary,
+            should_fix_summary,
+            "",
+            "Execution policy:",
+            "- Apply must_fix items first.",
+            "- Apply should_fix items only if they do not risk breaking tests.",
+            "- Keep patches minimal and directly traceable to review comments.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -109,6 +134,16 @@ def _as_issue_list(value: Any) -> list[Mapping[str, Any]]:
     return issue_items
 
 
+def _as_ci_check_list(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    check_items: list[Mapping[str, Any]] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            check_items.append(item)
+    return check_items
+
+
 def _format_issue_summary(title: str, items: list[Mapping[str, Any]]) -> str:
     if not items:
         return f"- {title}: 0 items"
@@ -125,8 +160,151 @@ def _format_issue_summary(title: str, items: list[Mapping[str, Any]]) -> str:
     return f"- {title}: {len(items)} items -> {joined}"
 
 
+def _append_pr_merge_state_context(
+    lines: list[str], metadata: Mapping[str, Any]
+) -> None:
+    is_merge_conflict = metadata.get("is_merge_conflict")
+    is_behind = metadata.get("is_behind")
+    can_be_rebased = metadata.get("can_be_rebased")
+
+    if not is_merge_conflict and not is_behind:
+        return
+
+    if is_merge_conflict:
+        lines.extend(
+            [
+                "",
+                "⚠️ PR Conflict State:",
+                "- This pull request has merge conflicts with the base branch.",
+                "- Automatic merging is not possible until conflicts are resolved.",
+            ]
+        )
+        if can_be_rebased:
+            lines.extend(
+                [
+                    "- The PR can be rebased. Consider rebasing onto the base branch to resolve conflicts.",
+                ]
+            )
+        lines.append("")
+        return
+
+    if is_behind:
+        lines.extend(
+            [
+                "",
+                "⚠️ PR Behind Base Branch:",
+                "- This pull request is behind the base branch.",
+                "- Consider updating the PR branch before applying fixes.",
+            ]
+        )
+        if can_be_rebased:
+            lines.extend(
+                [
+                    "- The PR can be rebased onto the base branch.",
+                ]
+            )
+        lines.append("")
+
+
+def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
+    title = _safe_text(metadata.get("title"), "")
+    base_ref = _safe_text(metadata.get("base_ref"), "")
+    head_ref = _safe_text(metadata.get("head_ref"), "")
+    changed_files = _positive_int_text(metadata.get("changed_files"))
+    additions = _positive_int_text(metadata.get("additions"))
+    deletions = _positive_int_text(metadata.get("deletions"))
+    body = _safe_text(metadata.get("body"), "")
+    merge_state_status = _safe_text(metadata.get("merge_state_status"), "")
+    is_merge_conflict = metadata.get("is_merge_conflict")
+    is_behind = metadata.get("is_behind")
+    is_blocked = metadata.get("is_blocked")
+    can_be_rebased = metadata.get("can_be_rebased")
+    mergeable = metadata.get("mergeable")
+
+    if title:
+        lines.append(f"- PR Title: {title}")
+    if base_ref:
+        lines.append(f"- Base Ref: {base_ref}")
+    if head_ref:
+        lines.append(f"- Head Ref: {head_ref}")
+    if changed_files:
+        lines.append(f"- Changed Files: {changed_files}")
+    if additions or deletions:
+        lines.append(f"- Diff Stats: +{additions or '0'} / -{deletions or '0'}")
+    if merge_state_status:
+        lines.append(f"- Merge State: {merge_state_status}")
+    if can_be_rebased is not None:
+        lines.append(f"- Can Be Rebased: {can_be_rebased}")
+    if mergeable is not None:
+        lines.append(f"- Mergeable: {mergeable}")
+    if body:
+        compact_body = " ".join(body.split())
+        if len(compact_body) > PR_BODY_PREVIEW_LIMIT:
+            compact_body = f"{compact_body[:PR_BODY_PREVIEW_LIMIT].rstrip()}..."
+        lines.append(f"- PR Body: {compact_body}")
+
+
+def _format_ci_summary(ci_status: str, ci_checks: list[Mapping[str, Any]]) -> str:
+    if not ci_checks:
+        return "- CI status: unknown (no CI checks captured)"
+
+    formatted_checks: list[str] = []
+    for item in ci_checks[:6]:
+        source = _safe_text(item.get("source"), "unknown")
+        name = _safe_text(item.get("name"), "unnamed")
+        status = _safe_text(item.get("status"), "unknown")
+        conclusion = _safe_text(item.get("conclusion"), "unknown")
+        formatted_checks.append(
+            f"[{source}] {name} => status={status}, conclusion={conclusion}"
+        )
+    joined = " | ".join(formatted_checks)
+    return f"- CI status: {ci_status} -> {joined}"
+
+
+def _append_repo_instructions(lines: list[str], repo_instructions: str | None) -> None:
+    instructions = _safe_text(repo_instructions, "")
+    if not instructions:
+        return
+    compact = instructions.strip()
+    if len(compact) > REPO_INSTRUCTIONS_PREVIEW_LIMIT:
+        compact = f"{compact[:REPO_INSTRUCTIONS_PREVIEW_LIMIT].rstrip()}..."
+    lines.extend(
+        [
+            "- Repository Instructions (AGENTS.md):",
+            compact,
+        ]
+    )
+
+
+def _append_operator_hints(lines: list[str], operator_hints: str | None) -> None:
+    hints = _safe_text(operator_hints, "")
+    if not hints:
+        return
+    compact = hints.strip()
+    if len(compact) > OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT:
+        compact = f"{compact[:OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT].rstrip()}..."
+    lines.extend(
+        [
+            "- Operator Hints:",
+            compact,
+        ]
+    )
+
+
 def _safe_text(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
     text = str(value).strip()
     return text if text else fallback
+
+
+def _positive_int_text(value: Any) -> str:
+    if isinstance(value, bool) or value is None:
+        return ""
+    try:
+        normalized = int(str(value).strip())
+    except (TypeError, ValueError):
+        return ""
+    if normalized <= 0:
+        return ""
+    return str(normalized)

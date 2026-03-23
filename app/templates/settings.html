@@ -81,6 +81,49 @@
               autocomplete="off"
             >
 
+            <label for="claude_agent_provider">Claude Agent provider</label>
+            <select id="claude_agent_provider" name="claude_agent_provider">
+              <option value="zhipu" {% if claude_agent_provider == "zhipu" %}selected{% endif %}>Zhipu Coding Plan</option>
+              <option value="openrouter" {% if claude_agent_provider == "openrouter" %}selected{% endif %}>OpenRouter</option>
+              <option value="deepseek" {% if claude_agent_provider == "deepseek" %}selected{% endif %}>DeepSeek</option>
+            </select>
+            <p class="muted tiny">Default provider is Zhipu Coding Plan with GLM-5 mapped as the Opus model.</p>
+
+            <label for="claude_agent_base_url">Claude Agent base URL</label>
+            <input
+              type="text"
+              id="claude_agent_base_url"
+              name="claude_agent_base_url"
+              value="{{ claude_agent_base_url }}"
+              autocomplete="off"
+            >
+
+            <label for="claude_agent_model">Claude Agent model</label>
+            <input
+              type="text"
+              id="claude_agent_model"
+              name="claude_agent_model"
+              value="{{ claude_agent_model }}"
+              autocomplete="off"
+            >
+
+            <label for="claude_agent_runtime">Claude Agent runtime</label>
+            <select id="claude_agent_runtime" name="claude_agent_runtime">
+              <option value="host" {% if claude_agent_runtime == "host" %}selected{% endif %}>Host</option>
+              <option value="docker" {% if claude_agent_runtime == "docker" %}selected{% endif %}>Docker</option>
+            </select>
+            <p class="muted tiny">Use Docker to isolate Claude execution from the host worker environment.</p>
+
+            <label for="claude_agent_container_image">Claude Agent container image</label>
+            <input
+              type="text"
+              id="claude_agent_container_image"
+              name="claude_agent_container_image"
+              value="{{ claude_agent_container_image }}"
+              autocomplete="off"
+            >
+            <p class="muted tiny">Required only when Claude Agent runtime is set to Docker.</p>
+
             <label for="claude_agent_command_timeout_seconds">Claude Agent command timeout (seconds)</label>
             <input
               type="number"

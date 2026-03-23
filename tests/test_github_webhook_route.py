@@ -139,6 +139,55 @@ def test_bot_comment_is_filtered(tmp_path: Path) -> None:
     assert response.json()["reason"] == "noise_actor"
 
 
+def test_autofix_summary_issue_comment_is_ignored(tmp_path: Path) -> None:
+    _set_env(tmp_path, secret="")
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 9, "pull_request": {"url": "https://example/pr/9"}},
+        "comment": {
+            "id": 3005,
+            "body": "Autofix run #34\nStatus: success\nCommit: deadbeef",
+        },
+        "sender": {"login": "svtter"},
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={"X-GitHub-Event": "issue_comment"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ignored"] is True
+    assert response.json()["reason"] == "autofix_summary_comment"
+
+
+def test_bot_pull_request_review_is_queued(tmp_path: Path) -> None:
+    _set_env(tmp_path, secret="")
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123"}},
+        "review": {"id": 1003, "body": "Please fix this"},
+        "sender": {"login": "github-actions[bot]"},
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={"X-GitHub-Event": "pull_request_review"},
+        )
+
+    assert response.status_code == 200
+    assert response.json().get("ignored") is not True
+    assert response.json()["insert_status"] == "inserted"
+    assert response.json()["queue_status"] == "queued"
+    assert isinstance(response.json()["queued_run_id"], int)
+
+
 def test_autofix_limit_prevents_queueing_new_run(tmp_path: Path) -> None:
     _set_env(tmp_path, secret="")
     db_path = tmp_path / "software_factory.db"
@@ -170,3 +219,74 @@ def test_autofix_limit_prevents_queueing_new_run(tmp_path: Path) -> None:
     assert response.json()["insert_status"] == "inserted"
     assert response.json()["queue_status"] == "autofix_limit_reached"
     assert response.json()["queued_run_id"] is None
+
+
+def test_check_run_event_is_recorded_without_queueing_and_enriches_next_run(
+    tmp_path: Path,
+) -> None:
+    _set_env(tmp_path, secret="")
+    db_path = tmp_path / "software_factory.db"
+
+    check_payload = {
+        "action": "completed",
+        "repository": {"full_name": "acme/widgets", "language": "Python"},
+        "check_run": {
+            "id": 9001,
+            "name": "CI / unit",
+            "status": "completed",
+            "conclusion": "failure",
+            "details_url": "https://example.test/runs/9001",
+            "head_sha": "abc123",
+            "pull_requests": [{"number": 42}],
+        },
+        "sender": {"login": "github-actions[bot]"},
+    }
+    review_payload = {
+        "repository": {"full_name": "acme/widgets", "language": "Python"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123", "ref": "feature/x"}},
+        "review": {"id": 1001, "body": "Please fix the failing tests"},
+        "sender": {"login": "reviewer"},
+    }
+
+    with TestClient(app) as client:
+        check_response = client.post(
+            "/github/webhook",
+            json=check_payload,
+            headers={"X-GitHub-Event": "check_run"},
+        )
+        review_response = client.post(
+            "/github/webhook",
+            json=review_payload,
+            headers={"X-GitHub-Event": "pull_request_review"},
+        )
+
+    assert check_response.status_code == 200
+    assert check_response.json()["insert_status"] == "inserted"
+    assert check_response.json()["queue_status"] == "recorded"
+    assert check_response.json()["queued_run_id"] is None
+
+    assert review_response.status_code == 200
+    assert review_response.json()["queue_status"] == "queued"
+    run_id = review_response.json()["queued_run_id"]
+    assert isinstance(run_id, int)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT normalized_review_json FROM autofix_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+
+    assert row is not None
+    payload = json.loads(row["normalized_review_json"])
+    assert payload["ci_status"] == "failed"
+    assert payload["ci_checks"] == [
+        {
+            "source": "check_run",
+            "name": "CI / unit",
+            "status": "completed",
+            "conclusion": "failure",
+            "details_url": "https://example.test/runs/9001",
+            "head_sha": "abc123",
+        }
+    ]

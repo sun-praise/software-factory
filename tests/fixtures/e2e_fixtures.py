@@ -36,6 +36,7 @@ def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
     os.environ["GITHUB_WEBHOOK_SECRET"] = secret
     os.environ["GITHUB_WEBHOOK_DEBOUNCE_SECONDS"] = "60"
     os.environ["OPENHANDS_COMMAND"] = "true"
+    os.environ["CLAUDE_AGENT_SDK_COMMAND"] = "true"
     os.environ["MAX_AUTOFIX_PER_PR"] = "3"
     os.environ["MAX_RETRY_ATTEMPTS"] = "3"
     os.environ["BOT_LOGINS"] = "github-actions[bot],dependabot[bot]"

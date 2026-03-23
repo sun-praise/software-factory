@@ -20,6 +20,17 @@ def test_normalized_review_valid_object() -> None:
         ],
         should_fix=[],
         ignore=[],
+        ci_status=" failed ",
+        ci_checks=[
+            {
+                "source": "workflow_run",
+                "name": "CI / unit",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": " https://example.test/runs/1 ",
+                "head_sha": " abc123 ",
+            }
+        ],
         summary="  Needs one critical fix.  ",
     )
 
@@ -41,6 +52,17 @@ def test_normalized_review_valid_object() -> None:
         ],
         "should_fix": [],
         "ignore": [],
+        "ci_status": "failed",
+        "ci_checks": [
+            {
+                "source": "workflow_run",
+                "name": "CI / unit",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": "https://example.test/runs/1",
+                "head_sha": "abc123",
+            }
+        ],
         "summary": "Needs one critical fix.",
     }
 

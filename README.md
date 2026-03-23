@@ -18,6 +18,28 @@
 
 非目标：不做重型多租户后台、不做复杂审批和权限中心。
 
+## 项目定位与命名
+
+本项目不追求做成通用 CI/CD 平台，也不追求覆盖完整 DevOps 生命周期。更准确地说，它是一个围绕 GitHub PR 审查反馈闭环构建的轻量编排系统。
+
+可以把它理解为：
+
+- `AI-native PR Autofix Orchestrator`
+- `GitHub Review Autofix Harness`
+
+它的关注点是：
+
+- 由 Hook 和 Webhook 决定何时触发
+- 由 Normalizer 把 review/comment 变成结构化修复输入
+- 由 Agent Worker 执行修改、验证、提交和回写
+
+如果拿常见开源系统做类比，它更接近：
+
+- `OpenHands` / `SWE-agent` 这类 AI 执行代理
+- `Prow` / `Zuul` 这类事件驱动的 review/CI 编排系统
+
+而不是 `Harness`、`GitLab` 这类覆盖范围更大的通用 DevOps 平台。
+
 ## 核心架构
 
 ```text
@@ -141,27 +163,48 @@ python scripts/init_db.py
 4) 启动服务
 
 ```bash
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 ```
+
+后台快速启动 `web + worker`：
+
+```bash
+chmod +x scripts/start_system_bg.sh
+./scripts/start_system_bg.sh start
+```
+
+常用管理命令：
+
+```bash
+./scripts/start_system_bg.sh status
+./scripts/start_system_bg.sh logs
+./scripts/start_system_bg.sh stop
+```
+
+说明：
+
+- 脚本会优先加载仓库根目录 `.env`
+- `web` 和 `worker` 会强制共用同一个 `DB_PATH`
+- PID / 日志默认写到 `.runtime/local/`
 
 常用页面：
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/runs`
-- `http://127.0.0.1:8000/runs/demo-run`
+- `http://127.0.0.1:8001/`
+- `http://127.0.0.1:8001/runs`
+- `http://127.0.0.1:8001/runs/demo-run`
 
 ## 开发与调试命令
 
 健康检查：
 
 ```bash
-curl -i http://127.0.0.1:8000/healthz
+curl -i http://127.0.0.1:8001/healthz
 ```
 
 模拟 Hook 事件（`/hook-events`）：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8000/hook-events \
+curl -i -X POST http://127.0.0.1:8001/hook-events \
   -H 'content-type: application/json' \
   -d '{"event":"UserPromptSubmit","session_id":"sess_demo","repo":"owner/repo","branch":"feat/demo","cwd":"/tmp/software-factory","timestamp":"2026-03-12T12:00:00Z"}'
 ```
@@ -171,7 +214,7 @@ curl -i -X POST http://127.0.0.1:8000/hook-events \
 模拟 GitHub Webhook（`/github/webhook`）：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8000/github/webhook \
+curl -i -X POST http://127.0.0.1:8001/github/webhook \
   -H 'content-type: application/json' \
   -H 'x-github-event: pull_request_review' \
   -d '{"action":"submitted","review":{"id":123},"pull_request":{"number":10}}'
@@ -194,6 +237,22 @@ python scripts/run_worker.py --once
 ```
 
 说明：MVP 默认单 worker 串行执行；多 worker 并发执行通过 `MAX_CONCURRENT_RUNS` 控制。
+
+## Requirements Workflow
+
+This repository now uses OpenSpec to track product requirements, missed review
+items, and implementation scope before code changes land.
+
+Useful commands:
+
+```bash
+openspec list
+openspec show issue-to-pr-autofix
+openspec status --change issue-to-pr-autofix
+openspec validate issue-to-pr-autofix
+```
+
+See `openspec/README.md` for the repository workflow.
 
 ## CI 说明
 

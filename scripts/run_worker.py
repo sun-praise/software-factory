@@ -20,11 +20,21 @@ from app.services.agent_runner import (
     run_once,
 )
 from app.services.queue import claim_next_queued_run, mark_run_finished
+from app.services.queue import recover_stale_runs
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.logging_config import get_run_log_path
 
 
 _STOP_WORKER = False
+
+
+def _validate_runtime_root(workspace_dir: str) -> str | None:
+    workspace = Path(workspace_dir).resolve()
+    if not workspace.exists():
+        return "runtime_root does not exist"
+    if not workspace.is_dir():
+        return "runtime_root is not a directory"
+    return None
 
 
 def _handle_stop_signal(signum: int, _frame: object) -> None:
@@ -85,6 +95,16 @@ def _process_one(workspace_dir: str) -> bool:
     return True
 
 
+def _recover_stale_runs() -> int:
+    settings = get_settings()
+    with connect_db() as conn:
+        return recover_stale_runs(
+            conn,
+            stale_after_seconds=settings.stale_run_timeout_seconds,
+            worker_id=settings.worker_id,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run autofix queue worker")
     group = parser.add_mutually_exclusive_group()
@@ -96,15 +116,32 @@ def main() -> int:
     args = parser.parse_args()
 
     init_db()
+    recovered_count = _recover_stale_runs()
+    if recovered_count:
+        print(f"recovered stale runs={recovered_count}")
     atexit.register(cleanup_active_agent_processes)
     signal.signal(signal.SIGINT, _handle_stop_signal)
     signal.signal(signal.SIGTERM, _handle_stop_signal)
 
     if args.once:
+        workspace_error = _validate_runtime_root(args.workspace_dir)
+        if workspace_error is not None:
+            print(
+                f"invalid workspace_dir={args.workspace_dir}: {workspace_error}",
+                file=sys.stderr,
+            )
+            return 2
         _process_one(workspace_dir=args.workspace_dir)
         return 0
 
     while not _STOP_WORKER:
+        workspace_error = _validate_runtime_root(args.workspace_dir)
+        if workspace_error is not None:
+            print(
+                f"invalid workspace_dir={args.workspace_dir}: {workspace_error}",
+                file=sys.stderr,
+            )
+            return 2
         processed = _process_one(workspace_dir=args.workspace_dir)
         if not processed:
             time.sleep(args.interval_seconds)

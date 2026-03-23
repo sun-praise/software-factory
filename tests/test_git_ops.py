@@ -117,6 +117,26 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
             (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
             ),
@@ -124,9 +144,25 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
     )
 
     result = git_ops.commit_and_push("/repo", "msg")
-    assert result == {"success": False, "commit_sha": None, "error": "no_changes"}
+    assert result == {
+        "success": False,
+        "commit_sha": None,
+        "error": "no_changes",
+        "error_stage": "git_diff",
+        "remote": "origin",
+        "branch": None,
+        "pushed_ref": None,
+    }
     assert calls == [
         ["git", "add", "-A"],
+        [
+            "git",
+            "diff",
+            "--cached",
+            "--name-only",
+            "--",
+            ".software_factory_bootstrap_state.json",
+        ],
         ["git", "diff", "--cached", "--quiet"],
     ]
 
@@ -136,6 +172,26 @@ def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
         monkeypatch,
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
@@ -163,7 +219,15 @@ def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
     )
 
     result = git_ops.commit_and_push("/repo", "feat: m5")
-    assert result == {"success": True, "commit_sha": "deadbeef", "error": None}
+    assert result == {
+        "success": True,
+        "commit_sha": "deadbeef",
+        "error": None,
+        "error_stage": None,
+        "remote": "origin",
+        "branch": "feature/m5",
+        "pushed_ref": "origin/feature/m5",
+    }
     assert calls[-1] == ["git", "push", "origin", "feature/m5"]
 
 
@@ -172,6 +236,26 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
         monkeypatch,
         [
             (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=1),
@@ -201,8 +285,82 @@ def test_commit_and_push_push_failure_uses_given_branch(monkeypatch) -> None:
         remote="upstream",
         branch="release/m5",
     )
-    assert result == {"success": False, "commit_sha": "deadbeef", "error": "rejected"}
+    assert result == {
+        "success": False,
+        "commit_sha": "deadbeef",
+        "error": "rejected",
+        "error_stage": "git_push",
+        "remote": "upstream",
+        "branch": "release/m5",
+        "pushed_ref": "upstream/release/m5",
+    }
     assert ["git", "rev-parse", "--abbrev-ref", "HEAD"] not in calls
+
+
+def test_commit_and_push_excludes_runtime_state_file(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ],
+                    stdout=".software_factory_bootstrap_state.json\n",
+                ),
+            ),
+            (
+                [
+                    "git",
+                    "reset",
+                    "--quiet",
+                    "HEAD",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "reset",
+                        "--quiet",
+                        "HEAD",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
+                ["git", "diff", "--cached", "--quiet"],
+                _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
+            ),
+        ],
+    )
+
+    result = git_ops.commit_and_push("/repo", "msg")
+
+    assert result["error"] == "no_changes"
+    assert [
+        "git",
+        "reset",
+        "--quiet",
+        "HEAD",
+        "--",
+        ".software_factory_bootstrap_state.json",
+    ] in calls
 
 
 def test_post_pr_comment_success(monkeypatch) -> None:
@@ -263,3 +421,220 @@ def test_post_pr_comment_failure(monkeypatch) -> None:
     )
     assert ok is False
     assert "authorized" in message
+
+
+def test_rebase_onto_base_fetch_failure(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(
+                    ["git", "fetch", "origin", "main"],
+                    returncode=1,
+                    stderr="fatal: could not resolve host\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "main"],
+                _cp(
+                    ["git", "rebase", "main"],
+                    returncode=1,
+                    stderr="fatal: bad revision 'main'\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is False
+    assert "rebase_fetch_failed" in message
+    assert "bad revision" in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "main"],
+        ["git", "rebase", "--abort"],
+    ]
+
+
+def test_rebase_onto_base_detects_conflict(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="CONFLICT (content): Merge conflict in file.txt\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is True
+    assert "rebase_conflict" in message
+    assert "file.txt" in message
+
+
+def test_rebase_onto_base_non_conflict_failure(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="fatal: bad revision 'origin/main'\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is False
+    assert "rebase_failed" in message
+    assert calls[-1] == ["git", "rebase", "--abort"]
+
+
+def test_rebase_onto_base_conflict_abort_failure(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="CONFLICT (content): conflict in file.py\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "--abort"],
+                _cp(
+                    ["git", "rebase", "--abort"],
+                    returncode=1,
+                    stderr="abort failed\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is True
+    assert "rebase_conflict" in message
+    assert "abort also failed" in message
+
+
+def test_is_rebase_conflict_detects_conflicts() -> None:
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="CONFLICT (content): file.txt")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="error: could not apply abc123...")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="Unresolved conflicts found")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="Patch failed at abc123")
+    )
+
+
+def test_is_rebase_conflict_returns_false_for_other_errors() -> None:
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="fatal: bad revision")
+    )
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="error: some other error")
+    )
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="")
+    )
+
+
+def test_rebase_onto_base_fetch_failure_but_rebase_succeeds_locally(
+    monkeypatch,
+) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(
+                    ["git", "fetch", "origin", "main"],
+                    returncode=1,
+                    stderr="fatal: could not resolve host\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "main"],
+                _cp(
+                    ["git", "rebase", "main"],
+                    returncode=0,
+                    stdout="Successfully rebased onto main\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is True
+    assert is_conflict is False
+    assert "rebase succeeded but fetch had failed" in message
+    assert "rebased to local main" in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "main"],
+    ]
+
+
+def test_rebase_onto_base_success_message_includes_remote_ref(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=0,
+                    stdout="Successfully rebased\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is True
+    assert is_conflict is False
+    assert "Successfully rebased" in message
+    assert "fetch had failed" not in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "origin/main"],
+    ]

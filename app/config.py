@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     github_webhook_debounce_seconds: int = 60
     max_autofix_per_pr: int = 3
     max_concurrent_runs: int = 3
+    stale_run_timeout_seconds: int = 900
     pr_lock_ttl_seconds: int = 900
     max_retry_attempts: int = 3
     retry_backoff_base_seconds: int = 30
@@ -29,6 +30,10 @@ class Settings(BaseSettings):
         "ai_invalid_response",
         "ai_request_client_error",
         "patch_apply_failed",
+        "rebase_conflict_blocker",
+        "rebase_blocker",
+        "rebase_sha_read_failed",
+        "rebase_fetch_failed",
     )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"
@@ -45,13 +50,20 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1"
     openai_base_url: str = "https://api.openai.com/v1"
-    agent_sdks: tuple[str, ...] = ("openhands", "claude_agent_sdk")
+    agent_sdks: tuple[str, ...] = ("claude_agent_sdk", "openhands")
     openhands_command: str = "openhands"
     claude_agent_sdk_command: str = "claude"
+    claude_agent_sdk_provider: str = "zhipu"
+    claude_agent_sdk_base_url: str = "https://open.bigmodel.cn/api/anthropic"
+    claude_agent_sdk_model: str = "glm-5"
+    claude_agent_sdk_runtime: str = "host"
+    claude_agent_sdk_container_image: str = "software-factory/claude-agent:latest"
     openhands_command_timeout_seconds: int = 600
-    claude_agent_sdk_command_timeout_seconds: int = 600
+    claude_agent_sdk_command_timeout_seconds: int = 1800
     openhands_worktree_base_dir: str = ".software-factory-worktrees"
     claude_agent_sdk_worktree_base_dir: str = ".software-factory-worktrees"
+    repo_cache_base_dir: str = ".software-factory-repo-cache"
+    run_workspace_base_dir: str = ".software-factory-run-workspaces"
 
     @field_validator(
         "bot_logins",

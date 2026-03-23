@@ -6,6 +6,7 @@ from typing import Sequence
 
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 GH_COMMAND_TIMEOUT_SECONDS = 30
+EXCLUDED_COMMIT_PATHS = (".software_factory_bootstrap_state.json",)
 
 
 def _run_git(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -68,16 +69,64 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(add_result),
+            "error_stage": "git_add",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
+
+    for excluded_path in EXCLUDED_COMMIT_PATHS:
+        staged_path_result = _run_git(
+            repo_dir,
+            ["diff", "--cached", "--name-only", "--", excluded_path],
+        )
+        if staged_path_result.returncode != 0:
+            return {
+                "success": False,
+                "commit_sha": None,
+                "error": _pick_message(staged_path_result),
+                "error_stage": "git_exclude",
+                "remote": remote,
+                "branch": branch,
+                "pushed_ref": None,
+            }
+        if not staged_path_result.stdout.strip():
+            continue
+        unstage_result = _run_git(
+            repo_dir,
+            ["reset", "--quiet", "HEAD", "--", excluded_path],
+        )
+        if unstage_result.returncode != 0:
+            return {
+                "success": False,
+                "commit_sha": None,
+                "error": _pick_message(unstage_result),
+                "error_stage": "git_exclude",
+                "remote": remote,
+                "branch": branch,
+                "pushed_ref": None,
+            }
 
     diff_result = _run_git(repo_dir, ["diff", "--cached", "--quiet"])
     if diff_result.returncode == 0:
-        return {"success": False, "commit_sha": None, "error": "no_changes"}
+        return {
+            "success": False,
+            "commit_sha": None,
+            "error": "no_changes",
+            "error_stage": "git_diff",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
+        }
     if diff_result.returncode != 1:
         return {
             "success": False,
             "commit_sha": None,
             "error": _pick_message(diff_result),
+            "error_stage": "git_diff",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     commit_result = _run_git(repo_dir, ["commit", "-m", message])
@@ -86,6 +135,10 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(commit_result),
+            "error_stage": "git_commit",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     sha_result = _run_git(repo_dir, ["rev-parse", "HEAD"])
@@ -94,11 +147,23 @@ def commit_and_push(
             "success": False,
             "commit_sha": None,
             "error": _pick_message(sha_result),
+            "error_stage": "git_rev_parse",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
         }
 
     commit_sha = sha_result.stdout.strip()
     if not commit_sha:
-        return {"success": False, "commit_sha": None, "error": "empty_commit_sha"}
+        return {
+            "success": False,
+            "commit_sha": None,
+            "error": "empty_commit_sha",
+            "error_stage": "git_rev_parse",
+            "remote": remote,
+            "branch": branch,
+            "pushed_ref": None,
+        }
 
     target_branch = branch
     if target_branch is None:
@@ -108,6 +173,10 @@ def commit_and_push(
                 "success": False,
                 "commit_sha": commit_sha,
                 "error": _pick_message(branch_result),
+                "error_stage": "git_branch",
+                "remote": remote,
+                "branch": None,
+                "pushed_ref": None,
             }
         target_branch = branch_result.stdout.strip()
         if not target_branch or target_branch == "HEAD":
@@ -115,6 +184,10 @@ def commit_and_push(
                 "success": False,
                 "commit_sha": commit_sha,
                 "error": "detached_head",
+                "error_stage": "git_branch",
+                "remote": remote,
+                "branch": target_branch or None,
+                "pushed_ref": None,
             }
 
     push_result = _run_git(repo_dir, ["push", remote, target_branch])
@@ -123,9 +196,70 @@ def commit_and_push(
             "success": False,
             "commit_sha": commit_sha,
             "error": _pick_message(push_result),
+            "error_stage": "git_push",
+            "remote": remote,
+            "branch": target_branch,
+            "pushed_ref": f"{remote}/{target_branch}",
         }
 
-    return {"success": True, "commit_sha": commit_sha, "error": None}
+    return {
+        "success": True,
+        "commit_sha": commit_sha,
+        "error": None,
+        "error_stage": None,
+        "remote": remote,
+        "branch": target_branch,
+        "pushed_ref": f"{remote}/{target_branch}",
+    }
+
+
+def rebase_onto_base(
+    repo_dir: str, base_ref: str, remote: str = "origin"
+) -> tuple[bool, str, bool]:
+    fetch_result = _run_git(repo_dir, ["fetch", remote, base_ref])
+    fetch_failed = fetch_result.returncode != 0
+    if fetch_failed:
+        remote_ref = base_ref
+    else:
+        remote_ref = f"{remote}/{base_ref}"
+
+    rebase_result = _run_git(repo_dir, ["rebase", remote_ref])
+    if rebase_result.returncode == 0:
+        message = rebase_result.stdout.strip() or f"rebased onto {remote_ref}"
+        if fetch_failed:
+            message = f"rebase succeeded but fetch had failed (rebased to local {base_ref}): {message}"
+        return True, message, False
+
+    abort_result = _run_git(repo_dir, ["rebase", "--abort"])
+    raw_message = rebase_result.stderr.strip() or rebase_result.stdout.strip() or ""
+    is_conflict = _is_rebase_conflict(rebase_result)
+    if is_conflict:
+        if abort_result.returncode != 0:
+            raw_message = (
+                f"{raw_message}; abort also failed: {_pick_message(abort_result)}"
+            )
+        return False, f"rebase_conflict: {raw_message}", True
+
+    if fetch_failed:
+        return (
+            False,
+            f"rebase_fetch_failed: unable to fetch {remote}/{base_ref} and rebase failed - {raw_message}",
+            False,
+        )
+
+    return False, f"rebase_failed: {raw_message}", False
+
+
+def _is_rebase_conflict(result: subprocess.CompletedProcess[str]) -> bool:
+    combined = f"{result.stderr} {result.stdout}".lower()
+    conflict_indicators = (
+        "conflict",
+        "could not apply",
+        "unresolved conflicts",
+        "merge conflict",
+        "patch failed",
+    )
+    return any(indicator in combined for indicator in conflict_indicators)
 
 
 def post_pr_comment(

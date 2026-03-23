@@ -11,6 +11,8 @@ PositiveInt = Annotated[int, Field(gt=0)]
 
 class IssueSubmissionRequest(BaseModel):
     url: NonEmptyStr
+    description: str | None = None
+    dry_run: bool = False
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -26,3 +28,5 @@ class IssueSubmissionResponse(BaseModel):
     idempotency_key: str | None = None
     remaining_quota: int | None = None
     head_sha: str | None = None
+    existing_run_id: int | None = None
+    existing_run_status: str | None = None

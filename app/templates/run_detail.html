@@ -7,37 +7,302 @@
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
-    <main class="container">
-      <p>
+    <main class="container run-detail-page" data-run-id="{{ run.id }}" data-hint-editable-statuses='{{ hint_editable_statuses | tojson }}'>
+      <p class="breadcrumbs">
         <a href="/">Back to runs</a> ·
         <a href="/settings">Settings</a>
       </p>
 
-      <header>
-        <h1>Run {{ run.id | default("N/A") }}</h1>
-        <p class="muted">Minimal run detail placeholder page.</p>
+      <header class="page-header">
+        <div>
+          <h1>Run {{ run.id | default("N/A") }}</h1>
+          <p class="muted page-subtitle">Live execution status and runner log stream.</p>
+        </div>
+        <div class="status-row">
+          <span class="status-label">Status</span>
+          <span id="run-status-pill" class="status-pill status-pill--{{ run.status | default("not_found") }}">
+            {{ run.status | default("not_found") }}
+          </span>
+        </div>
       </header>
 
-      <section>
+      <section class="panel">
         <h2>Metadata</h2>
         <dl class="meta">
           <dt>Repository</dt>
-          <dd>{{ run.repo | default("-") }}</dd>
+          <dd id="run-repo">{{ run.repo | default("-") }}</dd>
           <dt>Pull Request</dt>
-          <dd>{{ run.pr_number | default("-") }}</dd>
+          <dd id="run-pr">
+            {% if run.pr_url %}
+            <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">#{{ run.pr_number }}</a>
+            {% else %}
+            -
+            {% endif %}
+          </dd>
           <dt>Status</dt>
-          <dd>{{ run.status | default("pending") }}</dd>
+          <dd id="run-status-text">{{ run.status | default("pending") }}</dd>
           <dt>Created At</dt>
-          <dd>{{ run.created_at | default("-") }}</dd>
+          <dd id="run-created-at">{{ run.created_at | default("-") }}</dd>
           <dt>Updated At</dt>
-          <dd>{{ run.updated_at | default("-") }}</dd>
+          <dd id="run-updated-at">{{ run.updated_at | default("-") }}</dd>
         </dl>
       </section>
 
-      <section>
-        <h2>Log Preview</h2>
-        <pre class="log">{{ run.log_preview | default("No log data yet.") }}</pre>
+      <section class="panel">
+        <div class="log-toolbar">
+          <div>
+            <h2>Live Log</h2>
+            <p class="muted tiny">This view refreshes automatically while the run is queued or running.</p>
+          </div>
+          <div class="log-toolbar-meta">
+            <span id="polling-indicator" class="live-indicator">Live</span>
+            <button id="stop-run-button" type="button" class="button-danger run-action-button" hidden>
+              Stop run
+            </button>
+            <button id="delete-run-button" type="button" class="run-action-button" hidden>
+              Delete run
+            </button>
+          </div>
+        </div>
+        <pre id="run-log" class="log log-live">{{ run.log_preview | default("No log data yet.") }}</pre>
+      </section>
+
+      <section class="panel issue-form">
+        <div class="log-toolbar">
+          <div>
+            <h2>Operator Hints</h2>
+            <p class="muted tiny">Append steering context for queued or running runs. New hints are picked up on later attempts.</p>
+          </div>
+          <div class="log-toolbar-meta">
+            <span id="hint-status" class="muted tiny"></span>
+          </div>
+        </div>
+        <pre id="operator-hints-preview" class="log hint-preview">{{ run.operator_hints | default("") or "No operator hints yet." }}</pre>
+        <div id="operator-hints-editor" hidden>
+          <label for="operator-hints-input" class="run-hint-label">Append hint</label>
+          <textarea id="operator-hints-input" class="run-hint-textarea" rows="5" placeholder="Example: only touch app/services/filter.py and preserve the existing API shape."></textarea>
+          <div class="actions">
+            <button id="save-hint-button" type="button">Append hint</button>
+          </div>
+        </div>
       </section>
     </main>
+    <script>
+      (() => {
+        const root = document.querySelector(".run-detail-page");
+        if (!root) {
+          return;
+        }
+
+        const runId = root.dataset.runId;
+        const statusPill = document.getElementById("run-status-pill");
+        const statusText = document.getElementById("run-status-text");
+        const repoText = document.getElementById("run-repo");
+        const prText = document.getElementById("run-pr");
+        const createdAt = document.getElementById("run-created-at");
+        const updatedAt = document.getElementById("run-updated-at");
+        const logNode = document.getElementById("run-log");
+        const pollingIndicator = document.getElementById("polling-indicator");
+        const stopButton = document.getElementById("stop-run-button");
+        const deleteButton = document.getElementById("delete-run-button");
+        const hintPreview = document.getElementById("operator-hints-preview");
+        const hintEditor = document.getElementById("operator-hints-editor");
+        const hintInput = document.getElementById("operator-hints-input");
+        const hintSaveButton = document.getElementById("save-hint-button");
+        const hintStatus = document.getElementById("hint-status");
+        const activeStatuses = new Set(
+          JSON.parse(root.dataset.hintEditableStatuses || "[]")
+        );
+        let pollHandle = null;
+
+        const setStatus = (status) => {
+          statusPill.textContent = status;
+          statusText.textContent = status;
+          statusPill.className = `status-pill status-pill--${status}`;
+        };
+
+        const updateStopButton = (status) => {
+          if (!stopButton) {
+            return;
+          }
+          if (status === "cancel_requested") {
+            stopButton.hidden = false;
+            stopButton.disabled = true;
+            stopButton.textContent = "Stopping...";
+            return;
+          }
+          if (status === "queued" || status === "running") {
+            stopButton.hidden = false;
+            stopButton.disabled = false;
+            stopButton.textContent = "Stop run";
+            return;
+          }
+          stopButton.hidden = true;
+          stopButton.disabled = true;
+        };
+
+        const updateDeleteButton = (status) => {
+          if (!deleteButton) {
+            return;
+          }
+          if (activeStatuses.has(status)) {
+            deleteButton.hidden = true;
+            deleteButton.disabled = true;
+            return;
+          }
+          if (status === "not_found") {
+            deleteButton.hidden = true;
+            deleteButton.disabled = true;
+            return;
+          }
+          deleteButton.hidden = false;
+          deleteButton.disabled = false;
+          deleteButton.textContent = "Delete run";
+        };
+
+        const updateHintControls = (run) => {
+          if (!hintPreview || !hintEditor || !hintStatus) {
+            return;
+          }
+          const hints = (run.operator_hints || "").trim();
+          hintPreview.textContent = hints || "No operator hints yet.";
+          const editable = run.operator_hints_editable === "true";
+          hintEditor.hidden = !editable;
+          hintStatus.textContent = editable ? "Editable" : "Read only";
+          if (!editable && hintInput) {
+            hintInput.value = "";
+          }
+        };
+
+        const setPrUrl = (url, prNumber) => {
+          if (!url) {
+            prText.textContent = "-";
+            return;
+          }
+          prText.innerHTML = "";
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.textContent = prNumber ? `#${prNumber}` : url;
+          prText.appendChild(link);
+        };
+
+        const updateView = (run) => {
+          repoText.textContent = run.repo || "-";
+          setPrUrl(run.pr_url || "", run.pr_number || "");
+          setStatus(run.status || "not_found");
+          updateStopButton(run.status || "not_found");
+          updateDeleteButton(run.status || "not_found");
+          createdAt.textContent = run.created_at || "-";
+          updatedAt.textContent = run.updated_at || "-";
+          logNode.textContent = run.log_preview || "No log data yet.";
+          logNode.scrollTop = logNode.scrollHeight;
+          updateHintControls(run);
+
+          const shouldKeepPolling = activeStatuses.has(run.status);
+          pollingIndicator.textContent = shouldKeepPolling ? "Live" : "Final";
+          if (!shouldKeepPolling && pollHandle) {
+            window.clearInterval(pollHandle);
+            pollHandle = null;
+          }
+        };
+
+        const deleteRun = async () => {
+          if (!deleteButton) {
+            return;
+          }
+          deleteButton.disabled = true;
+          deleteButton.textContent = "Deleting...";
+          const response = await fetch(`/api/runs/${runId}`, {
+            method: "DELETE",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            deleteButton.disabled = false;
+            deleteButton.textContent = "Delete failed";
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          window.location.href = "/";
+        };
+
+        const cancelRun = async () => {
+          if (!stopButton) {
+            return;
+          }
+          stopButton.disabled = true;
+          stopButton.textContent = "Stopping...";
+          const response = await fetch(`/api/runs/${runId}/cancel`, {
+            method: "POST",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            stopButton.disabled = false;
+            stopButton.textContent = "Stop failed";
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          updateView(await response.json());
+        };
+
+        const saveHint = async () => {
+          if (!hintInput || !hintSaveButton) {
+            return;
+          }
+          const text = hintInput.value.trim();
+          if (!text) {
+            hintStatus.textContent = "Hint cannot be empty";
+            return;
+          }
+          hintSaveButton.disabled = true;
+          hintStatus.textContent = "Saving...";
+          const body = new URLSearchParams();
+          body.set("text", text);
+          const response = await fetch(`/api/runs/${runId}/operator-hints`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded;charset=UTF-8"
+            },
+            body: body.toString(),
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            hintSaveButton.disabled = false;
+            hintStatus.textContent = "Save failed";
+            return;
+          }
+          hintInput.value = "";
+          hintSaveButton.disabled = false;
+          hintStatus.textContent = "Saved";
+          updateView(await response.json());
+        };
+
+        const fetchRun = async () => {
+          const response = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
+          if (!response.ok) {
+            pollingIndicator.textContent = "Error";
+            return;
+          }
+          updateView(await response.json());
+        };
+
+        fetchRun();
+        if (activeStatuses.has(statusText.textContent.trim())) {
+          pollHandle = window.setInterval(fetchRun, 2000);
+        } else {
+          pollingIndicator.textContent = "Final";
+        }
+        if (stopButton) {
+          stopButton.addEventListener("click", cancelRun);
+        }
+        if (deleteButton) {
+          deleteButton.addEventListener("click", deleteRun);
+        }
+        if (hintSaveButton) {
+          hintSaveButton.addEventListener("click", saveHint);
+        }
+      })();
+    </script>
   </body>
 </html>

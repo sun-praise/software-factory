@@ -8,25 +8,93 @@
   </head>
   <body>
     <main class="container">
-      <header>
-        <h1>Runs</h1>
-        <p class="muted">Minimal server-rendered dashboard placeholder.</p>
-        <p><a href="/issues">Submit issue</a> · <a href="/settings">Settings</a></p>
+      <header class="brand-header">
+        <div>
+          <p class="eyebrow">Control Panel</p>
+          <h1>software-factory</h1>
+          <p class="muted">Recent and historical autofix runs.</p>
+        </div>
+        <nav class="header-nav">
+          <a href="/issues">Submit issue</a>
+          <a href="/settings">Settings</a>
+        </nav>
       </header>
 
       <section>
-        <h2>Task List</h2>
+        <h2>Run History</h2>
+        <form method="get" action="/" class="run-search-form">
+          <label for="run-search" class="run-search-label">Search runs</label>
+          <div class="run-search-controls">
+            <input
+              id="run-search"
+              type="text"
+              name="q"
+              value="{{ run_page.query }}"
+              placeholder="Search by run id, repo, PR number, or status">
+            <button type="submit">Search</button>
+            {% if run_page.query %}
+            <a href="/" class="secondary-link">Clear</a>
+            {% endif %}
+          </div>
+        </form>
+
+        <p class="muted run-results-summary">
+          Showing {{ runs|length }} of {{ run_page.total_count }} runs
+          {% if run_page.query %}
+          for "{{ run_page.query }}"
+          {% endif %}
+          · Page {{ run_page.page }} / {{ run_page.total_pages }}
+        </p>
+
         {% if runs and runs|length > 0 %}
-        <ul class="list">
+        <ul class="run-list">
           {% for run in runs %}
-          <li>
-            <a href="/runs/{{ run.id }}">{{ run.id }}</a>
-            <span class="muted">{{ run.status | default("pending") }}</span>
+          <li class="run-card">
+            <div class="run-card-head">
+              <div>
+                <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a>
+                <div class="tiny muted">{{ run.repo }}</div>
+              </div>
+              <span class="status-pill {{ run.status_class }}">
+                {{ run.status | default("pending") }}
+              </span>
+            </div>
+            <dl class="meta run-meta">
+              <dt>Pull Request</dt>
+              <dd>
+                <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">
+                  #{{ run.pr_number }}
+                </a>
+              </dd>
+              <dt>Created</dt>
+              <dd>{{ run.created_at }}</dd>
+              <dt>Updated</dt>
+              <dd>{{ run.updated_at }}</dd>
+            </dl>
           </li>
           {% endfor %}
         </ul>
+        <nav class="pagination" aria-label="Run history pages">
+          {% if run_page.has_prev %}
+          <a href="/?page={{ run_page.prev_page }}{% if run_page.query %}&q={{ run_page.query | urlencode }}{% endif %}" class="pagination-link">
+            Previous
+          </a>
+          {% else %}
+          <span class="pagination-link disabled">Previous</span>
+          {% endif %}
+
+          <span class="pagination-current">Page {{ run_page.page }} of {{ run_page.total_pages }}</span>
+
+          {% if run_page.has_next %}
+          <a href="/?page={{ run_page.next_page }}{% if run_page.query %}&q={{ run_page.query | urlencode }}{% endif %}" class="pagination-link">
+            Next
+          </a>
+          {% else %}
+          <span class="pagination-link disabled">Next</span>
+          {% endif %}
+        </nav>
         {% else %}
-        <p class="empty">No runs yet. This is a placeholder for M1.</p>
+        <p class="empty">No runs yet.</p>
         {% endif %}
       </section>
     </main>
