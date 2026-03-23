@@ -1373,6 +1373,9 @@ def _run_claude_stream_subprocess(
         "result_text": None,
         "error_text": None,
         "saw_events": False,
+        "last_event_type": None,
+        "last_event_subtype": None,
+        "session_id": None,
     }
     _register_active_agent_process(process.pid)
     stdout_chunks: list[str] = []
@@ -1403,8 +1406,19 @@ def _run_claude_stream_subprocess(
             )
         _unregister_active_agent_process(process.pid)
         if process.returncode != 0:
-            message = (stderr or "").strip() or (stdout or "").strip()
-            return False, message or f"{agent_name} command failed", failure_code
+            return (
+                False,
+                _build_claude_process_failure_message(
+                    agent_name=agent_name,
+                    returncode=process.returncode,
+                    stdout=stdout or "",
+                    stderr=stderr or "",
+                    result_text=None,
+                    error_text=None,
+                    state=state,
+                ),
+                failure_code,
+            )
         return True, (stdout or "").strip() or f"{agent_name} completed", None
     stdout_thread = threading.Thread(
         target=_consume_claude_stream,
@@ -1453,13 +1467,19 @@ def _run_claude_stream_subprocess(
     error_text = _safe_text(state.get("error_text"))
 
     if process.returncode != 0:
-        message = (
-            error_text
-            or (stderr or "").strip()
-            or result_text
-            or (stdout or "").strip()
+        return (
+            False,
+            _build_claude_process_failure_message(
+                agent_name=agent_name,
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                result_text=result_text,
+                error_text=error_text,
+                state=state,
+            ),
+            failure_code,
         )
-        return False, message or f"{agent_name} command failed", failure_code
 
     if on_log_line is not None and state.get("saw_events"):
         on_log_line("[agent] completed")
@@ -1734,6 +1754,7 @@ def _consume_claude_stream(
     try:
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
+            _update_claude_stream_state(raw_line, state)
             try:
                 rendered_lines, result_text, error_text, saw_events = (
                     _render_claude_stream_record(raw_line)
@@ -1755,6 +1776,79 @@ def _consume_claude_stream(
                     on_log_line(line)
     finally:
         stream.close()
+
+
+def _update_claude_stream_state(raw_line: str, state: dict[str, Any]) -> None:
+    stripped = raw_line.strip()
+    if not stripped:
+        return
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, Mapping):
+        return
+
+    payload_type = _safe_text(payload.get("type")) or "unknown"
+    state["last_event_type"] = payload_type
+    payload_subtype = _safe_text(payload.get("subtype"))
+    state["last_event_subtype"] = payload_subtype or None
+    session_id = _safe_text(payload.get("session_id"))
+    if session_id:
+        state["session_id"] = session_id
+
+
+def _build_claude_process_failure_message(
+    *,
+    agent_name: str,
+    returncode: int | None,
+    stdout: str,
+    stderr: str,
+    result_text: str | None,
+    error_text: str | None,
+    state: Mapping[str, Any],
+) -> str:
+    message = error_text or stderr.strip() or result_text
+    if not message:
+        if state.get("last_event_type"):
+            message = f"{agent_name} command exited without an explicit error result"
+        else:
+            message = stdout.strip() or f"{agent_name} command failed"
+
+    diagnostics: list[str] = []
+    if returncode is not None:
+        diagnostics.append(_describe_subprocess_returncode(returncode))
+    last_event = _describe_claude_last_event(state)
+    if last_event:
+        diagnostics.append(f"last_event={last_event}")
+    session_id = _safe_text(state.get("session_id"))
+    if session_id:
+        diagnostics.append(f"session_id={session_id}")
+
+    if not diagnostics:
+        return message
+    return f"{message} ({', '.join(diagnostics)})"
+
+
+def _describe_subprocess_returncode(returncode: int) -> str:
+    if returncode >= 0:
+        return f"exit_code={returncode}"
+    signal_number = abs(returncode)
+    try:
+        signal_name = signal.Signals(signal_number).name
+    except ValueError:
+        signal_name = f"SIG{signal_number}"
+    return f"signal={signal_name}"
+
+
+def _describe_claude_last_event(state: Mapping[str, Any]) -> str | None:
+    event_type = _safe_text(state.get("last_event_type"))
+    if not event_type:
+        return None
+    event_subtype = _safe_text(state.get("last_event_subtype"))
+    if event_subtype:
+        return f"{event_type}/{event_subtype}"
+    return event_type
 
 
 def _render_claude_stream_record(
