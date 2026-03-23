@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-23
+
+### Added
+
+- Claude Agent SDK mode with settings-driven flags and updated agent execution paths
+- OpenSpec propose, explore, apply, and archive commands for spec-driven workflow
+- Repo cache workspaces, background start scripts, run operator hints, and richer run list controls
+- Open source project metadata, templates, Docker publish workflow, and multilingual README variants
+
+### Changed
+
+- Expanded autofix context with PR metadata, CI status propagation, mergeability gating, and sturdier workspace preparation
+- Refreshed docs, settings pages, and tests to cover new runtime and release workflows
+
+### Fixed
+
+- GitHub metadata fallback and PR head resolution when `gh` data is incomplete
+- PR conflict detection and base-branch sync before autofix execution
+- Background runtime defaults, manual issue context resolution, and agent image GitHub tooling gaps
+
 ## [0.1.0] - 2026-03-12
 
 ### Added
@@ -114,5 +134,6 @@ Environment variables:
 
 @Svtter
 
-[Unreleased]: https://github.com/sun-praise/software-factory/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sun-praise/software-factory/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sun-praise/software-factory/compare/v0.1.1...v0.2.0
 [0.1.0]: https://github.com/sun-praise/software-factory/releases/tag/v0.1.0
