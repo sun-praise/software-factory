@@ -38,6 +38,7 @@ def build_autofix_prompt(
         f"- Pull Request: #{pr_number}",
         f"- Head SHA: {head_sha}",
     ]
+    _append_pr_merge_state_context(lines, metadata)
     _append_pr_metadata(lines, metadata)
     _append_repo_instructions(lines, repo_instructions)
     _append_operator_hints(lines, operator_hints)
@@ -159,6 +160,52 @@ def _format_issue_summary(title: str, items: list[Mapping[str, Any]]) -> str:
     return f"- {title}: {len(items)} items -> {joined}"
 
 
+def _append_pr_merge_state_context(
+    lines: list[str], metadata: Mapping[str, Any]
+) -> None:
+    is_merge_conflict = metadata.get("is_merge_conflict")
+    is_behind = metadata.get("is_behind")
+    can_be_rebased = metadata.get("can_be_rebased")
+
+    if not is_merge_conflict and not is_behind:
+        return
+
+    if is_merge_conflict:
+        lines.extend(
+            [
+                "",
+                "⚠️ PR Conflict State:",
+                "- This pull request has merge conflicts with the base branch.",
+                "- Automatic merging is not possible until conflicts are resolved.",
+            ]
+        )
+        if can_be_rebased:
+            lines.extend(
+                [
+                    "- The PR can be rebased. Consider rebasing onto the base branch to resolve conflicts.",
+                ]
+            )
+        lines.append("")
+        return
+
+    if is_behind:
+        lines.extend(
+            [
+                "",
+                "⚠️ PR Behind Base Branch:",
+                "- This pull request is behind the base branch.",
+                "- Consider updating the PR branch before applying fixes.",
+            ]
+        )
+        if can_be_rebased:
+            lines.extend(
+                [
+                    "- The PR can be rebased onto the base branch.",
+                ]
+            )
+        lines.append("")
+
+
 def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
     title = _safe_text(metadata.get("title"), "")
     base_ref = _safe_text(metadata.get("base_ref"), "")
@@ -186,14 +233,6 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
         lines.append(f"- Diff Stats: +{additions or '0'} / -{deletions or '0'}")
     if merge_state_status:
         lines.append(f"- Merge State: {merge_state_status}")
-    if is_merge_conflict:
-        lines.append(
-            "- Merge Conflict: This PR has conflicts with the base branch and cannot be merged automatically"
-        )
-    elif is_behind:
-        lines.append(
-            "- Behind Base: This PR is behind the base branch and should be updated before fixing"
-        )
     if can_be_rebased is not None:
         lines.append(f"- Can Be Rebased: {can_be_rebased}")
     if mergeable is not None:

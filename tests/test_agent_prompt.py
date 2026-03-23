@@ -229,8 +229,9 @@ def test_build_autofix_prompt_shows_merge_conflict_state() -> None:
     )
 
     assert "- Merge State: CONFLICTING" in prompt
-    assert "- Merge Conflict:" in prompt
-    assert "cannot be merged automatically" in prompt
+    assert "⚠️ PR Conflict State:" in prompt
+    assert "merge conflicts with the base branch" in prompt
+    assert "Automatic merging is not possible" in prompt
     assert "- Can Be Rebased: True" in prompt
     assert "- Mergeable: False" in prompt
 
@@ -251,8 +252,8 @@ def test_build_autofix_prompt_shows_behind_state() -> None:
     )
 
     assert "- Merge State: BEHIND" in prompt
-    assert "- Behind Base:" in prompt
-    assert "should be updated before fixing" in prompt
+    assert "⚠️ PR Behind Base Branch:" in prompt
+    assert "behind the base branch" in prompt
     assert "- Can Be Rebased: True" in prompt
 
 
@@ -272,8 +273,8 @@ def test_build_autofix_prompt_shows_clean_mergeable_state() -> None:
     )
 
     assert "- Merge State: MERGEABLE" in prompt
-    assert "- Merge Conflict:" not in prompt
-    assert "- Behind Base:" not in prompt
+    assert "⚠️ PR Conflict State:" not in prompt
+    assert "⚠️ PR Behind Base Branch:" not in prompt
     assert "- Mergeable: True" in prompt
 
 
@@ -287,7 +288,7 @@ def test_build_autofix_prompt_hides_merge_state_when_missing() -> None:
     )
 
     assert "Merge State:" not in prompt
-    assert "Merge Conflict:" not in prompt
-    assert "Behind Base:" not in prompt
+    assert "⚠️ PR Conflict State:" not in prompt
+    assert "⚠️ PR Behind Base Branch:" not in prompt
     assert "Can Be Rebased:" not in prompt
     assert "Mergeable:" not in prompt
