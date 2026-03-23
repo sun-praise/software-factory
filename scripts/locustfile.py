@@ -3,8 +3,8 @@ import hmac
 import json
 import random
 import time
-from locust import HttpUser, task, between
-from locust.contrib.fasthttp import FastHttpUser
+from locust import between, task  # type: ignore[import-not-found]
+from locust.contrib.fasthttp import FastHttpUser  # type: ignore[import-not-found]
 
 
 class ReviewCommentUser(FastHttpUser):

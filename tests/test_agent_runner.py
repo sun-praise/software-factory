@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,6 @@ from app.services.agent_runner import (
     _consume_claude_stream,
     _default_executor,
     _build_run_progress_callback,
-    _execute_agent_sdks,
     _render_claude_stream_record,
     _run_claude_agent,
     _sanitize_log_text,
@@ -1152,6 +1152,10 @@ def test_run_once_fails_when_agent_sdk_not_configured(
     run = _enqueue_and_claim(conn)
     posted_comments: list[str] = []
 
+    def _post_comment(*args: object) -> tuple[bool, str]:
+        posted_comments.append(str(args[3]))
+        return True, "ok"
+
     ops = RunnerOps(
         checkout_branch=lambda *_: (True, "checked out"),
         ensure_head_sha=lambda *_: True,
@@ -1160,10 +1164,7 @@ def test_run_once_fails_when_agent_sdk_not_configured(
             "commit_sha": "deadbeef",
             "error": None,
         },
-        post_pr_comment=lambda *_args: (
-            posted_comments.append(str(_args[3])) or True,
-            "ok",
-        ),
+        post_pr_comment=_post_comment,
     )
     monkeypatch.setattr(
         agent_runner,
@@ -1435,13 +1436,13 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakeProcess:
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 999
-            captured["command"] = list(args[0]) if args else []
+            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
             captured.update(kwargs)
             captured["pid"] = self.pid
 
@@ -1527,13 +1528,13 @@ def test_run_claude_agent_supports_docker_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakeProcess:
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 1001
-            captured["command"] = list(args[0]) if args else []
+            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
             captured.update(kwargs)
 
         def communicate(
@@ -1620,13 +1621,13 @@ def test_run_claude_agent_zhipu_clears_direct_model_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakeProcess:
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 1002
-            captured["command"] = list(args[0]) if args else []
+            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
             captured.update(kwargs)
 
         def communicate(

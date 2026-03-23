@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 
 # 终态：success（成功完成）和 cancelled（用户主动取消，不应自动重试）

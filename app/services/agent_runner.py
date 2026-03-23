@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from app.config import get_settings
 from app.services.agent_prompt import (
@@ -398,6 +398,8 @@ def run_once(
             checks=checks_summary,
         )
 
+    run_error_summary: str | None = None
+
     if is_run_cancel_requested(conn, run_id):
         logger.append("cancel_requested: stopping run before execution")
         logs_path = logger.flush()
@@ -530,7 +532,6 @@ def run_once(
 
     try:
         status = "failed"
-        run_error_summary = None
         run_error_code: str | None = None
         commit_sha: str | None = None
         check_workspace = runtime_root
@@ -692,8 +693,9 @@ def run_once(
             )
             if checks_summary["overall_status"] == "passed" or not new_failure_results:
                 if checks_summary["overall_status"] != "passed":
-                    preexisting_failed_commands = (
-                        checks_summary.get("failed_commands") or []
+                    preexisting_failed_commands = cast(
+                        list[object],
+                        checks_summary.get("failed_commands") or [],
                     )
                     preexisting_log_line = (
                         "preexisting_checks_passed_after_fix: "
@@ -716,7 +718,9 @@ def run_once(
                 logger.flush()
                 break
 
-            failed_commands = checks_summary.get("failed_commands") or []
+            failed_commands = cast(
+                list[object], checks_summary.get("failed_commands") or []
+            )
             run_error_summary = (
                 f"checks_failed: {', '.join(str(item) for item in failed_commands)}"
             )
@@ -807,10 +811,10 @@ def _finalize_git_changes(
         return "success", None, None
 
     error_stage = _safe_text(commit_result.get("error_stage")) or "git"
-    pushed_ref = _safe_text(commit_result.get("pushed_ref"))
-    if pushed_ref:
+    failed_pushed_ref = _safe_text(commit_result.get("pushed_ref")) or None
+    if failed_pushed_ref:
         log_lines.append(
-            f"git_push: failed stage={error_stage} ref={pushed_ref} error={error}"
+            f"git_push: failed stage={error_stage} ref={failed_pushed_ref} error={error}"
         )
     else:
         log_lines.append(f"git_push: failed stage={error_stage} error={error}")
@@ -2942,6 +2946,7 @@ def _build_python_bootstrap_plan(
 def _build_node_bootstrap_plan(workspace: Path) -> WorkspaceBootstrapPlan:
     package_json = workspace / "package.json"
     manifest_paths = [package_json]
+    commands: tuple[tuple[str, ...], ...]
     if (workspace / "pnpm-lock.yaml").is_file():
         manifest_paths.append(workspace / "pnpm-lock.yaml")
         commands = (("pnpm", "install", "--frozen-lockfile"),)
@@ -3085,8 +3090,11 @@ def _clear_bootstrap_state(state_file: Path) -> None:
 
 def _coerce_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
+        returncode_value = result.get("returncode", result.get("exit_code", 0))
+        if returncode_value is None:
+            returncode_value = 0
         return {
-            "returncode": int(result.get("returncode", result.get("exit_code", 0))),
+            "returncode": int(returncode_value),
             "stdout": str(result.get("stdout", "")),
             "stderr": str(result.get("stderr", "")),
         }

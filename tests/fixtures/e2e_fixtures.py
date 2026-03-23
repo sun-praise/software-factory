@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.main import app
 from app.models import SCHEMA_SQL
 from app.routes.github import _get_debounce_backend
 from app.services.ai_client import FixPlan

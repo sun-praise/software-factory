@@ -10,10 +10,12 @@ from app.services.filter import (
 
 
 def test_settings_parse_m6_list_values_from_csv() -> None:
-    settings = Settings(
-        bot_logins="github-actions[bot], dependabot[bot]",
-        noise_comment_patterns="^/retest\\b, ^/resolve\\b",
-        managed_repo_prefixes="acme/, widgets/",
+    settings = Settings.model_validate(
+        {
+            "bot_logins": "github-actions[bot], dependabot[bot]",
+            "noise_comment_patterns": "^/retest\\b, ^/resolve\\b",
+            "managed_repo_prefixes": "acme/, widgets/",
+        }
     )
 
     assert settings.bot_logins == ("github-actions[bot]", "dependabot[bot]")

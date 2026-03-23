@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from scripts import run_worker
 
@@ -9,7 +10,7 @@ class _ConnContext:
     def __enter__(self) -> object:
         return object()
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         return False
 
 
@@ -77,7 +78,7 @@ def test_recover_stale_runs_uses_worker_settings(monkeypatch) -> None:
         def __enter__(self) -> object:
             return object()
 
-        def __exit__(self, exc_type, exc, tb) -> bool:
+        def __exit__(self, exc_type, exc, tb) -> Literal[False]:
             return False
 
     class _Settings:

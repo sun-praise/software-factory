@@ -36,6 +36,7 @@ from app.services.queue import (
     enqueue_autofix_run,
     request_run_cancel,
 )
+from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
@@ -81,9 +82,6 @@ def _find_existing_run_by_source_url(
                 "status": row["status"],
             }
     return None
-
-
-from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
 router = APIRouter(tags=["web"])
@@ -782,7 +780,7 @@ def _enqueue_issue_fix(
 
     source_url = normalized_review.get("manual_issue_source_url")
 
-    final_idempotency_key = idempotency_key
+    final_idempotency_key: str | None = idempotency_key
 
     with connect_db() as conn:
         if source_url and target.url_kind == "issue":
@@ -1323,7 +1321,6 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
         )
 
     required_fields = {"url"}
-    optional_fields = {"description", "dry_run"}
     missing_fields = required_fields - set(reader.fieldnames)
     if missing_fields:
         raise HTTPException(
