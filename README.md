@@ -1,8 +1,10 @@
 # software-factory
 
-一个基于 FastAPI 的轻量自动化编排项目，目标是把 PR 审查反馈闭环做成可追踪、可扩展、可本地运行的最小系统。
+[中文](./README.md) | [English](./README.en.md)
 
-核心思路是：触发由 Hook 和 GitHub Webhook 决定，执行由 Agent Worker 负责，页面只做必要状态展示。
+一个基于 FastAPI 的 issue/PR 驱动自动开发系统，目标是把 issue intake、PR review、自动修复与回写闭环做成可追踪、可扩展、可本地运行的最小系统。
+
+核心思路是：触发由 issue、Hook 和 GitHub Webhook 决定，执行由 Agent Worker 负责，页面只做必要状态展示。
 
 ## 项目简介与目标
 
@@ -10,6 +12,7 @@
 
 本项目希望把这段流程标准化为自动闭环：
 
+- 用 issue / manual issue 入口承接人工触发
 - 用 Hook 记录受管开发会话（确定性触发）
 - 用 GitHub Webhook 感知 PR review/comment 变化
 - 用 Review Normalizer 归一化修复输入
@@ -20,16 +23,16 @@
 
 ## 项目定位与命名
 
-本项目不追求做成通用 CI/CD 平台，也不追求覆盖完整 DevOps 生命周期。更准确地说，它是一个围绕 GitHub PR 审查反馈闭环构建的轻量编排系统。
+本项目不追求做成通用 CI/CD 平台，也不追求覆盖完整 DevOps 生命周期。更准确地说，它是一个围绕 GitHub issue / PR 生命周期构建的轻量自动开发系统。
 
 可以把它理解为：
 
-- `AI-native PR Autofix Orchestrator`
-- `GitHub Review Autofix Harness`
+- `Issue/PR-driven Autonomous Development System`
+- `AI-native GitHub Issue & PR Orchestrator`
 
 它的关注点是：
 
-- 由 Hook 和 Webhook 决定何时触发
+- 由 issue、Hook 和 Webhook 决定何时触发
 - 由 Normalizer 把 review/comment 变成结构化修复输入
 - 由 Agent Worker 执行修改、验证、提交和回写
 
@@ -311,6 +314,10 @@ See `openspec/README.md` for the repository workflow.
 - [故障排除指南](docs/troubleshooting.md)：常见问题、日志查看、诊断命令、错误码说明
 - [Hook 示例](docs/hook-samples.md)：Hook 配置示例与调试建议
 - [设计文档](claude_agent_sdk_pr_autofix_plan.md)：完整的项目设计说明书
+- [English README](README.en.md)：英文项目简介、架构与快速开始
+- [贡献指南](CONTRIBUTING.md)：提交 issue、PR 和本地验证约定
+- [安全策略](SECURITY.md)：漏洞披露渠道与响应原则
+- [行为准则](CODE_OF_CONDUCT.md)：社区协作约束
 
 ## 后续路线
 
@@ -329,3 +336,28 @@ See `openspec/README.md` for the repository workflow.
 
 - Hook 配置示例：`example_hooks.json`
 - Hook 事件说明与调试建议：`docs/hook-samples.md`
+
+## Docker
+
+本项目现在提供主服务镜像构建入口：
+
+```bash
+docker build -t svtter/software-factory:latest .
+docker run --rm -p 8000:8000 \
+  -e PORT=8000 \
+  -e DB_PATH=/app/data/software_factory.db \
+  svtter/software-factory:latest
+```
+
+如果需要运行 worker，可复用同一个镜像并覆盖启动命令：
+
+```bash
+docker run --rm \
+  -e DB_PATH=/app/data/software_factory.db \
+  svtter/software-factory:latest \
+  python scripts/run_worker.py --loop --workspace-dir /app
+```
+
+## 开源协议
+
+本项目采用 [Apache License 2.0](./LICENSE)。
