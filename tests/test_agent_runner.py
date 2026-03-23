@@ -324,6 +324,111 @@ def test_collect_pull_request_metadata_detects_clean_mergeable_state(
     assert result["is_blocked"] is False
 
 
+def test_collect_pull_request_metadata_detects_dirty_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='{"title": "Dirty PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "DIRTY", "canBeRebased": true, "mergeable": false}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["merge_state_status"] == "DIRTY"
+    assert result["is_merge_conflict"] is True
+    assert result["is_behind"] is False
+
+
+def test_collect_pull_request_metadata_detects_blocked_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='{"title": "Blocked PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BLOCKED", "canBeRebased": true, "mergeable": false}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["merge_state_status"] == "BLOCKED"
+    assert result["is_merge_conflict"] is False
+    assert result["is_behind"] is False
+    assert result["is_blocked"] is True
+
+
+def test_collect_pull_request_metadata_returns_empty_on_gh_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=1,
+            stdout="",
+            stderr="GraphQL: Could not resolve to a PullRequest (repository)",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result == {}
+
+
+def test_collect_pull_request_metadata_returns_empty_on_invalid_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout="not valid json{{{",
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result == {}
+
+
+def test_collect_pull_request_metadata_returns_empty_on_non_mapping_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return agent_runner.subprocess.CompletedProcess(
+            args=["gh", "pr", "view", "7"],
+            returncode=0,
+            stdout='["not", "a", "mapping"]',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result == {}
+
+
 def test_run_once_injects_repo_agents_md_into_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
