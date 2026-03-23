@@ -8,6 +8,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+![software-factory hero](docs/assets/readme-hero.jpg)
+
 `software-factory` is a lightweight FastAPI-based issue/PR-driven autonomous development system.
 
 It focuses on turning issue intake, PR review feedback, autofix execution, and write-back into a traceable, extensible, locally runnable loop.
