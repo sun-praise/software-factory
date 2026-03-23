@@ -2277,11 +2277,11 @@ def _fetch_pull_request_head(
     ) or None
 
 
-def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
-    if pr_number <= 0:
-        return {}
+def _run_gh_pr_view(
+    *, repo: str, pr_number: int, json_fields: str
+) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             [
                 "gh",
                 "pr",
@@ -2290,7 +2290,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 "--repo",
                 repo,
                 "--json",
-                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions,mergeStateStatus,canBeRebased,mergeable",
+                json_fields,
             ],
             check=False,
             capture_output=True,
@@ -2303,23 +2303,58 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             repo,
             pr_number,
         )
-        return {}
     except subprocess.TimeoutExpired:
         logger.warning(
             "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
             repo,
             pr_number,
         )
+    return None
+
+
+def _gh_result_error_details(result: subprocess.CompletedProcess[str]) -> str:
+    return result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+
+
+def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
+    if pr_number <= 0:
+        return {}
+    primary_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,canBeRebased,mergeable"
+    )
+    fallback_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,mergeable"
+    )
+    result = _run_gh_pr_view(repo=repo, pr_number=pr_number, json_fields=primary_fields)
+    if result is None:
         return {}
     if result.returncode != 0:
-        details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        logger.warning(
-            "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
-            repo,
-            pr_number,
-            details,
-        )
-        return {}
+        details = _gh_result_error_details(result)
+        if 'Unknown JSON field: "canBeRebased"' in details:
+            logger.warning(
+                "gh missing canBeRebased field; retrying metadata fetch without it: repo=%s pr=%s",
+                repo,
+                pr_number,
+            )
+            result = _run_gh_pr_view(
+                repo=repo, pr_number=pr_number, json_fields=fallback_fields
+            )
+            if result is None:
+                return {}
+            if result.returncode == 0:
+                details = ""
+            else:
+                details = _gh_result_error_details(result)
+        if details:
+            logger.warning(
+                "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
+                repo,
+                pr_number,
+                details,
+            )
+            return {}
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
