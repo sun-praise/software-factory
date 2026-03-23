@@ -33,7 +33,8 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "Enable Claude Agent SDK mode" in html
     assert "Claude Agent provider" in html
     assert "Claude Agent runtime" in html
-    assert "openrouter/hunter-alpha" in html
+    assert "glm-5" in html
+    assert "Zhipu Coding Plan" in html
     assert "software-factory/claude-agent:latest" in html
 
 

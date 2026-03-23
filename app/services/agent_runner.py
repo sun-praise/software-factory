@@ -1925,7 +1925,19 @@ def _build_claude_agent_environment(
     normalized_base_url = str(base_url).strip()
     normalized_model = str(model).strip()
 
-    if normalized_provider == "deepseek":
+    if normalized_provider == "zhipu":
+        env.pop("ANTHROPIC_MODEL", None)
+        env.pop("ANTHROPIC_SMALL_FAST_MODEL", None)
+        zhipu_key = str(os.environ.get("ZHIPU_API_KEY", "")).strip()
+        if zhipu_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = zhipu_key
+            env["ANTHROPIC_API_KEY"] = zhipu_key
+        env["API_TIMEOUT_MS"] = "3000000"
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "glm-4.5-air"
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "glm-4.7"
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = normalized_model or "glm-5"
+    elif normalized_provider == "deepseek":
         deepseek_key = str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
         if deepseek_key:
             env["ANTHROPIC_AUTH_TOKEN"] = deepseek_key
@@ -1938,7 +1950,7 @@ def _build_claude_agent_environment(
 
     if normalized_base_url:
         env["ANTHROPIC_BASE_URL"] = normalized_base_url
-    if normalized_model:
+    if normalized_model and normalized_provider != "zhipu":
         env["ANTHROPIC_MODEL"] = normalized_model
         env["ANTHROPIC_SMALL_FAST_MODEL"] = normalized_model
 

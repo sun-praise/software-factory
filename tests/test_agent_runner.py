@@ -1397,6 +1397,70 @@ def test_run_claude_agent_supports_docker_runtime(
     assert env["HOME"] == "/tmp/claude-home"
 
 
+def test_run_claude_agent_zhipu_clears_direct_model_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.returncode = 0
+            self.pid = 1002
+            captured["command"] = list(args[0]) if args else []
+            captured.update(kwargs)
+
+        def communicate(
+            self,
+            input: str | None = None,
+            timeout: int | float | None = None,
+        ) -> tuple[str, str]:
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return "done", ""
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    monkeypatch.setenv("ZHIPU_API_KEY", "test-zhipu-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "stale-direct-model")
+    monkeypatch.setenv("ANTHROPIC_SMALL_FAST_MODEL", "stale-small-model")
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "test-gh-pat")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
+
+    ok, message, error_code = _run_claude_agent(
+        workspace=str(tmp_path),
+        run_id=10,
+        repo="acme/widgets",
+        pr_number=8,
+        prompt="fix this",
+        normalized_review={},
+        command="claude",
+        provider="zhipu",
+        base_url="https://open.bigmodel.cn/api/anthropic",
+        model="glm-5",
+        runtime="host",
+        container_image="",
+        timeout_seconds=42,
+    )
+
+    assert ok is True
+    assert message == "done"
+    assert error_code is None
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "test-zhipu-key"
+    assert env["ANTHROPIC_API_KEY"] == "test-zhipu-key"
+    assert env["ANTHROPIC_BASE_URL"] == "https://open.bigmodel.cn/api/anthropic"
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.5-air"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-4.7"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5"
+    assert "ANTHROPIC_MODEL" not in env
+    assert "ANTHROPIC_SMALL_FAST_MODEL" not in env
+
+
 def test_build_workspace_git_mounts_ignores_missing_git_metadata(
     tmp_path: Path,
 ) -> None:

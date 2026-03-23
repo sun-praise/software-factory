@@ -959,12 +959,12 @@ async def save_settings(request: Request) -> RedirectResponse:
 
     openhands_command = str(form.get("openhands_command", "openhands")).strip()
     claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
-    claude_agent_provider = str(form.get("claude_agent_provider", "openrouter")).strip()
+    claude_agent_provider = str(form.get("claude_agent_provider", "zhipu")).strip()
     claude_agent_base_url = str(
-        form.get("claude_agent_base_url", "https://openrouter.ai/api")
+        form.get("claude_agent_base_url", "https://open.bigmodel.cn/api/anthropic")
     ).strip()
     claude_agent_model = str(
-        form.get("claude_agent_model", "openrouter/hunter-alpha")
+        form.get("claude_agent_model", "glm-5")
     ).strip()
     claude_agent_runtime = str(form.get("claude_agent_runtime", "host")).strip()
     claude_agent_container_image = str(
