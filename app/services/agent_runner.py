@@ -608,16 +608,15 @@ def run_once(
                 current_check_results=check_results,
             )
             if checks_summary["overall_status"] == "passed" or not new_failure_results:
-                preexisting_error_summary: str | None = None
                 if checks_summary["overall_status"] != "passed":
                     preexisting_failed_commands = (
                         checks_summary.get("failed_commands") or []
                     )
-                    preexisting_error_summary = (
-                        "preexisting_checks_failed: "
+                    preexisting_log_line = (
+                        "preexisting_checks_passed_after_fix: "
                         + ", ".join(str(item) for item in preexisting_failed_commands)
                     )
-                    logger.append(preexisting_error_summary)
+                    logger.append(preexisting_log_line)
                     checks_summary = {
                         **checks_summary,
                         "overall_status": "passed",
@@ -630,7 +629,7 @@ def run_once(
                     active_ops=active_ops,
                     log_lines=log_lines,
                 )
-                run_error_summary = preexisting_error_summary or git_error_summary
+                run_error_summary = git_error_summary
                 logger.flush()
                 break
 

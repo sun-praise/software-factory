@@ -1,3 +1,6 @@
+import csv
+import io
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -33,6 +36,53 @@ from app.services.queue import (
     enqueue_autofix_run,
     request_run_cancel,
 )
+
+
+_ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
+
+_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+
+
+def _parse_bool_like(value: str | None) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in _TRUE_VALUES
+
+
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _find_existing_run_by_source_url(
+    conn: sqlite3.Connection,
+    source_url: str,
+) -> dict[str, Any] | None:
+    escaped_url = _escape_like_pattern(source_url)
+    cursor = conn.execute(
+        """
+        SELECT id, status, normalized_review_json
+        FROM autofix_runs
+        WHERE trigger_source = 'manual_issue'
+          AND normalized_review_json LIKE ? ESCAPE '\\'
+        ORDER BY id DESC
+        LIMIT 10
+        """,
+        (f"%{escaped_url}%",),
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        try:
+            review_json = json.loads(row["normalized_review_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if review_json.get("manual_issue_source_url") == source_url:
+            return {
+                "id": row["id"],
+                "status": row["status"],
+            }
+    return None
+
+
 from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 
 
@@ -667,6 +717,7 @@ def _build_issue_normalized_review(
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
         "issue_number": target.issue_number,
+        "manual_issue_source_url": target.source_url,
     }
 
 
@@ -675,8 +726,11 @@ def _enqueue_issue_fix(
     target: ParsedIssueTarget,
     description: str | None,
     resolved_context: ManualIssueContext | None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     run_id: int | None = None
+    existing_run_id: int | None = None
+    existing_run_status: str | None = None
     remaining_quota = None
     idempotency_key = None
     queue_status = "not_queued"
@@ -710,7 +764,55 @@ def _enqueue_issue_fix(
         review_batch_id=review_batch_id,
     )
 
+    if dry_run:
+        return {
+            "ok": True,
+            "message": "Issue validation successful (dry run - no run created).",
+            "repo": target.repo,
+            "pr_number": target.pr_number,
+            "issue_number": target.issue_number,
+            "queue_status": "validated",
+            "queued_run_id": None,
+            "idempotency_key": idempotency_key,
+            "remaining_quota": None,
+            "head_sha": head_sha,
+            "existing_run_id": None,
+            "existing_run_status": None,
+        }
+
+    source_url = normalized_review.get("manual_issue_source_url")
+
+    final_idempotency_key = idempotency_key
+
     with connect_db() as conn:
+        if source_url and target.url_kind == "issue":
+            existing_run = _find_existing_run_by_source_url(conn, source_url)
+            if existing_run is not None:
+                existing_run_id = existing_run["id"]
+                existing_run_status = existing_run["status"]
+                if existing_run_status in _ACTIVE_RUN_STATUSES:
+                    run_row = conn.execute(
+                        "SELECT id FROM autofix_runs WHERE id = ?",
+                        (existing_run_id,),
+                    ).fetchone()
+                    if run_row is not None:
+                        return {
+                            "ok": True,
+                            "message": "Found existing active run for this issue.",
+                            "repo": target.repo,
+                            "pr_number": target.pr_number,
+                            "issue_number": target.issue_number,
+                            "queue_status": "reused_active_run",
+                            "queued_run_id": existing_run_id,
+                            "idempotency_key": idempotency_key,
+                            "remaining_quota": None,
+                            "head_sha": head_sha,
+                            "existing_run_id": existing_run_id,
+                            "existing_run_status": existing_run_status,
+                        }
+                else:
+                    final_idempotency_key = None
+
         if head_sha:
             reset_autofix_count_on_sha_change(
                 conn,
@@ -738,7 +840,7 @@ def _enqueue_issue_fix(
                 head_sha=head_sha,
                 normalized_review_json=normalized_review,
                 trigger_source="manual_issue",
-                idempotency_key=idempotency_key,
+                idempotency_key=final_idempotency_key,
                 max_attempts=get_settings().max_retry_attempts,
             )
             queue_status = "queued" if run_id is not None else "duplicate_task"
@@ -754,6 +856,8 @@ def _enqueue_issue_fix(
         "idempotency_key": idempotency_key,
         "remaining_quota": remaining_quota,
         "head_sha": head_sha,
+        "existing_run_id": existing_run_id,
+        "existing_run_status": existing_run_status,
     }
 
 
@@ -1033,6 +1137,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
     request_data = {
         "url": str(form.get("url", "")).strip(),
         "description": str(form.get("description", "")).strip() or None,
+        "dry_run": form.get("dry_run") == "true",
     }
 
     try:
@@ -1092,6 +1197,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
             target=target,
             description=description,
             resolved_context=resolved_context,
+            dry_run=payload.dry_run,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -1118,7 +1224,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
         context={
             "request": request,
             "title": "Submit Manual Issue",
-            "message": "Submitted",
+            "message": "Validated" if payload.dry_run else "Submitted",
             "result": result,
             "form": request_data,
         },
@@ -1152,6 +1258,7 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
             target=target,
             description=description,
             resolved_context=resolved_context,
+            dry_run=payload.dry_run,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1167,3 +1274,198 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
                 "error": str(exc),
             },
         ) from exc
+
+
+@router.post("/api/issues/batch")
+async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("multipart/form-data"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content-Type must be multipart/form-data",
+        )
+
+    form = await request.form()
+    csv_file = form.get("file")
+    if csv_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV file is required. Upload a file with 'file' field name.",
+        )
+
+    try:
+        from starlette.datastructures import UploadFile
+
+        if isinstance(csv_file, UploadFile):
+            content = await csv_file.read()
+            text_content = (
+                content.decode("utf-8") if isinstance(content, bytes) else content
+            )
+        elif isinstance(csv_file, str):
+            text_content = csv_file
+        else:
+            content = csv_file.read()
+            if hasattr(content, "decode"):
+                text_content = content.decode("utf-8")
+            else:
+                text_content = str(content)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV file must be UTF-8 encoded",
+        ) from exc
+
+    reader = csv.DictReader(io.StringIO(text_content))
+    if reader.fieldnames is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV file must have a header row",
+        )
+
+    required_fields = {"url"}
+    optional_fields = {"description", "dry_run"}
+    missing_fields = required_fields - set(reader.fieldnames)
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"CSV missing required columns: {', '.join(sorted(missing_fields))}",
+        )
+
+    results: list[dict[str, Any]] = []
+    created_count = 0
+    reused_count = 0
+    validated_count = 0
+    rejected_count = 0
+    duplicate_count = 0
+
+    for row_index, row in enumerate(reader):
+        row_number = row_index + 2
+        url = str(row.get("url", "")).strip()
+        description = str(row.get("description", "")).strip() or None
+        dry_run = _parse_bool_like(row.get("dry_run"))
+
+        if not url:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": "URL is required",
+                }
+            )
+            rejected_count += 1
+            continue
+
+        try:
+            payload = IssueSubmissionRequest(
+                url=url,
+                description=description,
+                dry_run=dry_run,
+            )
+        except ValidationError as exc:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": str(exc),
+                }
+            )
+            rejected_count += 1
+            continue
+
+        try:
+            target = _parse_issue_url(payload.url)
+        except ValueError as exc:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": str(exc),
+                }
+            )
+            rejected_count += 1
+            continue
+
+        try:
+            resolved_context = _resolve_manual_issue_context(
+                target,
+                description_present=description is not None,
+            )
+        except ValueError as exc:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": str(exc),
+                }
+            )
+            rejected_count += 1
+            continue
+
+        try:
+            result = _enqueue_issue_fix(
+                target=target,
+                description=description,
+                resolved_context=resolved_context,
+                dry_run=payload.dry_run,
+            )
+        except ValueError as exc:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": str(exc),
+                }
+            )
+            rejected_count += 1
+            continue
+        except sqlite3.Error as exc:
+            results.append(
+                {
+                    "row": row_number,
+                    "url": url,
+                    "status": "rejected",
+                    "error": f"Database error: {exc}",
+                }
+            )
+            rejected_count += 1
+            continue
+
+        queue_status = result.get("queue_status", "")
+        if queue_status == "validated":
+            validated_count += 1
+        elif queue_status == "reused_active_run":
+            reused_count += 1
+        elif queue_status == "queued":
+            created_count += 1
+        elif queue_status == "duplicate_task":
+            duplicate_count += 1
+
+        results.append(
+            {
+                "row": row_number,
+                "url": url,
+                "status": queue_status,
+                "run_id": result.get("queued_run_id") or result.get("existing_run_id"),
+                "repo": result.get("repo"),
+                "pr_number": result.get("pr_number"),
+            }
+        )
+
+    return {
+        "ok": True,
+        "message": "Batch processing completed",
+        "summary": {
+            "total": len(results),
+            "created": created_count,
+            "reused": reused_count,
+            "validated": validated_count,
+            "duplicates": duplicate_count,
+            "rejected": rejected_count,
+        },
+        "results": results,
+    }
