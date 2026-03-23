@@ -2280,6 +2280,14 @@ def _fetch_pull_request_head(
 def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
     if pr_number <= 0:
         return {}
+    primary_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,canBeRebased,mergeable"
+    )
+    fallback_fields = (
+        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
+        "additions,deletions,mergeStateStatus,mergeable"
+    )
     try:
         result = subprocess.run(
             [
@@ -2290,7 +2298,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 "--repo",
                 repo,
                 "--json",
-                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions,mergeStateStatus,canBeRebased,mergeable",
+                primary_fields,
             ],
             check=False,
             capture_output=True,
@@ -2313,13 +2321,64 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         return {}
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        logger.warning(
-            "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
-            repo,
-            pr_number,
-            details,
-        )
-        return {}
+        if 'Unknown JSON field: "canBeRebased"' in details:
+            logger.warning(
+                "gh missing canBeRebased field; retrying metadata fetch without it: repo=%s pr=%s",
+                repo,
+                pr_number,
+            )
+            try:
+                result = subprocess.run(
+                    [
+                        "gh",
+                        "pr",
+                        "view",
+                        str(pr_number),
+                        "--repo",
+                        repo,
+                        "--json",
+                        fallback_fields,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=PR_FETCH_TIMEOUT_SECONDS,
+                )
+            except FileNotFoundError:
+                logger.warning(
+                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=gh not installed",
+                    repo,
+                    pr_number,
+                )
+                return {}
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
+                    repo,
+                    pr_number,
+                )
+                return {}
+            if result.returncode != 0:
+                details = (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or "unknown gh error"
+                )
+                logger.warning(
+                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
+                    repo,
+                    pr_number,
+                    details,
+                )
+                return {}
+        else:
+            logger.warning(
+                "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
+                repo,
+                pr_number,
+                details,
+            )
+            return {}
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:

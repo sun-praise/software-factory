@@ -389,6 +389,47 @@ def test_collect_pull_request_metadata_returns_empty_on_gh_error(
     assert result == {}
 
 
+def test_collect_pull_request_metadata_retries_without_can_be_rebased(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(*args, **kwargs):
+        command = list(args[0])
+        calls.append(command)
+        if len(calls) == 1:
+            return agent_runner.subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr='Unknown JSON field: "canBeRebased"',
+            )
+        return agent_runner.subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=(
+                '{"title":"Fallback PR","baseRefName":"main","headRefName":"feature",'
+                '"headRefOid":"abc123","changedFiles":2,"additions":4,"deletions":1,'
+                '"mergeStateStatus":"BEHIND","mergeable":true}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_pull_request_metadata(
+        repo="acme/widgets", pr_number=7
+    )
+
+    assert result["title"] == "Fallback PR"
+    assert result["merge_state_status"] == "BEHIND"
+    assert result["is_behind"] is True
+    assert result["can_be_rebased"] is None
+    assert len(calls) == 2
+    assert "canBeRebased" in calls[0][-1]
+    assert "canBeRebased" not in calls[1][-1]
+
+
 def test_collect_pull_request_metadata_returns_empty_on_invalid_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
