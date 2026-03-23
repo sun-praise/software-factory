@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import os
 import sqlite3
@@ -38,21 +40,34 @@ from app.services.queue import (
 
 _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
 
+_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+
+
+def _parse_bool_like(value: str | None) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in _TRUE_VALUES
+
+
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 def _find_existing_run_by_source_url(
     conn: sqlite3.Connection,
     source_url: str,
 ) -> dict[str, Any] | None:
+    escaped_url = _escape_like_pattern(source_url)
     cursor = conn.execute(
         """
         SELECT id, status, normalized_review_json
         FROM autofix_runs
         WHERE trigger_source = 'manual_issue'
-          AND normalized_review_json LIKE ?
+          AND normalized_review_json LIKE ? ESCAPE '\\'
         ORDER BY id DESC
         LIMIT 10
         """,
-        (f"%{source_url}%",),
+        (f"%{escaped_url}%",),
     )
     rows = cursor.fetchall()
     for row in rows:
@@ -1261,10 +1276,6 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
         ) from exc
 
 
-import csv
-import io
-
-
 @router.post("/api/issues/batch")
 async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
     content_type = request.headers.get("content-type", "")
@@ -1331,8 +1342,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
         row_number = row_index + 2
         url = str(row.get("url", "")).strip()
         description = str(row.get("description", "")).strip() or None
-        dry_run_value = str(row.get("dry_run", "")).strip().lower()
-        dry_run = dry_run_value in ("true", "1", "yes")
+        dry_run = _parse_bool_like(row.get("dry_run"))
 
         if not url:
             results.append(
