@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         "ai_invalid_response",
         "ai_request_client_error",
         "patch_apply_failed",
+        "rebase_conflict_blocker",
+        "rebase_blocker",
+        "rebase_sha_read_failed",
+        "rebase_fetch_failed",
     )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"

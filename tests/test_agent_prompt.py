@@ -211,3 +211,129 @@ def test_summarize_check_results_with_failures() -> None:
     assert summary["passed_count"] == 1
     assert summary["failed_count"] == 2
     assert summary["failed_commands"] == ["npm test", "npm run typecheck"]
+
+
+def test_build_autofix_prompt_shows_merge_conflict_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Fix bug",
+            "merge_state_status": "CONFLICTING",
+            "is_merge_conflict": True,
+            "can_be_rebased": True,
+            "mergeable": False,
+        },
+    )
+
+    assert "- Merge State: CONFLICTING" in prompt
+    assert "⚠️ PR Conflict State:" in prompt
+    assert "merge conflicts with the base branch" in prompt
+    assert "Automatic merging is not possible" in prompt
+    assert "- Can Be Rebased: True" in prompt
+    assert "- Mergeable: False" in prompt
+
+
+def test_build_autofix_prompt_shows_behind_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Feature",
+            "merge_state_status": "BEHIND",
+            "is_behind": True,
+            "is_merge_conflict": False,
+            "can_be_rebased": True,
+        },
+    )
+
+    assert "- Merge State: BEHIND" in prompt
+    assert "⚠️ PR Behind Base Branch:" in prompt
+    assert "behind the base branch" in prompt
+    assert "- Can Be Rebased: True" in prompt
+
+
+def test_build_autofix_prompt_shows_clean_mergeable_state() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Clean PR",
+            "merge_state_status": "MERGEABLE",
+            "is_merge_conflict": False,
+            "is_behind": False,
+            "mergeable": True,
+        },
+    )
+
+    assert "- Merge State: MERGEABLE" in prompt
+    assert "⚠️ PR Conflict State:" not in prompt
+    assert "⚠️ PR Behind Base Branch:" not in prompt
+    assert "- Mergeable: True" in prompt
+
+
+def test_build_autofix_prompt_hides_merge_state_when_missing() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={"title": "No merge state"},
+    )
+
+    assert "Merge State:" not in prompt
+    assert "⚠️ PR Conflict State:" not in prompt
+    assert "⚠️ PR Behind Base Branch:" not in prompt
+    assert "Can Be Rebased:" not in prompt
+    assert "Mergeable:" not in prompt
+
+
+def test_build_autofix_prompt_conflict_without_rebase_guidance() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Fix bug",
+            "merge_state_status": "CONFLICTING",
+            "is_merge_conflict": True,
+            "can_be_rebased": False,
+        },
+    )
+
+    assert "- Merge State: CONFLICTING" in prompt
+    assert "⚠️ PR Conflict State:" in prompt
+    assert "merge conflicts with the base branch" in prompt
+    assert "Automatic merging is not possible" in prompt
+    assert "Consider rebasing onto the base branch" not in prompt
+    assert "- Can Be Rebased: False" in prompt
+
+
+def test_build_autofix_prompt_behind_without_rebase_guidance() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Feature",
+            "merge_state_status": "BEHIND",
+            "is_behind": True,
+            "is_merge_conflict": False,
+            "can_be_rebased": False,
+        },
+    )
+
+    assert "- Merge State: BEHIND" in prompt
+    assert "⚠️ PR Behind Base Branch:" in prompt
+    assert "behind the base branch" in prompt
+    assert "Consider updating the PR branch" in prompt
+    assert "can be rebased onto the base branch" not in prompt
+    assert "- Can Be Rebased: False" in prompt

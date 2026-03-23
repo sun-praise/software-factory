@@ -30,6 +30,7 @@ from app.services.git_ops import (
     commit_and_push,
     ensure_head_sha,
     post_pr_comment,
+    rebase_onto_base,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
 from app.services.feature_flags import resolve_agent_feature_flags
@@ -154,6 +155,9 @@ class RunnerOps:
     collect_check_commands: Callable[[str | None], list[str]] = collect_check_commands
     summarize_check_results: Callable[[list[dict[str, Any]]], dict[str, Any]] = (
         summarize_check_results
+    )
+    rebase_onto_base: Callable[[str, str, str], tuple[bool, str, bool]] = (
+        rebase_onto_base
     )
 
 
@@ -442,6 +446,85 @@ def run_once(
                     commit_sha=None,
                     checks=checks_summary,
                 )
+
+    base_ref = _safe_text(pr_metadata.get("base_ref"))
+    is_merge_conflict = pr_metadata.get("is_merge_conflict")
+    is_behind = pr_metadata.get("is_behind")
+    can_be_rebased = pr_metadata.get("can_be_rebased")
+
+    if (is_merge_conflict or is_behind) and can_be_rebased and base_ref:
+        logger.append(
+            f"rebase_required: base_ref={base_ref} merge_conflict={is_merge_conflict} behind={is_behind}"
+        )
+        rebase_ok, rebase_message, rebase_is_conflict = active_ops.rebase_onto_base(
+            agent_workspace, base_ref, "origin"
+        )
+        if rebase_ok:
+            logger.append(f"rebase_success: {rebase_message}")
+            updated_sha_result = _run_git_command(
+                repo_dir=agent_workspace,
+                args=["rev-parse", "HEAD"],
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+            )
+            if updated_sha_result.returncode == 0:
+                head_sha = updated_sha_result.stdout.strip()
+                logger.append(f"rebase_head_sha={head_sha}")
+            else:
+                sha_error = (
+                    updated_sha_result.stderr.strip()
+                    or updated_sha_result.stdout.strip()
+                    or "unknown error"
+                )
+                logger.append(f"rebase_sha_failed: {sha_error}")
+                logs_path = logger.logs_path
+                status, scheduled_error = _finish_failed_run(
+                    conn=conn,
+                    run_id=run_id,
+                    error_summary=f"rebase succeeded but failed to read HEAD SHA: {sha_error}",
+                    logs_path=logs_path,
+                    error_code="rebase_sha_read_failed",
+                )
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=scheduled_error,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
+        elif rebase_is_conflict:
+            logger.append(f"rebase_blocker: {rebase_message}")
+            logs_path = logger.logs_path
+            status, scheduled_error = _finish_failed_run(
+                conn=conn,
+                run_id=run_id,
+                error_summary=rebase_message,
+                logs_path=logs_path,
+                error_code="rebase_conflict_blocker",
+            )
+            return _build_terminal_result(
+                status=status,
+                error_summary=scheduled_error,
+                logs_path=logs_path,
+                commit_sha=None,
+                checks=checks_summary,
+            )
+        else:
+            logger.append(f"rebase_blocker: {rebase_message}")
+            logs_path = logger.logs_path
+            status, scheduled_error = _finish_failed_run(
+                conn=conn,
+                run_id=run_id,
+                error_summary=rebase_message,
+                logs_path=logs_path,
+                error_code="rebase_blocker",
+            )
+            return _build_terminal_result(
+                status=status,
+                error_summary=scheduled_error,
+                logs_path=logs_path,
+                commit_sha=None,
+                checks=checks_summary,
+            )
 
     repo_instructions = _read_repo_instructions(agent_workspace)
 
@@ -2207,7 +2290,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
                 "--repo",
                 repo,
                 "--json",
-                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions",
+                "title,body,baseRefName,headRefName,headRefOid,changedFiles,additions,deletions,mergeStateStatus,canBeRebased,mergeable",
             ],
             check=False,
             capture_output=True,
@@ -2255,6 +2338,20 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             payload,
         )
         return {}
+    merge_state_status = _safe_text(payload.get("mergeStateStatus"))
+    can_be_rebased = payload.get("canBeRebased")
+    mergeable = payload.get("mergeable")
+    is_merge_conflict = merge_state_status in {"CONFLICTING", "DIRTY"}
+    is_behind = merge_state_status == "BEHIND"
+    is_blocked = merge_state_status == "BLOCKED"
+    is_unknown_state = merge_state_status in {"UNKNOWN", "UNSTABLE"}
+    if is_unknown_state:
+        logger.warning(
+            "pr_merge_state_unknown: repo=%s pr=%s merge_state_status=%s",
+            repo,
+            pr_number,
+            merge_state_status,
+        )
     return {
         "title": _safe_text(payload.get("title")),
         "body": _safe_text(payload.get("body")),
@@ -2264,6 +2361,12 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         "changed_files": payload.get("changedFiles"),
         "additions": payload.get("additions"),
         "deletions": payload.get("deletions"),
+        "merge_state_status": merge_state_status,
+        "can_be_rebased": can_be_rebased,
+        "mergeable": mergeable,
+        "is_merge_conflict": is_merge_conflict,
+        "is_behind": is_behind,
+        "is_blocked": is_blocked,
     }
 
 
