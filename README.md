@@ -14,6 +14,8 @@ English | [简体中文](README.zh-CN.md)
 
 It focuses on turning issue intake, PR review feedback, autofix execution, and write-back into a traceable, extensible, locally runnable loop.
 
+This project is intended for local development and validation only. Many security checks and deployment hardening steps are still incomplete, so it should not be exposed directly to production or untrusted networks.
+
 The core idea is simple: issues, hooks, and GitHub webhooks decide when work should start; the agent worker executes the change flow; and the web UI only exposes the operational state that matters.
 
 ## Overview and Goals
@@ -116,6 +118,12 @@ Anything not explicitly described here should be treated as out of scope for the
 
 ## Install
 
+Before you run it:
+
+- Treat the repository as a local-only development environment
+- Many security checks are still incomplete, including broader auth, input validation, permission control, and deployment hardening
+- Do not use it as a production service or expose it to public networks before a dedicated security review
+
 1. Create a Python 3.11 virtual environment and install dependencies.
 
 ```bash
@@ -180,6 +188,12 @@ Requirements:
 ## Local Run
 
 See [docs/local-runtime.md](docs/local-runtime.md) for local runtime details and `DB_PATH` constraints.
+
+Local runtime warning:
+
+- Run the stack only in a local environment you control
+- Security testing and hardening are not complete yet
+- Avoid direct exposure to production traffic, public ingress, or untrusted users
 
 1. Create a virtual environment and install dependencies.
 
