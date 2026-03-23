@@ -47,8 +47,8 @@ def _fetch_runs(limit: int = 20) -> list[dict[str, str]]:
     return [
         {
             "id": str(row["id"]),
-            "repo": str(row["repo"]),
-            "pr_number": str(row["pr_number"]),
+            "repo": str(row["repo"]) if row["repo"] is not None else "-",
+            "pr_number": str(row["pr_number"]) if row["pr_number"] is not None else "-",
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
@@ -334,8 +334,8 @@ async def run_detail(request: Request, run_id: str) -> HTMLResponse:
     if row is not None:
         run = {
             "id": str(row["id"]),
-            "repo": str(row["repo"]),
-            "pr_number": str(row["pr_number"]),
+            "repo": str(row["repo"]) if row["repo"] is not None else "-",
+            "pr_number": str(row["pr_number"]) if row["pr_number"] is not None else "-",
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
