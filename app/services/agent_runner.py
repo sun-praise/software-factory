@@ -2041,9 +2041,13 @@ def _build_claude_agent_environment(
         env["ANTHROPIC_SMALL_FAST_MODEL"] = normalized_model
 
     gh_token = (
-        str(env.get("GH_TOKEN", "")).strip()
-        or str(env.get("GITHUB_TOKEN", "")).strip()
+        str(os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")).strip()
+        or str(os.environ.get("GITHUB_TOKEN", "")).strip()
+        or str(os.environ.get("GH_TOKEN", "")).strip()
+        or str(os.environ.get("GITHUB_RELEASE_TOKEN", "")).strip()
         or str(env.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")).strip()
+        or str(env.get("GITHUB_TOKEN", "")).strip()
+        or str(env.get("GH_TOKEN", "")).strip()
         or str(env.get("GITHUB_RELEASE_TOKEN", "")).strip()
     )
     if gh_token:
