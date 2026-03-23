@@ -14,12 +14,38 @@
       "exitCode": 0,
       "completionDetected": false,
       "errors": []
+    },
+    {
+      "iteration": 2,
+      "startedAt": "2026-03-22T23:58:16.431Z",
+      "endedAt": "2026-03-23T00:01:32.343Z",
+      "durationMs": 195756,
+      "agent": "opencode",
+      "model": "opencode-go/glm-5",
+      "toolsUsed": {},
+      "filesModified": [
+        ".ralph/ralph-tasks.md",
+        "app/routes/web.py"
+      ],
+      "exitCode": 0,
+      "completionDetected": false,
+      "errors": [
+        "\u001b[91m\u001b[1mError: \u001b[0mFile not found: /home/svtter/work/project/software-factory-ralph-issues/app/api/web.py",
+        "tests/test_queue.py::test_recover_stale_runs_marks_old_running_rows_failed PASSED [ 88%]",
+        "tests/test_retry.py::test_schedule_retry_marks_non_retryable_failure PASSED [ 92%]",
+        "tests/test_run_worker.py::test_process_one_marks_failed_when_run_once_raises PASSED [ 93%]"
+      ]
     }
   ],
-  "totalDurationMs": 24870,
+  "totalDurationMs": 220626,
   "struggleIndicators": {
-    "repeatedErrors": {},
+    "repeatedErrors": {
+      "\u001b[91m\u001b[1mError: \u001b[0mFile not found: /home/svtter/work/project/software-factory-ralph-issues/app/api/": 1,
+      "tests/test_queue.py::test_recover_stale_runs_marks_old_running_rows_failed PASSED [ 88%]": 1,
+      "tests/test_retry.py::test_schedule_retry_marks_non_retryable_failure PASSED [ 92%]": 1,
+      "tests/test_run_worker.py::test_process_one_marks_failed_when_run_once_raises PASSED [ 93%]": 1
+    },
     "noProgressIterations": 0,
-    "shortIterations": 1
+    "shortIterations": 0
   }
 }

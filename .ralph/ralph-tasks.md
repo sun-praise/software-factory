@@ -22,7 +22,9 @@
 
 ## PR Acceptance Gate For PR #117
 - [x] Inspect PR #117 current mergeability, CI status, and AI review comments using GitHub CLI
-- [ ] Triage each material issue from AI review comment https://github.com/sun-praise/software-factory/pull/117#issuecomment-4107225038
+- [x] Triage each material issue from AI review comment https://github.com/sun-praise/software-factory/pull/117#issuecomment-4107225038
+  - Fixed: LIKE wildcards escaping, import positions, bool parsing helper
+  - Documented acceptable: race condition (low-risk), style suggestions
 - [ ] Implement fixes or write concrete evidence for any item intentionally left unchanged
 - [ ] Run the relevant local validation for any new code changes
 - [ ] Commit and push any follow-up changes to the same PR branch
