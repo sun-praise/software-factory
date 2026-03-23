@@ -6,7 +6,7 @@ import sqlite3
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -278,6 +278,97 @@ def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
     assert row["status"] == result["status"]
     assert row["last_error_code"] == agent_runner.OPENHANDS_FAILURE_CODE_WORKTREE
     assert "unable to resolve PR head branch" in str(row["error_summary"])
+
+
+def test_run_once_defaults_legacy_manual_issue_runs_to_issue_source_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha=None,
+        trigger_source="manual_issue",
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "issue_number": 42,
+            "must_fix": [
+                {
+                    "source": "manual_issue",
+                    "path": None,
+                    "line": None,
+                    "text": "Manual issue submission: https://github.com/acme/widgets/issues/42\n\nGitHub context:\nPlease fix it.",
+                    "severity": "P1",
+                    "context_resolved": True,
+                }
+            ],
+            "should_fix": [],
+        },
+    )
+    run = claim_next_queued_run(conn)
+    assert run is not None
+
+    captured: dict[str, object] = {"metadata_pr_numbers": []}
+
+    def fake_collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, object]:
+        metadata_pr_numbers = cast(list[int], captured["metadata_pr_numbers"])
+        metadata_pr_numbers.append(pr_number)
+        return {}
+
+    def fake_prepare_run_workspace(**kwargs):
+        captured["prepare_pr_number"] = kwargs["pr_number"]
+        captured["prepare_source_kind"] = kwargs["source_kind"]
+        captured["prepare_issue_number"] = kwargs["issue_number"]
+        return str(tmp_path), None, None, None
+
+    def fake_commit_and_push(**kwargs):
+        captured["commit_message"] = kwargs["message"]
+        return {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        }
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_collect_pull_request_metadata",
+        fake_collect_pull_request_metadata,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        fake_prepare_run_workspace,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=RunnerOps(
+            commit_and_push=fake_commit_and_push,
+            post_pr_comment=lambda *_: (True, "ok"),
+        ),
+    )
+
+    assert result["status"] == "success"
+    assert cast(list[int], captured["metadata_pr_numbers"])[0] == 0
+    assert captured["prepare_pr_number"] == 0
+    assert captured["prepare_source_kind"] == "issue"
+    assert captured["prepare_issue_number"] == 42
+    assert captured["commit_message"] == "fix: apply autofix updates for issue #42"
 
 
 def test_collect_pull_request_metadata_returns_empty_when_gh_missing(

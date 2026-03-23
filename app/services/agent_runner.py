@@ -232,6 +232,10 @@ def run_once(
 
     payload = _parse_payload(run.get("normalized_review_json"))
     source_kind = _safe_text(payload.get("source_kind"))
+    if not source_kind and _safe_text(run.get("trigger_source")) == "manual_issue":
+        # Backward compatibility for runs queued before source_kind was stored.
+        source_kind = "issue"
+        payload["source_kind"] = source_kind
     issue_number = _resolve_issue_number(run, payload)
     resolved_pr_number = _resolve_run_pr_number(run, payload)
     head_sha = _safe_text(run.get("head_sha")) or _safe_text(payload.get("head_sha"))
