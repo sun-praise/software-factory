@@ -231,12 +231,22 @@ def run_once(
     worker_id = _safe_text(run.get("worker_id")) or settings.worker_id
 
     payload = _parse_payload(run.get("normalized_review_json"))
+    source_kind = _safe_text(payload.get("source_kind"))
+    if not source_kind and _safe_text(run.get("trigger_source")) == "manual_issue":
+        # Backward compatibility for runs queued before source_kind was stored.
+        source_kind = "issue"
+        payload["source_kind"] = source_kind
+    issue_number = _resolve_issue_number(run, payload)
+    resolved_pr_number = _resolve_run_pr_number(run, payload)
     head_sha = _safe_text(run.get("head_sha")) or _safe_text(payload.get("head_sha"))
     branch = _resolve_branch(conn, run, payload)
     project_type = _safe_text(payload.get("project_type"))
-    commit_message = _safe_text(payload.get("commit_message")) or (
-        f"fix: apply autofix updates for PR #{pr_number}"
-    )
+    commit_message = _safe_text(payload.get("commit_message"))
+    if not commit_message:
+        if source_kind == "issue" and resolved_pr_number <= 0 and issue_number > 0:
+            commit_message = f"fix: apply autofix updates for issue #{issue_number}"
+        else:
+            commit_message = f"fix: apply autofix updates for PR #{pr_number}"
     feature_flags = resolve_agent_feature_flags(conn)
     manual_issue_error = _manual_issue_context_error(payload)
     if manual_issue_error:
@@ -272,7 +282,9 @@ def run_once(
             },
             "comment_posted": False,
         }
-    pr_metadata = _collect_pull_request_metadata(repo=repo, pr_number=pr_number)
+    pr_metadata = _collect_pull_request_metadata(
+        repo=repo, pr_number=resolved_pr_number
+    )
     head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
     commands = active_ops.collect_check_commands(project_type)
@@ -425,31 +437,32 @@ def run_once(
             agent_workspace, agent_worktree, branch, head_sha = _prepare_run_workspace(
                 runtime_root=runtime_root,
                 repo=repo,
-                pr_number=pr_number,
+                pr_number=resolved_pr_number,
                 run_id=run_id,
                 branch=branch,
                 head_sha=head_sha,
+                source_kind=source_kind,
+                issue_number=issue_number,
             )
             logger.append(f"agent_workspace={agent_workspace}")
         except ValueError as exc:
             workspace_error = f"agent workspace init failed: {exc}"
             logger.append(workspace_error)
-            if CLAUDE_AGENT_MODE not in agent_modes:
-                logs_path = logger.logs_path
-                status, scheduled_error = _finish_failed_run(
-                    conn=conn,
-                    run_id=run_id,
-                    error_summary=workspace_error,
-                    logs_path=logs_path,
-                    error_code=OPENHANDS_FAILURE_CODE_WORKTREE,
-                )
-                return _build_terminal_result(
-                    status=status,
-                    error_summary=scheduled_error,
-                    logs_path=logs_path,
-                    commit_sha=None,
-                    checks=checks_summary,
-                )
+            logs_path = logger.logs_path
+            status, scheduled_error = _finish_failed_run(
+                conn=conn,
+                run_id=run_id,
+                error_summary=workspace_error,
+                logs_path=logs_path,
+                error_code=OPENHANDS_FAILURE_CODE_WORKTREE,
+            )
+            return _build_terminal_result(
+                status=status,
+                error_summary=scheduled_error,
+                logs_path=logs_path,
+                commit_sha=None,
+                checks=checks_summary,
+            )
 
     base_ref = _safe_text(pr_metadata.get("base_ref"))
     is_merge_conflict = pr_metadata.get("is_merge_conflict")
@@ -2085,6 +2098,8 @@ def _prepare_run_workspace(
     run_id: int,
     branch: str | None,
     head_sha: str | None,
+    source_kind: str | None = None,
+    issue_number: int | None = None,
 ) -> tuple[str, str, str | None, str | None]:
     settings = get_settings()
     runtime_path = Path(runtime_root).resolve()
@@ -2123,6 +2138,15 @@ def _prepare_run_workspace(
         resolved_branch=resolved_branch,
         resolved_head_sha=resolved_head_sha,
     )
+    if source_kind == "issue" and pr_number <= 0 and not resolved_branch:
+        resolved_branch = _build_manual_issue_branch_name(
+            run_id=run_id,
+            issue_number=issue_number,
+        )
+        _checkout_manual_issue_branch(
+            run_workspace_dir=run_workspace_dir,
+            branch_name=resolved_branch,
+        )
 
     return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
 
@@ -2246,6 +2270,25 @@ def _checkout_run_workspace_target(
             _raise_workspace_git_error(
                 "git checkout head", checkout_result, cleanup_dir=run_workspace_dir
             )
+
+
+def _build_manual_issue_branch_name(*, run_id: int, issue_number: int | None) -> str:
+    issue_suffix = issue_number if isinstance(issue_number, int) and issue_number > 0 else "manual"
+    return f"autofix/run-{run_id}-issue-{issue_suffix}"
+
+
+def _checkout_manual_issue_branch(*, run_workspace_dir: str, branch_name: str) -> None:
+    checkout_result = _run_git_command(
+        repo_dir=run_workspace_dir,
+        args=["checkout", "-B", branch_name],
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+    if checkout_result.returncode != 0:
+        _raise_workspace_git_error(
+            "git checkout manual issue branch",
+            checkout_result,
+            cleanup_dir=run_workspace_dir,
+        )
 
 
 def _raise_workspace_git_error(
@@ -2781,6 +2824,30 @@ def _resolve_branch(
     if isinstance(row, tuple) and row:
         return _safe_text(row[0])
     return None
+
+
+def _resolve_issue_number(run: Mapping[str, Any], payload: Mapping[str, Any]) -> int:
+    raw_issue_number = payload.get("issue_number")
+    if isinstance(raw_issue_number, int) and raw_issue_number > 0:
+        return raw_issue_number
+    if _safe_text(payload.get("source_kind")) == "issue":
+        raw_pr_number = run.get("pr_number")
+        if isinstance(raw_pr_number, int) and raw_pr_number > 0:
+            return raw_pr_number
+    return 0
+
+
+def _resolve_run_pr_number(run: Mapping[str, Any], payload: Mapping[str, Any]) -> int:
+    if _safe_text(payload.get("source_kind")) == "issue":
+        raw_resolved_pr_number = payload.get("resolved_pr_number")
+        if isinstance(raw_resolved_pr_number, int) and raw_resolved_pr_number > 0:
+            return raw_resolved_pr_number
+        return 0
+
+    raw_pr_number = run.get("pr_number")
+    if isinstance(raw_pr_number, int) and raw_pr_number > 0:
+        return raw_pr_number
+    return 0
 
 
 def _parse_payload(value: Any) -> dict[str, Any]:
