@@ -27,6 +27,16 @@ def _stub_pr_metadata(*, repo: str, pr_number: int) -> dict[str, object]:
     return {}
 
 
+def _stub_prepare_run_workspace(**kwargs: object) -> tuple[str, str, object, object]:
+    runtime_root = str(kwargs["runtime_root"])
+    return (
+        runtime_root,
+        runtime_root,
+        kwargs.get("branch"),
+        kwargs.get("head_sha"),
+    )
+
+
 class TestE2ESuccessPath:
     def test_full_success_flow_from_webhook_to_runner(
         self,
@@ -48,6 +58,11 @@ class TestE2ESuccessPath:
             agent_runner,
             "_collect_pull_request_metadata",
             _stub_pr_metadata,
+        )
+        monkeypatch.setattr(
+            agent_runner,
+            "_prepare_run_workspace",
+            _stub_prepare_run_workspace,
         )
         with TestClient(app) as client:
             resp = post_webhook(
@@ -156,6 +171,11 @@ class TestE2ERetryPath:
             agent_runner,
             "_collect_pull_request_metadata",
             _stub_pr_metadata,
+        )
+        monkeypatch.setattr(
+            agent_runner,
+            "_prepare_run_workspace",
+            _stub_prepare_run_workspace,
         )
         with TestClient(app) as client:
             resp = post_webhook(

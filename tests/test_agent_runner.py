@@ -70,6 +70,18 @@ def _stub_pr_metadata_for_run_once_tests(
         "_collect_pull_request_metadata",
         lambda **kwargs: {},
     )
+    if request.node.name.startswith("test_prepare_run_workspace"):
+        return
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (
+            str(kwargs["runtime_root"]),
+            str(kwargs["runtime_root"]),
+            kwargs.get("branch"),
+            kwargs.get("head_sha"),
+        ),
+    )
 
 
 def test_run_once_success_writes_logs_and_marks_success(
