@@ -140,6 +140,20 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
             ),
+            (
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                _cp(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    stdout="feature/m5\n",
+                ),
+            ),
+            (
+                ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                _cp(
+                    ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                    stdout="0\t0\n",
+                ),
+            ),
         ],
     )
 
@@ -150,7 +164,7 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
         "error": "no_changes",
         "error_stage": "git_diff",
         "remote": "origin",
-        "branch": None,
+        "branch": "feature/m5",
         "pushed_ref": None,
     }
     assert calls == [
@@ -164,7 +178,77 @@ def test_commit_and_push_returns_no_changes(monkeypatch) -> None:
             ".software_factory_bootstrap_state.json",
         ],
         ["git", "diff", "--cached", "--quiet"],
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
     ]
+
+
+def test_commit_and_push_pushes_rebase_only_branch_head(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (["git", "add", "-A"], _cp(["git", "add", "-A"])),
+            (
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--",
+                    ".software_factory_bootstrap_state.json",
+                ],
+                _cp(
+                    [
+                        "git",
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                        "--",
+                        ".software_factory_bootstrap_state.json",
+                    ]
+                ),
+            ),
+            (
+                ["git", "diff", "--cached", "--quiet"],
+                _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
+            ),
+            (
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                _cp(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    stdout="feature/m5\n",
+                ),
+            ),
+            (
+                ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                _cp(
+                    ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                    stdout="0\t1\n",
+                ),
+            ),
+            (
+                ["git", "rev-parse", "HEAD"],
+                _cp(["git", "rev-parse", "HEAD"], stdout="deadbeef\n"),
+            ),
+            (
+                ["git", "push", "origin", "feature/m5"],
+                _cp(["git", "push", "origin", "feature/m5"]),
+            ),
+        ],
+    )
+
+    result = git_ops.commit_and_push("/repo", "msg")
+
+    assert result == {
+        "success": True,
+        "commit_sha": "deadbeef",
+        "error": None,
+        "error_stage": None,
+        "remote": "origin",
+        "branch": "feature/m5",
+        "pushed_ref": "origin/feature/m5",
+    }
+    assert calls[-1] == ["git", "push", "origin", "feature/m5"]
 
 
 def test_commit_and_push_success_infers_current_branch(monkeypatch) -> None:
@@ -346,6 +430,20 @@ def test_commit_and_push_excludes_runtime_state_file(monkeypatch) -> None:
             (
                 ["git", "diff", "--cached", "--quiet"],
                 _cp(["git", "diff", "--cached", "--quiet"], returncode=0),
+            ),
+            (
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                _cp(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    stdout="feature/m5\n",
+                ),
+            ),
+            (
+                ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                _cp(
+                    ["git", "rev-list", "--left-right", "--count", "origin/feature/m5...HEAD"],
+                    stdout="0\t0\n",
+                ),
             ),
         ],
     )

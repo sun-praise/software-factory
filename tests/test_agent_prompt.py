@@ -232,6 +232,7 @@ def test_build_autofix_prompt_shows_merge_conflict_state() -> None:
     assert "⚠️ PR Conflict State:" in prompt
     assert "merge conflicts with the base branch" in prompt
     assert "Automatic merging is not possible" in prompt
+    assert "Do not treat the run as complete until the PR is mergeable again." in prompt
     assert "- Can Be Rebased: True" in prompt
     assert "- Mergeable: False" in prompt
 
@@ -254,6 +255,7 @@ def test_build_autofix_prompt_shows_behind_state() -> None:
     assert "- Merge State: BEHIND" in prompt
     assert "⚠️ PR Behind Base Branch:" in prompt
     assert "behind the base branch" in prompt
+    assert "The run is only complete once the PR is mergeable again." in prompt
     assert "- Can Be Rebased: True" in prompt
 
 
