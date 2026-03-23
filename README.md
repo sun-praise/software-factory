@@ -1,49 +1,60 @@
 # software-factory
 
-[中文](./README.md) | [English](./README.en.md)
+[![Pytest](https://github.com/sun-praise/software-factory/actions/workflows/pytest.yml/badge.svg)](https://github.com/sun-praise/software-factory/actions/workflows/pytest.yml)
+[![OpenCode PR Review](https://github.com/sun-praise/software-factory/actions/workflows/opencode-review.yml/badge.svg)](https://github.com/sun-praise/software-factory/actions/workflows/opencode-review.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-DB-003B57?logo=sqlite&logoColor=white)
 
-一个基于 FastAPI 的 issue/PR 驱动自动开发系统，目标是把 issue intake、PR review、自动修复与回写闭环做成可追踪、可扩展、可本地运行的最小系统。
+English | [简体中文](README.zh-CN.md)
 
-核心思路是：触发由 issue、Hook 和 GitHub Webhook 决定，执行由 Agent Worker 负责，页面只做必要状态展示。
+`software-factory` is a lightweight FastAPI-based issue/PR-driven autonomous development system.
 
-## 项目简介与目标
+It focuses on turning issue intake, PR review feedback, autofix execution, and write-back into a traceable, extensible, locally runnable loop.
 
-当前开发流程里，review 之后常见重复动作是"看评论 -> 整理问题 -> 再次让 AI 修复"。
+The core idea is simple: issues, hooks, and GitHub webhooks decide when work should start; the agent worker executes the change flow; and the web UI only exposes the operational state that matters.
 
-本项目希望把这段流程标准化为自动闭环：
+## Overview and Goals
 
-- 用 issue / manual issue 入口承接人工触发
-- 用 Hook 记录受管开发会话（确定性触发）
-- 用 GitHub Webhook 感知 PR review/comment 变化
-- 用 Review Normalizer 归一化修复输入
-- 用 Agent Worker 执行代码修复、测试与回写
-- 用 Thin Web 提供任务状态可视化
+In a typical review workflow, the repetitive loop is often:
 
-非目标：不做重型多租户后台、不做复杂审批和权限中心。
+"read comments -> summarize issues -> ask AI to fix them again".
 
-## 项目定位与命名
+This project aims to standardize that loop into an automated closed system:
 
-本项目不追求做成通用 CI/CD 平台，也不追求覆盖完整 DevOps 生命周期。更准确地说，它是一个围绕 GitHub issue / PR 生命周期构建的轻量自动开发系统。
+- Accept manual issues and operator-provided issue-like inputs as human-triggered entrypoints
+- Use hooks to record managed development sessions as deterministic triggers
+- Use GitHub webhooks to detect issue, PR review, and comment changes
+- Use a review normalizer to convert raw feedback into structured autofix tasks
+- Use an agent worker to run fixes, checks, commits, pushes, and PR write-back
+- Use a thin web layer to visualize recent runs, states, and failures
 
-可以把它理解为：
+Non-goals:
+
+- A heavy multi-tenant backend platform
+- A full approval or permission center
+
+## Positioning
+
+This project is not trying to become a general CI/CD platform, and it does not aim to cover the full DevOps lifecycle. A more accurate description is:
 
 - `Issue/PR-driven Autonomous Development System`
 - `AI-native GitHub Issue & PR Orchestrator`
 
-它的关注点是：
+Its scope is specifically:
 
-- 由 issue、Hook 和 Webhook 决定何时触发
-- 由 Normalizer 把 review/comment 变成结构化修复输入
-- 由 Agent Worker 执行修改、验证、提交和回写
+- Issues, hooks, and webhooks decide when execution should start
+- The normalizer turns issue/review/comment input into structured fix instructions
+- The agent worker performs code changes, verification, commits, pushes, and GitHub write-back
 
-如果拿常见开源系统做类比，它更接近：
+Compared with familiar open-source systems, it is closer to:
 
-- `OpenHands` / `SWE-agent` 这类 AI 执行代理
-- `Prow` / `Zuul` 这类事件驱动的 review/CI 编排系统
+- `OpenHands` or `SWE-agent` style AI execution agents
+- `Prow` or `Zuul` style event-driven review / CI orchestration systems
 
-而不是 `Harness`、`GitLab` 这类覆盖范围更大的通用 DevOps 平台。
+And not to broader DevOps products such as `Harness` or `GitLab`.
 
-## 核心架构
+## Architecture
 
 ```text
 Hook (Claude Code lifecycle)
@@ -55,55 +66,57 @@ Hook (Claude Code lifecycle)
       -> Thin Web
 ```
 
-组件职责：
+Main responsibilities:
 
-- Hook：在固定事件点上报会话与上下文，不做语义决策
-- Webhook Adapter：接收并解析 GitHub 事件，做基础去重/归档
-- Normalizer：把 review/comment 统一成结构化修复任务
-- Agent Worker：按策略执行修复任务并回写 PR
-- Thin Web：展示最近任务、状态、错误摘要
+- Hook: reports managed-session events without making semantic decisions
+- Webhook adapter: ingests GitHub events, validates signatures, and deduplicates raw events
+- Normalizer: converts issue, review, and comment input into structured autofix work items
+- Agent worker: checks out code, applies fixes, runs validation, and writes results back
+- Thin web: shows runs, statuses, and error summaries
 
-## 当前进度
+## Current Progress
 
-Milestone 概览：
+Milestone overview:
 
-- M1（已完成）：最小可跑骨架
-  - FastAPI 服务、健康检查、SSR 页面
-  - `/hook-events`、`/github/webhook` 占位接口
-  - SQLite 初始化脚本和核心表结构
-  - 基础 CI（OpenCode Review + Pytest）
-- M2（已完成）：事件入库、幂等和会话关联
-  - Hook/GitHub 事件的结构化解析与落库
-  - 去重键、错误处理与状态推进
-  - 会话与 PR 关联映射
-- M3（已完成）：GitHub Webhook 完整接入
-  - 签名验证、事件防抖
-  - `pull_request_review`、`pull_request_review_comment`、`issue_comment` 事件处理
-- M4（已完成）：Review Normalizer
-  - 归一化 review/comment 为结构化修复任务
-  - 去重、分级 (P0-P3)、过滤噪声
-- M5（已完成）：Agent Worker 执行链路
-  - Git checkout/commit/push
-  - 检查命令执行 (lint/test)
-  - PR 评论回写
-- M6（已完成）：稳定性增强
-  - 幂等键去重，防止重复任务
-  - PR 锁，防止并发冲突
-  - 指数退避重试机制
-  - 自动修复次数限制 (MAX_AUTOFIX_PER_PR)
-  - Bot/噪声评论过滤
-  - 日志归档与保留策略
-- M7（进行中）：文档与测试完善
-  - 系统架构文档
-  - 故障排除指南
-  - E2E 集成测试
-  - 压力测试
+- M1 (done): minimal runnable skeleton
+  - FastAPI service, health check, SSR pages
+  - Placeholder `/hook-events` and `/github/webhook` endpoints
+  - SQLite initialization script and core schema
+  - Base CI (`OpenCode Review` + `Pytest`)
+- M2 (done): event persistence, idempotency, and session association
+  - Structured parsing and storage for hook / GitHub events
+  - Dedup keys, error handling, and status transitions
+  - Session-to-PR association mapping
+- M3 (done): full GitHub webhook integration
+  - Signature verification and debounce handling
+  - `pull_request_review`, `pull_request_review_comment`, and `issue_comment` support
+- M4 (done): review normalizer
+  - Normalize review/comment input into structured autofix tasks
+  - Deduplication, severity classification (`P0-P3`), and noise filtering
+- M5 (done): agent worker execution path
+  - Git checkout / commit / push
+  - Check command execution (`lint` / `test`)
+  - PR comment write-back
+- M6 (done): reliability hardening
+  - Idempotency-key deduplication to avoid duplicate runs
+  - PR locking to avoid concurrent conflicts
+  - Exponential backoff retries
+  - Autofix attempt limit per PR (`MAX_AUTOFIX_PER_PR`)
+  - Bot / noise comment filtering
+  - Log archival and retention
+- M7 (in progress): documentation and test completion
+  - System architecture docs
+  - Troubleshooting guide
+  - E2E integration tests
+  - Stress testing
 
-说明：本文档描述已实现功能和明确规划中的能力，未列出的功能视为不在当前范围内。
+Anything not explicitly described here should be treated as out of scope for the current project stage.
 
-## 本地运行
+## Local Run
 
-1) 安装依赖
+See [docs/local-runtime.md](docs/local-runtime.md) for local runtime details and `DB_PATH` constraints.
+
+1. Create a virtual environment and install dependencies.
 
 ```bash
 python3 -m venv .venv
@@ -112,71 +125,76 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-运行要求：
+Runtime requirements:
 
 - Python 3.11+
-- SQLite 3.35+（`autofix_runs` 队列 claim 使用 `RETURNING`，低版本会自动降级到兼容路径）
+- SQLite 3.35+ (`autofix_runs` queue claiming uses `RETURNING`; older versions automatically fall back to a compatibility path)
 
-2) 配置环境变量
+2. Configure environment variables.
 
 ```bash
 cp example.env .env
 ```
 
-按需编辑 `.env`（括号内为默认值）：
+Edit `.env` as needed. Values in parentheses are defaults:
 
-**基础配置**:
-- `APP_ENV`（`development`）：运行环境标识
-- `HOST`（`127.0.0.1`）：服务监听地址
-- `PORT`（`8000`）：服务监听端口
-- `DB_PATH`（`./data/software_factory.db`）：SQLite 文件路径
-- `GITHUB_WEBHOOK_SECRET`（空字符串）：本地联调可留空；生产环境建议配置并启用签名校验
+Base settings:
 
-**Webhook 配置**:
-- `GITHUB_WEBHOOK_DEBOUNCE_SECONDS`（`60`）：防抖窗口秒数
+- `APP_ENV` (`development`): runtime environment label
+- `HOST` (`127.0.0.1`): bind address
+- `PORT` (`8000`): listen port
+- `DB_PATH` (`./data/software_factory.db`): SQLite file path
+- `GITHUB_WEBHOOK_SECRET` (empty): can be left empty for local debugging; production should enable signature verification
 
-**稳定性配置 (M6)**:
-- `MAX_AUTOFIX_PER_PR`（`3`）：单 PR 最大自动修复次数
-- `MAX_CONCURRENT_RUNS`（`3`）：最大并发任务数
-- `PR_LOCK_TTL_SECONDS`（`900`）：PR 锁 TTL 秒数
-- `MAX_RETRY_ATTEMPTS`（`3`）：最大重试次数
-- `RETRY_BACKOFF_BASE_SECONDS`（`30`）：重试基础延迟秒数
-- `RETRY_BACKOFF_MAX_SECONDS`（`1800`）：重试最大延迟秒数
+Webhook settings:
 
-**过滤配置 (M6)**:
-- `BOT_LOGINS`（空）：Bot 账号列表，逗号分隔，如 `github-actions[bot],dependabot[bot]`
-- `NOISE_COMMENT_PATTERNS`（空）：噪声评论正则，逗号分隔，如 `^/retest\b,^/resolve\b`
-- `MANAGED_REPO_PREFIXES`（空）：纳管仓库前缀，逗号分隔，如 `acme/,widgets/`
-- `AUTOFIX_COMMENT_AUTHOR`（`software-factory[bot]`）：自动修复评论作者
+- `GITHUB_WEBHOOK_DEBOUNCE_SECONDS` (`60`): debounce window in seconds
 
-**日志配置 (M6)**:
-- `LOG_DIR`（`logs`）：日志目录
-- `LOG_ARCHIVE_SUBDIR`（`archive`）：日志归档子目录
-- `LOG_RETENTION_DAYS`（`7`）：日志保留天数
-- `WORKER_ID`（`worker-default`）：Worker 标识
+Reliability settings (M6):
 
-3) 初始化数据库
+- `MAX_AUTOFIX_PER_PR` (`3`): max autofix attempts per PR
+- `MAX_CONCURRENT_RUNS` (`3`): max concurrent runs
+- `PR_LOCK_TTL_SECONDS` (`900`): PR lock TTL in seconds
+- `MAX_RETRY_ATTEMPTS` (`3`): max retry attempts
+- `RETRY_BACKOFF_BASE_SECONDS` (`30`): base retry delay
+- `RETRY_BACKOFF_MAX_SECONDS` (`1800`): max retry delay
+
+Filtering settings (M6):
+
+- `BOT_LOGINS` (empty): comma-separated bot accounts, for example `github-actions[bot],dependabot[bot]`
+- `NOISE_COMMENT_PATTERNS` (empty): comma-separated noise comment regex patterns, for example `^/retest\b,^/resolve\b`
+- `MANAGED_REPO_PREFIXES` (empty): comma-separated managed repo prefixes, for example `acme/,widgets/`
+- `AUTOFIX_COMMENT_AUTHOR` (`software-factory[bot]`): autofix comment author label
+
+Logging settings (M6):
+
+- `LOG_DIR` (`logs`): log directory
+- `LOG_ARCHIVE_SUBDIR` (`archive`): log archive subdirectory
+- `LOG_RETENTION_DAYS` (`7`): log retention days
+- `WORKER_ID` (`worker-default`): worker identifier
+
+3. Initialize the SQLite database.
 
 ```bash
 python scripts/init_db.py
 ```
 
-会创建四张核心表：`sessions`、`pull_requests`、`review_events`、`autofix_runs`。
+This creates four core tables: `sessions`, `pull_requests`, `review_events`, and `autofix_runs`.
 
-4) 启动服务
+4. Start the web service.
 
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-后台快速启动 `web + worker`：
+5. Or start both `web` and `worker` in the background.
 
 ```bash
 chmod +x scripts/start_system_bg.sh
 ./scripts/start_system_bg.sh start
 ```
 
-常用管理命令：
+Common management commands:
 
 ```bash
 ./scripts/start_system_bg.sh status
@@ -184,27 +202,21 @@ chmod +x scripts/start_system_bg.sh
 ./scripts/start_system_bg.sh stop
 ```
 
-说明：
+Notes:
 
-- 脚本会优先加载仓库根目录 `.env`
-- `web` 和 `worker` 会强制共用同一个 `DB_PATH`
-- PID / 日志默认写到 `.runtime/local/`
+- The script loads `.env` from the repository root first
+- `web` and `worker` are forced to share the same `DB_PATH`
+- PID files and logs default to `.runtime/local/`
 
-常用页面：
+## Development and Debug Commands
 
-- `http://127.0.0.1:8001/`
-- `http://127.0.0.1:8001/runs`
-- `http://127.0.0.1:8001/runs/demo-run`
-
-## 开发与调试命令
-
-健康检查：
+Health check:
 
 ```bash
 curl -i http://127.0.0.1:8001/healthz
 ```
 
-模拟 Hook 事件（`/hook-events`）：
+Simulate a hook event (`/hook-events`):
 
 ```bash
 curl -i -X POST http://127.0.0.1:8001/hook-events \
@@ -212,9 +224,9 @@ curl -i -X POST http://127.0.0.1:8001/hook-events \
   -d '{"event":"UserPromptSubmit","session_id":"sess_demo","repo":"owner/repo","branch":"feat/demo","cwd":"/tmp/software-factory","timestamp":"2026-03-12T12:00:00Z"}'
 ```
 
-说明：当前实现通过 JSON body 的 `event` 字段识别事件类型，不读取 `x-event-type` header。
+Note: the current implementation identifies the event type via the JSON body `event` field and does not read the `x-event-type` header.
 
-模拟 GitHub Webhook（`/github/webhook`）：
+Simulate a GitHub webhook (`/github/webhook`):
 
 ```bash
 curl -i -X POST http://127.0.0.1:8001/github/webhook \
@@ -223,28 +235,27 @@ curl -i -X POST http://127.0.0.1:8001/github/webhook \
   -d '{"action":"submitted","review":{"id":123},"pull_request":{"number":10}}'
 ```
 
-说明：当前 `/github/webhook` 已实现签名校验；生产环境请务必配置 `GITHUB_WEBHOOK_SECRET`。
+Note: `/github/webhook` already validates signatures. In production, `GITHUB_WEBHOOK_SECRET` should always be configured.
 
-语法/字节码编译检查：
+Syntax / bytecode compilation check:
 
 ```bash
 python -m compileall app scripts
 ```
 
-说明：`compileall` 仅用于语法与导入层面的快速检查，不替代静态分析。建议按需增加 `ruff`、`mypy` 等工具。
+`compileall` is only a quick syntax and import-layer check. It does not replace static analysis. Add tools such as `ruff` or `mypy` when needed.
 
-Worker 调试（M5）：
+Worker debugging:
 
 ```bash
 python scripts/run_worker.py --once
 ```
 
-说明：MVP 默认单 worker 串行执行；多 worker 并发执行通过 `MAX_CONCURRENT_RUNS` 控制。
+The MVP defaults to a single serial worker. Multi-worker concurrency is controlled via `MAX_CONCURRENT_RUNS`.
 
 ## Requirements Workflow
 
-This repository now uses OpenSpec to track product requirements, missed review
-items, and implementation scope before code changes land.
+This repository uses OpenSpec to track product requirements, missed review items, and implementation scope before code changes land.
 
 Useful commands:
 
@@ -255,101 +266,62 @@ openspec status --change issue-to-pr-autofix
 openspec validate issue-to-pr-autofix
 ```
 
-See `openspec/README.md` for the repository workflow.
+See [openspec/README.md](openspec/README.md) for the repository workflow.
 
-## CI 说明
+## CI
 
-仓库当前包含两个工作流：
+The repository currently includes two workflows:
 
-- `OpenCode PR Review`：在 PR 上执行只读 AI 审查，输出中文 review 建议
-- `Pytest`：安装依赖并运行 `pytest -q`，用于基础回归检查
+- `OpenCode PR Review`: runs read-only AI review on PRs and posts review suggestions in Chinese
+- `Pytest`: installs dependencies and runs `pytest -q` for basic regression coverage
 
-这两个工作流都服务于"快速反馈 + 轻量治理"的目标。
+Together they serve the project goal of fast feedback with lightweight governance.
 
-## 目录结构（简化）
+## Repository Structure
 
 ```text
-.
-|-- app/
-|   |-- main.py              # FastAPI 入口
-|   |-- config.py            # 环境变量配置
-|   |-- db.py                # SQLite 连接与初始化
-|   |-- models.py            # 数据表定义
-|   |-- routes/
-|   |   |-- hooks.py         # /hook-events
-|   |   |-- github.py        # /github/webhook
-|   |   `-- web.py           # 首页与 run 详情页
-|   |-- services/
-|   |   |-- hooks.py         # Hook 事件处理
-|   |   |-- github_events.py # GitHub 事件解析
-|   |   |-- normalizer.py    # Review 归一化
-|   |   |-- queue.py         # 任务队列
-|   |   |-- agent_runner.py  # Agent 执行器
-|   |   |-- git_ops.py       # Git 操作
-|   |   |-- filter.py        # 过滤器 (M6)
-|   |   |-- policy.py        # 策略控制 (M6)
-|   |   |-- concurrency.py   # 并发控制 (M6)
-|   |   |-- retry.py         # 重试机制 (M6)
-|   |   `-- logging_config.py# 日志管理 (M6)
-|   |-- templates/
-|   `-- static/
-|-- scripts/
-|   |-- init_db.py
-|   `-- run_worker.py
-|-- tests/
-|-- docs/
-|   |-- architecture.md      # 系统架构文档
-|   |-- troubleshooting.md   # 故障排除指南
-|   `-- hook-samples.md      # Hook 示例
-|-- .github/workflows/
-|   |-- opencode-review.yml
-|   `-- pytest.yml
-|-- example.env
-`-- claude_agent_sdk_pr_autofix_plan.md
+app/        FastAPI app, routes, services, templates, static files
+scripts/    local runtime and maintenance scripts
+tests/      test suite
+docs/       architecture, troubleshooting, and hook examples
+openspec/   requirement tracking and change specs
 ```
 
-## 文档
+## Documentation
 
-- [系统架构文档](docs/architecture.md)：架构概览、核心组件、数据模型、状态机设计
-- [故障排除指南](docs/troubleshooting.md)：常见问题、日志查看、诊断命令、错误码说明
-- [Hook 示例](docs/hook-samples.md)：Hook 配置示例与调试建议
-- [设计文档](claude_agent_sdk_pr_autofix_plan.md)：完整的项目设计说明书
-- [English README](README.en.md)：英文项目简介、架构与快速开始
-- [贡献指南](CONTRIBUTING.md)：提交 issue、PR 和本地验证约定
-- [安全策略](SECURITY.md)：漏洞披露渠道与响应原则
-- [行为准则](CODE_OF_CONDUCT.md)：社区协作约束
+- [Architecture](docs/architecture.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Hook Samples](docs/hook-samples.md)
+- [OpenSpec workflow](openspec/README.md)
+- [Chinese translation](README.zh-CN.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 
-## 后续路线
+## Useful Pages
 
-- 短期（M7）：完善文档、E2E 测试、压力测试
-- 中期（规划中）：多仓库支持、手动暂停/恢复、更丰富的策略控制
-- 长期（规划中）：PostgreSQL 支持、多 worker 集群、可观测性增强
-
-## 常见问题
-
-- 数据库初始化失败：先确认 `DB_PATH` 的目录存在且有写权限，再重试 `python scripts/init_db.py`
-- `8000` 端口被占用：改用其他端口启动（例如 `--port 8001`）
-- Webhook 调试无响应：检查 `content-type`、`x-github-event` 和 JSON 格式是否正确
-- Worker 不执行任务：检查队列状态、并发限制、PR 锁；详见 [故障排除指南](docs/troubleshooting.md)
-
-## Hook Samples
-
-- Hook 配置示例：`example_hooks.json`
-- Hook 事件说明与调试建议：`docs/hook-samples.md`
+- `http://127.0.0.1:8001/`
+- `http://127.0.0.1:8001/runs`
+- `http://127.0.0.1:8001/runs/demo-run`
 
 ## Docker
 
-本项目现在提供主服务镜像构建入口：
+Build the primary service image:
 
 ```bash
 docker build -t svtter/software-factory:latest .
+```
+
+Run the web app:
+
+```bash
 docker run --rm -p 8000:8000 \
   -e PORT=8000 \
   -e DB_PATH=/app/data/software_factory.db \
   svtter/software-factory:latest
 ```
 
-如果需要运行 worker，可复用同一个镜像并覆盖启动命令：
+Run the worker with the same image by overriding the command:
 
 ```bash
 docker run --rm \
@@ -358,6 +330,19 @@ docker run --rm \
   python scripts/run_worker.py --loop --workspace-dir /app
 ```
 
-## 开源协议
+## Roadmap
 
-本项目采用 [Apache License 2.0](./LICENSE)。
+- Short term (M7): finish documentation, E2E tests, and stress tests
+- Mid term (planned): multi-repo support, manual pause/resume, richer policy controls
+- Long term (planned): PostgreSQL support, multi-worker clusters, stronger observability
+
+## FAQ
+
+- Database initialization fails: make sure the `DB_PATH` parent directory exists and is writable, then rerun `python scripts/init_db.py`
+- Port `8000` is already in use: start the service on another port such as `--port 8001`
+- Webhook debugging shows no response: check `content-type`, `x-github-event`, and JSON format
+- Worker does not execute tasks: inspect queue state, concurrency limits, and PR locks; see [docs/troubleshooting.md](docs/troubleshooting.md)
+
+## License
+
+This project is licensed under [Apache License 2.0](LICENSE).
