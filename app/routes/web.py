@@ -164,7 +164,7 @@ def _fetch_runs(
             "id": str(row["id"]),
             "repo": str(row["repo"]) if row["repo"] is not None else "-",
             "pr_number": str(row["pr_number"]) if row["pr_number"] is not None else "-",
-            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}" if row["repo"] and row["pr_number"] else "",
+            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}" if row["repo"] and row["pr_number"] and row["pr_number"] != 0 else "",
             "status": str(row["status"]),
             "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
@@ -251,10 +251,10 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
             "operator_hints_editable": "false",
         }
 
-    repo = str(row["repo"])
-    pr_number = str(row["pr_number"])
+    repo = str(row["repo"]) if row["repo"] is not None else "-"
+    pr_number = str(row["pr_number"]) if row["pr_number"] is not None else "-"
     pr_url = ""
-    if repo and pr_number and pr_number != "0":
+    if row["repo"] and row["pr_number"] and row["pr_number"] != 0:
         pr_url = f"https://github.com/{repo}/pull/{pr_number}"
     return {
         "id": str(row["id"]),
