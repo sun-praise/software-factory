@@ -37,6 +37,16 @@ class TestE2ESuccessPath:
         payload = make_pull_request_review_payload()
         monkeypatch.setattr(
             agent_runner,
+            "_collect_pull_request_metadata",
+            lambda **_: {},
+        )
+        monkeypatch.setattr(
+            agent_runner,
+            "_prepare_run_workspace",
+            lambda **_: (str(tmp_path), None, None, None),
+        )
+        monkeypatch.setattr(
+            agent_runner,
             "_execute_agent_sdks",
             lambda **kwargs: (True, None, None, "claude_agent_sdk"),
         )

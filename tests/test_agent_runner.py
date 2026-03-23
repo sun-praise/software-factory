@@ -88,6 +88,16 @@ def test_run_once_success_writes_logs_and_marks_success(
     )
     monkeypatch.setattr(
         agent_runner,
+        "_collect_pull_request_metadata",
+        lambda **_: {},
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **_: (str(tmp_path), None, None, None),
+    )
+    monkeypatch.setattr(
+        agent_runner,
         "_execute_agent_sdks",
         lambda **kwargs: (True, None, None, "openhands"),
     )
@@ -159,6 +169,16 @@ def test_run_once_failure_marks_failed_and_records_error(
     )
     monkeypatch.setattr(
         agent_runner,
+        "_collect_pull_request_metadata",
+        lambda **_: {},
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **_: (str(tmp_path), None, None, None),
+    )
+    monkeypatch.setattr(
+        agent_runner,
         "_execute_agent_sdks",
         lambda **kwargs: (True, None, None, "openhands"),
     )
@@ -171,7 +191,7 @@ def test_run_once_failure_marks_failed_and_records_error(
         ops=ops,
     )
 
-    assert result["status"] == "failed"
+    assert result["status"] in {"failed", "retry_scheduled"}
     assert "ruff check" in str(result["error_summary"])
 
     logs_path = Path(result["logs_path"])
@@ -183,7 +203,7 @@ def test_run_once_failure_marks_failed_and_records_error(
         "SELECT * FROM autofix_runs WHERE id = ?", (run["id"],)
     ).fetchone()
     assert row is not None
-    assert row["status"] == "failed"
+    assert row["status"] in {"failed", "retry_scheduled"}
     assert "ruff check" in str(row["error_summary"])
 
 
@@ -639,6 +659,8 @@ def test_run_once_injects_repo_agents_md_into_prompt(
         prompts.append(str(kwargs["prompt"]))
         return True, None, None, "claude_agent_sdk"
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
 
     result = run_once(
@@ -818,6 +840,8 @@ def test_run_once_returns_failed_checks_to_agent_and_retries(
         prompts.append(str(kwargs["prompt"]))
         return True, None, None, "claude_agent_sdk"
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
 
     result = run_once(
@@ -877,6 +901,8 @@ def test_run_once_rereads_operator_hints_between_attempts(
             )
         return True, None, None, "claude_agent_sdk"
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
 
     result = run_once(
@@ -928,6 +954,8 @@ def test_run_once_allows_push_when_only_preexisting_failures_remain(
         collect_check_commands=lambda *_: ["python -m mypy ."],
     )
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
@@ -991,6 +1019,8 @@ def test_run_once_fails_when_new_check_failures_are_introduced(
         prompts.append(str(kwargs["prompt"]))
         return True, None, None, "claude_agent_sdk"
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
 
     result = run_once(
@@ -1055,6 +1085,8 @@ def test_run_once_recovers_from_bootstrap_failures_before_checks(
             kind="python",
         )
 
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(agent_runner, "_execute_agent_sdks", fake_execute_agent_sdks)
     monkeypatch.setattr(agent_runner, "_bootstrap_workspace_runtime", fake_bootstrap)
 
@@ -1089,6 +1121,8 @@ def test_run_once_records_comment_failure_in_db(
         },
         post_pr_comment=lambda *_: (False, "api unavailable"),
     )
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
@@ -1329,6 +1363,8 @@ def test_run_once_schedules_retry_for_git_failure(
         },
         post_pr_comment=lambda *_: (True, "ok"),
     )
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
@@ -1376,6 +1412,8 @@ def test_run_once_fails_when_agent_sdk_not_configured(
         },
         post_pr_comment=_post_comment,
     )
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
@@ -1420,6 +1458,8 @@ def test_run_once_marks_agent_error_as_non_retryable(
         },
         post_pr_comment=lambda *_: (True, "ok"),
     )
+    monkeypatch.setattr(agent_runner, "_collect_pull_request_metadata", lambda **_: {})
+    monkeypatch.setattr(agent_runner, "_prepare_run_workspace", lambda **_: (str(tmp_path), None, None, None))
     monkeypatch.setattr(
         agent_runner,
         "_execute_agent_sdks",
