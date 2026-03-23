@@ -2312,6 +2312,10 @@ def _run_gh_pr_view(
     return None
 
 
+def _gh_result_error_details(result: subprocess.CompletedProcess[str]) -> str:
+    return result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+
+
 def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
     if pr_number <= 0:
         return {}
@@ -2327,7 +2331,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
     if result is None:
         return {}
     if result.returncode != 0:
-        details = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+        details = _gh_result_error_details(result)
         if 'Unknown JSON field: "canBeRebased"' in details:
             logger.warning(
                 "gh missing canBeRebased field; retrying metadata fetch without it: repo=%s pr=%s",
@@ -2339,20 +2343,11 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
             )
             if result is None:
                 return {}
-            if result.returncode != 0:
-                details = (
-                    result.stderr.strip()
-                    or result.stdout.strip()
-                    or "unknown gh error"
-                )
-                logger.warning(
-                    "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
-                    repo,
-                    pr_number,
-                    details,
-                )
-                return {}
-        else:
+            if result.returncode == 0:
+                details = ""
+            else:
+                details = _gh_result_error_details(result)
+        if details:
             logger.warning(
                 "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
                 repo,
