@@ -23,6 +23,10 @@ from tests.fixtures.e2e_fixtures import (
 )
 
 
+def _stub_pr_metadata(*, repo: str, pr_number: int) -> dict[str, object]:
+    return {}
+
+
 class TestE2ESuccessPath:
     def test_full_success_flow_from_webhook_to_runner(
         self,
@@ -39,6 +43,11 @@ class TestE2ESuccessPath:
             agent_runner,
             "_execute_agent_sdks",
             lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+        )
+        monkeypatch.setattr(
+            agent_runner,
+            "_collect_pull_request_metadata",
+            _stub_pr_metadata,
         )
         with TestClient(app) as client:
             resp = post_webhook(
@@ -134,7 +143,7 @@ class TestE2ELimitPath:
 
 
 class TestE2ERetryPath:
-    def test_failure_schedules_retry(self, tmp_path: Path) -> None:
+    def test_failure_schedules_retry(self, tmp_path: Path, monkeypatch) -> None:
         db_path = setup_e2e_env(tmp_path)
         payload = make_pull_request_review_payload()
         mock_executor = MagicMock(
@@ -142,6 +151,11 @@ class TestE2ERetryPath:
         )
         mock_ops = make_mock_runner_ops(
             commit_success=False, commit_error="push_rejected"
+        )
+        monkeypatch.setattr(
+            agent_runner,
+            "_collect_pull_request_metadata",
+            _stub_pr_metadata,
         )
         with TestClient(app) as client:
             resp = post_webhook(

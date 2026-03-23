@@ -58,6 +58,20 @@ def _enqueue_and_claim(conn: sqlite3.Connection) -> dict:
     return run
 
 
+@pytest.fixture(autouse=True)
+def _stub_pr_metadata_for_run_once_tests(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if request.node.name.startswith("test_collect_pull_request_metadata"):
+        return
+    monkeypatch.setattr(
+        agent_runner,
+        "_collect_pull_request_metadata",
+        lambda **kwargs: {},
+    )
+
+
 def test_run_once_success_writes_logs_and_marks_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
