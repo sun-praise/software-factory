@@ -2,6 +2,8 @@
 
 [README in English](README.md) | 简体中文
 
+![software-factory hero](docs/assets/readme-hero.jpg)
+
 `software-factory` 是一个基于 FastAPI 的轻量 issue/PR 驱动自动开发系统。
 
 它关注的是把 issue intake、PR 审查反馈、自动修复执行和结果回写，串成一个可追踪、可扩展、可本地运行的闭环。
