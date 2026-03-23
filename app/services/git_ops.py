@@ -217,7 +217,8 @@ def rebase_onto_base(
     repo_dir: str, base_ref: str, remote: str = "origin"
 ) -> tuple[bool, str, bool]:
     fetch_result = _run_git(repo_dir, ["fetch", remote, base_ref])
-    if fetch_result.returncode != 0:
+    fetch_failed = fetch_result.returncode != 0
+    if fetch_failed:
         remote_ref = base_ref
     else:
         remote_ref = f"{remote}/{base_ref}"
@@ -227,12 +228,35 @@ def rebase_onto_base(
         return True, rebase_result.stdout.strip() or f"rebased onto {remote_ref}", False
 
     abort_result = _run_git(repo_dir, ["rebase", "--abort"])
-    conflict_message = rebase_result.stderr.strip() or rebase_result.stdout.strip()
-    if abort_result.returncode != 0:
-        conflict_message = (
-            f"{conflict_message}; abort also failed: {_pick_message(abort_result)}"
+    raw_message = rebase_result.stderr.strip() or rebase_result.stdout.strip() or ""
+    is_conflict = _is_rebase_conflict(rebase_result)
+    if is_conflict:
+        if abort_result.returncode != 0:
+            raw_message = (
+                f"{raw_message}; abort also failed: {_pick_message(abort_result)}"
+            )
+        return False, f"rebase_conflict: {raw_message}", True
+
+    if fetch_failed:
+        return (
+            False,
+            f"rebase_fetch_failed: unable to fetch {remote}/{base_ref} and rebase failed - {raw_message}",
+            False,
         )
-    return False, f"rebase_conflict: {conflict_message}", True
+
+    return False, f"rebase_failed: {raw_message}", False
+
+
+def _is_rebase_conflict(result: subprocess.CompletedProcess[str]) -> bool:
+    combined = f"{result.stderr} {result.stdout}".lower()
+    conflict_indicators = (
+        "conflict",
+        "could not apply",
+        "unresolved conflicts",
+        "merge conflict",
+        "patch failed",
+    )
+    return any(indicator in combined for indicator in conflict_indicators)
 
 
 def post_pr_comment(

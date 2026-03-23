@@ -421,3 +421,154 @@ def test_post_pr_comment_failure(monkeypatch) -> None:
     )
     assert ok is False
     assert "authorized" in message
+
+
+def test_rebase_onto_base_fetch_failure(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(
+                    ["git", "fetch", "origin", "main"],
+                    returncode=1,
+                    stderr="fatal: could not resolve host\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "main"],
+                _cp(
+                    ["git", "rebase", "main"],
+                    returncode=1,
+                    stderr="fatal: bad revision 'main'\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is False
+    assert "rebase_fetch_failed" in message
+    assert "bad revision" in message
+    assert calls == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "rebase", "main"],
+        ["git", "rebase", "--abort"],
+    ]
+
+
+def test_rebase_onto_base_detects_conflict(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="CONFLICT (content): Merge conflict in file.txt\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is True
+    assert "rebase_conflict" in message
+    assert "file.txt" in message
+
+
+def test_rebase_onto_base_non_conflict_failure(monkeypatch) -> None:
+    calls = _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="fatal: bad revision 'origin/main'\n",
+                ),
+            ),
+            (["git", "rebase", "--abort"], _cp(["git", "rebase", "--abort"])),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is False
+    assert "rebase_failed" in message
+    assert calls[-1] == ["git", "rebase", "--abort"]
+
+
+def test_rebase_onto_base_conflict_abort_failure(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                ["git", "fetch", "origin", "main"],
+                _cp(["git", "fetch", "origin", "main"]),
+            ),
+            (
+                ["git", "rebase", "origin/main"],
+                _cp(
+                    ["git", "rebase", "origin/main"],
+                    returncode=1,
+                    stderr="CONFLICT (content): conflict in file.py\n",
+                ),
+            ),
+            (
+                ["git", "rebase", "--abort"],
+                _cp(
+                    ["git", "rebase", "--abort"],
+                    returncode=1,
+                    stderr="abort failed\n",
+                ),
+            ),
+        ],
+    )
+
+    ok, message, is_conflict = git_ops.rebase_onto_base("/repo", "main", "origin")
+    assert ok is False
+    assert is_conflict is True
+    assert "rebase_conflict" in message
+    assert "abort also failed" in message
+
+
+def test_is_rebase_conflict_detects_conflicts() -> None:
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="CONFLICT (content): file.txt")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="error: could not apply abc123...")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="Unresolved conflicts found")
+    )
+    assert git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], stderr="Patch failed at abc123")
+    )
+
+
+def test_is_rebase_conflict_returns_false_for_other_errors() -> None:
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="fatal: bad revision")
+    )
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="error: some other error")
+    )
+    assert not git_ops._is_rebase_conflict(
+        _cp(["git", "rebase"], returncode=1, stderr="")
+    )

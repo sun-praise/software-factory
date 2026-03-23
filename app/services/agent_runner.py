@@ -487,7 +487,22 @@ def run_once(
                 checks=checks_summary,
             )
         else:
-            logger.append(f"rebase_failed: {rebase_message}")
+            logger.append(f"rebase_blocker: {rebase_message}")
+            logs_path = logger.logs_path
+            status, scheduled_error = _finish_failed_run(
+                conn=conn,
+                run_id=run_id,
+                error_summary=rebase_message,
+                logs_path=logs_path,
+                error_code="rebase_blocker",
+            )
+            return _build_terminal_result(
+                status=status,
+                error_summary=scheduled_error,
+                logs_path=logs_path,
+                commit_sha=None,
+                checks=checks_summary,
+            )
 
     repo_instructions = _read_repo_instructions(agent_workspace)
 

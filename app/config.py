@@ -31,6 +31,7 @@ class Settings(BaseSettings):
         "ai_request_client_error",
         "patch_apply_failed",
         "rebase_conflict_blocker",
+        "rebase_blocker",
     )
     autofix_comment_author: str = "software-factory[bot]"
     log_dir: str = "logs"
