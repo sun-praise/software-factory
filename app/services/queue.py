@@ -156,6 +156,8 @@ def mark_run_finished(
     error_summary: str | None = None,
     logs_path: str | None = None,
     last_error_code: str | None = None,
+    opened_pr_number: int | None = None,
+    opened_pr_url: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -164,6 +166,8 @@ def mark_run_finished(
             commit_sha = ?,
             error_summary = ?,
             logs_path = ?,
+            opened_pr_number = COALESCE(?, opened_pr_number),
+            opened_pr_url = COALESCE(?, opened_pr_url),
             last_error_code = COALESCE(?, last_error_code),
             last_error_at = CASE WHEN ? IS NULL THEN last_error_at ELSE CURRENT_TIMESTAMP END,
             finished_at = CURRENT_TIMESTAMP,
@@ -175,6 +179,8 @@ def mark_run_finished(
             commit_sha,
             error_summary,
             logs_path,
+            opened_pr_number,
+            opened_pr_url,
             last_error_code,
             last_error_code,
             run_id,
@@ -192,6 +198,26 @@ def update_run_logs_path(conn: sqlite3.Connection, run_id: int, logs_path: str) 
         WHERE id = ?
         """,
         (logs_path, run_id),
+    )
+    conn.commit()
+
+
+def update_run_opened_pr(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    opened_pr_number: int | None,
+    opened_pr_url: str | None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE autofix_runs
+        SET opened_pr_number = ?,
+            opened_pr_url = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (opened_pr_number, opened_pr_url, run_id),
     )
     conn.commit()
 

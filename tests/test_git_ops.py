@@ -736,3 +736,120 @@ def test_rebase_onto_base_success_message_includes_remote_ref(monkeypatch) -> No
         ["git", "fetch", "origin", "main"],
         ["git", "rebase", "origin/main"],
     ]
+
+
+def test_ensure_pull_request_reuses_existing_pull_request(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--repo",
+                    "acme/widgets",
+                    "--head",
+                    "feature/m5",
+                    "--state",
+                    "all",
+                    "--json",
+                    "number,url",
+                    "--limit",
+                    "1",
+                ],
+                _cp(
+                    ["gh", "pr", "list"],
+                    stdout='[{"number":45,"url":"https://github.com/acme/widgets/pull/45"}]',
+                ),
+            )
+        ],
+    )
+
+    result = git_ops.ensure_pull_request(
+        "/repo",
+        "acme/widgets",
+        "feature/m5",
+        title="Fix bug",
+        body="Closes #7",
+    )
+
+    assert result == {
+        "success": True,
+        "pr_number": 45,
+        "pr_url": "https://github.com/acme/widgets/pull/45",
+        "base_branch": None,
+        "error": None,
+        "existing": True,
+    }
+
+
+def test_ensure_pull_request_creates_new_pull_request(monkeypatch) -> None:
+    _patch_run(
+        monkeypatch,
+        [
+            (
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--repo",
+                    "acme/widgets",
+                    "--head",
+                    "feature/m5",
+                    "--state",
+                    "all",
+                    "--json",
+                    "number,url",
+                    "--limit",
+                    "1",
+                ],
+                _cp(["gh", "pr", "list"], stdout="[]"),
+            ),
+            (
+                ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                _cp(
+                    ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                    stdout="origin/main\n",
+                ),
+            ),
+            (
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--repo",
+                    "acme/widgets",
+                    "--head",
+                    "feature/m5",
+                    "--base",
+                    "main",
+                    "--title",
+                    "Fix bug",
+                    "--body",
+                    "Closes #7",
+                ],
+                _cp(
+                    ["gh", "pr", "create"],
+                    stdout="https://github.com/acme/widgets/pull/46\n",
+                ),
+            ),
+        ],
+    )
+
+    result = git_ops.ensure_pull_request(
+        "/repo",
+        "acme/widgets",
+        "feature/m5",
+        title="Fix bug",
+        body="Closes #7",
+    )
+
+    assert result == {
+        "success": True,
+        "pr_number": 46,
+        "pr_url": "https://github.com/acme/widgets/pull/46",
+        "base_branch": "main",
+        "error": None,
+        "existing": False,
+    }

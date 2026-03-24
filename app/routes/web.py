@@ -148,7 +148,7 @@ def _fetch_runs(
         ).fetchone()
         rows = conn.execute(
             f"""
-            SELECT id, repo, pr_number, status, created_at, updated_at
+            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at
             FROM autofix_runs
             {sql_where}
             ORDER BY id DESC
@@ -164,8 +164,8 @@ def _fetch_runs(
         {
             "id": str(row["id"]),
             "repo": str(row["repo"]) if row["repo"] is not None else "-",
-            "pr_number": str(row["pr_number"]) if row["pr_number"] is not None else "-",
-            "pr_url": f"https://github.com/{row['repo']}/pull/{row['pr_number']}" if row["repo"] and row["pr_number"] and row["pr_number"] != 0 else "",
+            "pr_number": _resolve_run_pr_number(row),
+            "pr_url": _resolve_run_pr_url(row),
             "status": str(row["status"]),
             "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
@@ -200,6 +200,26 @@ def _status_class(status: str) -> str:
     return "queued"
 
 
+def _resolve_run_pr_number(row: sqlite3.Row) -> str:
+    opened_pr_number = _coerce_positive_int(row["opened_pr_number"])
+    if opened_pr_number is not None:
+        return str(opened_pr_number)
+    return str(row["pr_number"]) if row["pr_number"] is not None else "-"
+
+
+def _resolve_run_pr_url(row: sqlite3.Row) -> str:
+    opened_pr_url = _string_or_empty(row["opened_pr_url"])
+    if opened_pr_url:
+        return opened_pr_url
+    repo = _string_or_empty(row["repo"])
+    pr_number = _coerce_positive_int(row["pr_number"])
+    if not repo or pr_number is None:
+        return ""
+    if _string_or_empty(row["trigger_source"]) == "manual_issue":
+        return ""
+    return f"https://github.com/{repo}/pull/{pr_number}"
+
+
 def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
     if not logs_path:
         return "No log data yet."
@@ -231,7 +251,7 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     with connect_db() as conn:
         row = conn.execute(
             """
-            SELECT id, repo, pr_number, status, created_at, updated_at, logs_path, operator_hints
+            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at, logs_path, operator_hints
             FROM autofix_runs
             WHERE id = ?
             """,
@@ -253,10 +273,8 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
         }
 
     repo = str(row["repo"]) if row["repo"] is not None else "-"
-    pr_number = str(row["pr_number"]) if row["pr_number"] is not None else "-"
-    pr_url = ""
-    if row["repo"] and row["pr_number"] and row["pr_number"] != 0:
-        pr_url = f"https://github.com/{repo}/pull/{pr_number}"
+    pr_number = _resolve_run_pr_number(row)
+    pr_url = _resolve_run_pr_url(row)
     return {
         "id": str(row["id"]),
         "repo": repo,

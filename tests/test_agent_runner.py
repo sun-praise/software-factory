@@ -58,6 +58,36 @@ def _enqueue_and_claim(conn: sqlite3.Connection) -> dict:
     return run
 
 
+def _enqueue_manual_issue_and_claim(conn: sqlite3.Connection) -> dict:
+    enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=42,
+        head_sha=None,
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "branch": "autofix/run-1-issue-42",
+            "source_kind": "issue",
+            "issue_number": 42,
+            "manual_issue_source_url": "https://github.com/acme/widgets/issues/42",
+            "must_fix": [
+                {
+                    "source": "manual_issue",
+                    "path": None,
+                    "line": None,
+                    "text": "Manual issue submission: https://github.com/acme/widgets/issues/42\n\nGitHub context:\nGitHub issue context\nTitle: Support SVG upload",
+                }
+            ],
+            "should_fix": [],
+        },
+        trigger_source="manual_issue",
+    )
+    run = claim_next_queued_run(conn)
+    assert run is not None
+    return run
+
+
 @pytest.fixture(autouse=True)
 def _stub_pr_metadata_for_run_once_tests(
     request: pytest.FixtureRequest,
@@ -248,6 +278,117 @@ def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) ->
 
     assert result["status"] == "failed"
     assert "manual_issue_context_missing" in str(result["error_summary"])
+
+
+def test_run_once_manual_issue_creates_pull_request_after_push(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_issue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        },
+        ensure_pull_request=lambda **_: {
+            "success": True,
+            "pr_number": 99,
+            "pr_url": "https://github.com/acme/widgets/pull/99",
+            "base_branch": "main",
+            "error": None,
+            "existing": False,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    row = conn.execute(
+        "SELECT opened_pr_number, opened_pr_url, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["opened_pr_number"] == 99
+    assert row["opened_pr_url"] == "https://github.com/acme/widgets/pull/99"
+    assert row["error_summary"] is None
+    logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
+    assert "issue_pr: created pr=#99" in logs_text
+
+
+def test_run_once_manual_issue_pr_creation_failure_is_non_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_issue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        },
+        ensure_pull_request=lambda **_: {
+            "success": False,
+            "pr_number": None,
+            "pr_url": None,
+            "base_branch": "main",
+            "error": "gh unavailable",
+            "existing": False,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert "issue_pr_create_failed: gh unavailable" in str(result["error_summary"])
+    row = conn.execute(
+        "SELECT opened_pr_number, opened_pr_url, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["opened_pr_number"] is None
+    assert row["opened_pr_url"] is None
+    assert "issue_pr_create_failed: gh unavailable" in str(row["error_summary"])
 
 
 def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(

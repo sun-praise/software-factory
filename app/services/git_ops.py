@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 from typing import Sequence
 
@@ -7,6 +9,7 @@ from typing import Sequence
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 GH_COMMAND_TIMEOUT_SECONDS = 30
 EXCLUDED_COMMIT_PATHS = (".software_factory_bootstrap_state.json",)
+_PULL_REQUEST_URL_PATTERN = re.compile(r"/pull/(\d+)(?:\D|$)")
 
 
 def _run_git(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -40,6 +43,28 @@ def _pick_message(result: subprocess.CompletedProcess[str]) -> str:
     return f"git exited with code {result.returncode}"
 
 
+def _run_gh(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["gh", *args],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=GH_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raw_stderr = exc.stderr or ""
+        if isinstance(raw_stderr, bytes):
+            stderr = raw_stderr.decode("utf-8", errors="replace").strip()
+        else:
+            stderr = str(raw_stderr).strip()
+        message = stderr or f"gh command timed out after {GH_COMMAND_TIMEOUT_SECONDS}s"
+        return subprocess.CompletedProcess(
+            args=["gh", *args], returncode=124, stdout="", stderr=message
+        )
+
+
 def _resolve_target_branch(
     repo_dir: str, branch: str | None
 ) -> tuple[str | None, str | None]:
@@ -52,6 +77,111 @@ def _resolve_target_branch(
     if not target_branch or target_branch == "HEAD":
         return None, "detached_head"
     return target_branch, None
+
+
+def _resolve_default_base_branch(
+    repo_dir: str, remote: str = "origin"
+) -> tuple[str | None, str | None]:
+    result = _run_git(repo_dir, ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"])
+    if result.returncode != 0:
+        return None, _pick_message(result)
+    ref = result.stdout.strip()
+    prefix = f"{remote}/"
+    if not ref.startswith(prefix):
+        return None, f"unexpected_remote_head_ref: {ref or 'empty'}"
+    base_branch = ref[len(prefix) :].strip()
+    if not base_branch:
+        return None, "empty_default_base_branch"
+    return base_branch, None
+
+
+def _parse_pull_request_number(pr_url: str) -> int | None:
+    match = _PULL_REQUEST_URL_PATTERN.search(pr_url)
+    if match is None:
+        return None
+    try:
+        number = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _find_existing_pull_request(
+    repo_dir: str,
+    repo: str,
+    head_branch: str,
+) -> dict[str, object]:
+    result = _run_gh(
+        repo_dir,
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--head",
+            head_branch,
+            "--state",
+            "all",
+            "--json",
+            "number,url",
+            "--limit",
+            "1",
+        ],
+    )
+    if result.returncode != 0:
+        return {
+            "success": False,
+            "pr_number": None,
+            "pr_url": None,
+            "error": _pick_message(result),
+            "existing": False,
+        }
+    try:
+        payload = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "pr_number": None,
+            "pr_url": None,
+            "error": "invalid_pr_list_payload",
+            "existing": False,
+        }
+    if not isinstance(payload, list) or not payload:
+        return {
+            "success": True,
+            "pr_number": None,
+            "pr_url": None,
+            "error": None,
+            "existing": False,
+        }
+    first_item = payload[0]
+    if not isinstance(first_item, dict):
+        return {
+            "success": False,
+            "pr_number": None,
+            "pr_url": None,
+            "error": "invalid_pr_list_item",
+            "existing": False,
+        }
+    pr_url = str(first_item.get("url") or "").strip()
+    pr_number = first_item.get("number")
+    if isinstance(pr_number, bool):
+        pr_number = None
+    if pr_number is None and pr_url:
+        pr_number = _parse_pull_request_number(pr_url)
+    elif pr_number is not None:
+        try:
+            parsed_number = int(str(pr_number).strip())
+        except (TypeError, ValueError):
+            parsed_number = None
+        pr_number = parsed_number if parsed_number and parsed_number > 0 else None
+    return {
+        "success": True,
+        "pr_number": pr_number,
+        "pr_url": pr_url or None,
+        "error": None,
+        "existing": True,
+    }
 
 
 def ensure_head_sha(repo_dir: str, expected_sha: str) -> bool:
@@ -349,3 +479,113 @@ def post_pr_comment(
         output = result.stdout.strip() or "comment_posted"
         return True, output
     return False, _pick_message(result)
+
+
+def ensure_pull_request(
+    repo_dir: str,
+    repo: str,
+    head_branch: str,
+    *,
+    title: str,
+    body: str,
+    base_branch: str | None = None,
+    remote: str = "origin",
+) -> dict[str, object]:
+    normalized_head_branch = head_branch.strip()
+    if not normalized_head_branch:
+        return {
+            "success": False,
+            "pr_number": None,
+            "pr_url": None,
+            "base_branch": None,
+            "error": "missing_head_branch",
+            "existing": False,
+        }
+
+    existing_result = _find_existing_pull_request(repo_dir, repo, normalized_head_branch)
+    if not existing_result.get("success"):
+        return {
+            **existing_result,
+            "base_branch": base_branch,
+        }
+    if existing_result.get("existing") and existing_result.get("pr_number"):
+        return {
+            **existing_result,
+            "base_branch": base_branch,
+        }
+
+    resolved_base_branch = (base_branch or "").strip()
+    if not resolved_base_branch:
+        resolved_base_branch, base_error = _resolve_default_base_branch(
+            repo_dir, remote=remote
+        )
+        if base_error or not resolved_base_branch:
+            return {
+                "success": False,
+                "pr_number": None,
+                "pr_url": None,
+                "base_branch": None,
+                "error": base_error or "missing_base_branch",
+                "existing": False,
+            }
+
+    result = _run_gh(
+        repo_dir,
+        [
+            "pr",
+            "create",
+            "--repo",
+            repo,
+            "--head",
+            normalized_head_branch,
+            "--base",
+            resolved_base_branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ],
+    )
+    if result.returncode == 0:
+        pr_url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+        pr_number = _parse_pull_request_number(pr_url)
+        if pr_number is None or not pr_url:
+            existing_after_create = _find_existing_pull_request(
+                repo_dir, repo, normalized_head_branch
+            )
+            if existing_after_create.get("success") and existing_after_create.get("pr_number"):
+                return {
+                    **existing_after_create,
+                    "base_branch": resolved_base_branch,
+                }
+            return {
+                "success": False,
+                "pr_number": None,
+                "pr_url": None,
+                "base_branch": resolved_base_branch,
+                "error": "missing_created_pr_metadata",
+                "existing": False,
+            }
+        return {
+            "success": True,
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+            "base_branch": resolved_base_branch,
+            "error": None,
+            "existing": False,
+        }
+
+    existing_after_failure = _find_existing_pull_request(repo_dir, repo, normalized_head_branch)
+    if existing_after_failure.get("success") and existing_after_failure.get("pr_number"):
+        return {
+            **existing_after_failure,
+            "base_branch": resolved_base_branch,
+        }
+    return {
+        "success": False,
+        "pr_number": None,
+        "pr_url": None,
+        "base_branch": resolved_base_branch,
+        "error": _pick_message(result),
+        "existing": False,
+    }
