@@ -1,0 +1,70 @@
+name: Bug report
+description: Report an issue that should be fixed
+labels: ["bug"]
+title: "bug: "
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the bug you encountered
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: software-factory version
+      description: What release, commit, or deployed version are you using?
+      placeholder: e.g., v0.2.0 or d6f7a95
+    validations:
+      required: false
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime / environment
+      description: What environment are you running in?
+      placeholder: e.g., local dev, GitHub Actions, Docker, self-hosted runner
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshot-or-link
+    attributes:
+      label: Logs, screenshots, and/or links
+      description: Include run links, stack traces, screenshots, or relevant command output
+      placeholder: Paste logs or links here
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      placeholder: e.g., macOS 15, Ubuntu 22.04, Windows 11
+    validations:
+      required: false
+
+  - type: input
+    id: client
+    attributes:
+      label: Client / shell
+      description: What CLI, shell, or browser are you using?
+      placeholder: e.g., bash, zsh, GitHub Actions, Chrome
+    validations:
+      required: false

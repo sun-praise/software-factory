@@ -1,14 +1,25 @@
-## Summary
+### Issue for this PR
 
-- describe the user-visible or operator-visible change
+Closes #
 
-## Validation
+### Type of change
 
-- [ ] `python -m pytest -q`
-- [ ] `python -m ruff check .`
-- [ ] `python -m mypy .`
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Refactor / code improvement
+- [ ] Documentation
 
-## Notes
+### What does this PR do?
 
-- follow-up work:
-- risk / rollout notes:
+Please describe the problem, the changes you made, and why they work.
+
+### How did you verify your code works?
+
+### Screenshots / recordings
+
+_If this is a UI change, include a screenshot or recording._
+
+### Checklist
+
+- [ ] I have tested my changes locally
+- [ ] I have not included unrelated changes in this PR
