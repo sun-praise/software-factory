@@ -34,7 +34,7 @@ jobs:
 
       - name: Run OpenCode Review
         env:
-          MODEL: opencode-go/glm-5
+          MODEL: opencode/glm-5
           PROMPT: |
             Review this pull request (read-only mode, DO NOT modify any code):
 
