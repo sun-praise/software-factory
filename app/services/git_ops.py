@@ -10,6 +10,9 @@ GIT_COMMAND_TIMEOUT_SECONDS = 30
 GH_COMMAND_TIMEOUT_SECONDS = 30
 EXCLUDED_COMMIT_PATHS = (".software_factory_bootstrap_state.json",)
 _PULL_REQUEST_URL_PATTERN = re.compile(r"/pull/(\d+)(?:\D|$)")
+_PULL_REQUEST_URL_CAPTURE_PATTERN = re.compile(
+    r"https?://[^\s\"')>]+/pull/\d+(?:[^\s\"')>]*)?"
+)
 
 
 def _run_git(repo_dir: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -82,7 +85,9 @@ def _resolve_target_branch(
 def _resolve_default_base_branch(
     repo_dir: str, remote: str = "origin"
 ) -> tuple[str | None, str | None]:
-    result = _run_git(repo_dir, ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"])
+    result = _run_git(
+        repo_dir, ["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"]
+    )
     if result.returncode != 0:
         return None, _pick_message(result)
     ref = result.stdout.strip()
@@ -104,6 +109,14 @@ def _parse_pull_request_number(pr_url: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _extract_pull_request_url(output: str) -> str | None:
+    matches = _PULL_REQUEST_URL_CAPTURE_PATTERN.findall(output or "")
+    for candidate in reversed(matches):
+        if _parse_pull_request_number(candidate) is not None:
+            return candidate
+    return None
 
 
 def _find_existing_pull_request(
@@ -257,7 +270,12 @@ def commit_and_push(
         if target_branch and not branch_error:
             ahead_result = _run_git(
                 repo_dir,
-                ["rev-list", "--left-right", "--count", f"{remote}/{target_branch}...HEAD"],
+                [
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    f"{remote}/{target_branch}...HEAD",
+                ],
             )
             if ahead_result.returncode == 0:
                 counts = ahead_result.stdout.strip().split()
@@ -289,7 +307,9 @@ def commit_and_push(
                                 "branch": target_branch,
                                 "pushed_ref": None,
                             }
-                        push_result = _run_git(repo_dir, ["push", remote, target_branch])
+                        push_result = _run_git(
+                            repo_dir, ["push", remote, target_branch]
+                        )
                         if push_result.returncode != 0:
                             return {
                                 "success": False,
@@ -502,7 +522,9 @@ def ensure_pull_request(
             "existing": False,
         }
 
-    existing_result = _find_existing_pull_request(repo_dir, repo, normalized_head_branch)
+    existing_result = _find_existing_pull_request(
+        repo_dir, repo, normalized_head_branch
+    )
     if not existing_result.get("success"):
         return {
             **existing_result,
@@ -547,13 +569,15 @@ def ensure_pull_request(
         ],
     )
     if result.returncode == 0:
-        pr_url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+        pr_url = _extract_pull_request_url(result.stdout) or ""
         pr_number = _parse_pull_request_number(pr_url)
         if pr_number is None or not pr_url:
             existing_after_create = _find_existing_pull_request(
                 repo_dir, repo, normalized_head_branch
             )
-            if existing_after_create.get("success") and existing_after_create.get("pr_number"):
+            if existing_after_create.get("success") and existing_after_create.get(
+                "pr_number"
+            ):
                 return {
                     **existing_after_create,
                     "base_branch": resolved_base_branch,
@@ -575,8 +599,12 @@ def ensure_pull_request(
             "existing": False,
         }
 
-    existing_after_failure = _find_existing_pull_request(repo_dir, repo, normalized_head_branch)
-    if existing_after_failure.get("success") and existing_after_failure.get("pr_number"):
+    existing_after_failure = _find_existing_pull_request(
+        repo_dir, repo, normalized_head_branch
+    )
+    if existing_after_failure.get("success") and existing_after_failure.get(
+        "pr_number"
+    ):
         return {
             **existing_after_failure,
             "base_branch": resolved_base_branch,

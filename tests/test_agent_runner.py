@@ -391,6 +391,78 @@ def test_run_once_manual_issue_pr_creation_failure_is_non_fatal(
     assert "issue_pr_create_failed: gh unavailable" in str(row["error_summary"])
 
 
+def test_run_once_manual_issue_retries_pull_request_metadata_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_issue_and_claim(conn)
+    ensure_pull_request_calls = {"count": 0}
+
+    def fake_ensure_pull_request(**_: Any) -> dict[str, Any]:
+        ensure_pull_request_calls["count"] += 1
+        if ensure_pull_request_calls["count"] == 1:
+            return {
+                "success": True,
+                "pr_number": None,
+                "pr_url": None,
+                "base_branch": "main",
+                "error": None,
+                "existing": False,
+            }
+        return {
+            "success": True,
+            "pr_number": 99,
+            "pr_url": "https://github.com/acme/widgets/pull/99",
+            "base_branch": "main",
+            "error": None,
+            "existing": True,
+        }
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        },
+        ensure_pull_request=fake_ensure_pull_request,
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert ensure_pull_request_calls["count"] == 2
+    row = conn.execute(
+        "SELECT opened_pr_number, opened_pr_url, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["opened_pr_number"] == 99
+    assert row["opened_pr_url"] == "https://github.com/acme/widgets/pull/99"
+    assert row["error_summary"] is None
+    logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
+    assert "issue_pr: retrying metadata lookup" in logs_text
+    assert "issue_pr: reused pr=#99" in logs_text
+
+
 def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -480,7 +552,9 @@ def test_run_once_defaults_legacy_manual_issue_runs_to_issue_source_kind(
 
     captured: dict[str, object] = {"metadata_pr_numbers": []}
 
-    def fake_collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, object]:
+    def fake_collect_pull_request_metadata(
+        *, repo: str, pr_number: int
+    ) -> dict[str, object]:
         metadata_pr_numbers = cast(list[int], captured["metadata_pr_numbers"])
         metadata_pr_numbers.append(pr_number)
         return {}
@@ -1907,7 +1981,9 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 999
-            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            captured["command"] = (
+                list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            )
             captured.update(kwargs)
             captured["pid"] = self.pid
 
@@ -2072,7 +2148,9 @@ def test_run_claude_stream_subprocess_fails_on_stall(
             return None
 
     class _FakeThread:
-        def __init__(self, target: Any, args: tuple[Any, ...], daemon: bool = False) -> None:
+        def __init__(
+            self, target: Any, args: tuple[Any, ...], daemon: bool = False
+        ) -> None:
             self._target = target
             self._args = args
 
@@ -2118,7 +2196,9 @@ def test_run_claude_agent_supports_docker_runtime(
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 1001
-            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            captured["command"] = (
+                list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            )
             captured.update(kwargs)
 
         def communicate(
@@ -2211,7 +2291,9 @@ def test_run_claude_agent_zhipu_clears_direct_model_env(
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.returncode = 0
             self.pid = 1002
-            captured["command"] = list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            captured["command"] = (
+                list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            )
             captured.update(kwargs)
 
         def communicate(
@@ -2384,7 +2466,9 @@ def test_consume_claude_stream_tracks_last_event_metadata() -> None:
     assert stream.closed is True
 
 
-def test_build_claude_process_failure_message_uses_diagnostics_instead_of_raw_init_event() -> None:
+def test_build_claude_process_failure_message_uses_diagnostics_instead_of_raw_init_event() -> (
+    None
+):
     message = agent_runner._build_claude_process_failure_message(
         agent_name="Claude Agent SDK",
         returncode=1,
@@ -2866,7 +2950,9 @@ def test_run_once_fails_when_pr_still_not_mergeable_after_run(
     assert result["status"] == "retry_scheduled"
     assert "pr_not_mergeable_after_run" in (result["error_summary"] or "")
     logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
-    assert "pr_mergeability_blocker: merge_state=DIRTY mergeable=CONFLICTING" in logs_text
+    assert (
+        "pr_mergeability_blocker: merge_state=DIRTY mergeable=CONFLICTING" in logs_text
+    )
 
 
 def test_run_once_blocks_on_rebase_conflict(

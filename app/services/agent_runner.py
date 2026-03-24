@@ -904,12 +904,14 @@ def _maybe_create_issue_pull_request(
         logger.append("issue_pr: skipped missing_branch")
         return None, None, "issue_pr_create_failed: missing_branch"
 
+    pr_title = _build_issue_pull_request_title(normalized_review)
+    pr_body = _build_issue_pull_request_body(normalized_review)
     pr_result = active_ops.ensure_pull_request(
         repo_dir=workspace_dir,
         repo=repo,
         head_branch=head_branch,
-        title=_build_issue_pull_request_title(normalized_review),
-        body=_build_issue_pull_request_body(normalized_review),
+        title=pr_title,
+        body=pr_body,
     )
     if not pr_result.get("success"):
         error = _safe_text(pr_result.get("error")) or "unknown_pr_create_error"
@@ -918,6 +920,17 @@ def _maybe_create_issue_pull_request(
 
     opened_pr_number = _coerce_positive_int(pr_result.get("pr_number"))
     opened_pr_url = _safe_text(pr_result.get("pr_url"))
+    if opened_pr_number is None or opened_pr_url is None:
+        logger.append(f"issue_pr: retrying metadata lookup branch={head_branch}")
+        pr_result = active_ops.ensure_pull_request(
+            repo_dir=workspace_dir,
+            repo=repo,
+            head_branch=head_branch,
+            title=pr_title,
+            body=pr_body,
+        )
+        opened_pr_number = _coerce_positive_int(pr_result.get("pr_number"))
+        opened_pr_url = _safe_text(pr_result.get("pr_url"))
     if opened_pr_number is None or opened_pr_url is None:
         logger.append(
             f"issue_pr: failed branch={head_branch} error=missing_pr_metadata"
@@ -1233,7 +1246,12 @@ def _execute_agent_sdks(
                 return True, None, None, OPENHANDS_AGENT_MODE
 
             if openhands_error_code == RUN_CANCELLED_CODE:
-                return False, openhands_error_code, openhands_message, OPENHANDS_AGENT_MODE
+                return (
+                    False,
+                    openhands_error_code,
+                    openhands_message,
+                    OPENHANDS_AGENT_MODE,
+                )
 
             last_error_code = openhands_error_code
             last_error_message = openhands_message
@@ -1762,8 +1780,7 @@ def _build_openhands_command_argv(argv: list[str], prompt: str) -> list[str]:
     has_task_or_file = any(
         token in {"-t", "--task", "-f", "--file"} for token in expanded
     ) or any(
-        token.startswith("--task=") or token.startswith("--file=")
-        for token in expanded
+        token.startswith("--task=") or token.startswith("--file=") for token in expanded
     )
     if prompt and not has_task_or_file:
         expanded.extend(["--task", prompt])
@@ -1864,9 +1881,7 @@ def _run_agent_command(
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     if on_log_line is not None:
-        on_log_line(
-            f"[agent] starting {agent_name}: {_format_command_for_log(argv)}"
-        )
+        on_log_line(f"[agent] starting {agent_name}: {_format_command_for_log(argv)}")
     stdout_thread = threading.Thread(
         target=_consume_process_stream,
         args=(process.stdout, "stdout", stdout_chunks, on_log_line),
@@ -2556,7 +2571,9 @@ def _checkout_run_workspace_target(
 
 
 def _build_manual_issue_branch_name(*, run_id: int, issue_number: int | None) -> str:
-    issue_suffix = issue_number if isinstance(issue_number, int) and issue_number > 0 else "manual"
+    issue_suffix = (
+        issue_number if isinstance(issue_number, int) and issue_number > 0 else "manual"
+    )
     return f"autofix/run-{run_id}-issue-{issue_suffix}"
 
 
