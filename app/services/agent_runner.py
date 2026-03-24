@@ -58,7 +58,9 @@ CLAUDE_AGENT_MODE = "claude_agent_sdk"
 OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
+CLAUDE_FAILURE_CODE_STALL = "agent_claude_stalled"
 RUN_CANCELLED_CODE = "cancelled"
+CLAUDE_PROGRESS_STALL_TIMEOUT_SECONDS = 120
 BOOTSTRAP_STATE_DIRNAME = "software-factory"
 BOOTSTRAP_STATE_FILENAME = "bootstrap-state.json"
 LEGACY_BOOTSTRAP_STATE_FILENAME = ".software_factory_bootstrap_state.json"
@@ -1075,6 +1077,7 @@ def _execute_agent_sdks(
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
+    last_mode: str | None = None
     for mode in modes:
         if mode == OPENHANDS_AGENT_MODE:
             openhands_kwargs: dict[str, Any] = {
@@ -1099,8 +1102,12 @@ def _execute_agent_sdks(
             if openhands_ok:
                 return True, None, None, OPENHANDS_AGENT_MODE
 
+            if openhands_error_code == RUN_CANCELLED_CODE:
+                return False, openhands_error_code, openhands_message, OPENHANDS_AGENT_MODE
+
             last_error_code = openhands_error_code
             last_error_message = openhands_message
+            last_mode = OPENHANDS_AGENT_MODE
             continue
 
         if mode == CLAUDE_AGENT_MODE:
@@ -1129,9 +1136,15 @@ def _execute_agent_sdks(
             if claude_ok:
                 return True, None, None, CLAUDE_AGENT_MODE
 
-            return False, claude_error_code, claude_message, CLAUDE_AGENT_MODE
+            if claude_error_code == RUN_CANCELLED_CODE:
+                return False, claude_error_code, claude_message, CLAUDE_AGENT_MODE
 
-    return False, last_error_code, last_error_message, None
+            last_error_code = claude_error_code
+            last_error_message = claude_message
+            last_mode = CLAUDE_AGENT_MODE
+            continue
+
+    return False, last_error_code, last_error_message, last_mode
 
 
 def _run_openhands_agent(
@@ -1160,6 +1173,8 @@ def _run_openhands_agent(
         failure_code=OPENHANDS_FAILURE_CODE_COMMAND,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
+        argv_builder=_build_openhands_command_argv,
+        prompt_via_stdin=False,
     )
 
 
@@ -1389,6 +1404,7 @@ def _run_claude_stream_subprocess(
         "last_event_type": None,
         "last_event_subtype": None,
         "session_id": None,
+        "last_progress_at": time.monotonic(),
     }
     _register_active_agent_process(process.pid)
     stdout_chunks: list[str] = []
@@ -1440,13 +1456,17 @@ def _run_claude_stream_subprocess(
     )
     stderr_thread = threading.Thread(
         target=_consume_process_stream,
-        args=(stderr_stream, "stderr", stderr_chunks, on_log_line),
+        args=(stderr_stream, "stderr", stderr_chunks, on_log_line, state),
         daemon=True,
     )
     stdout_thread.start()
     stderr_thread.start()
     try:
         deadline = time.monotonic() + timeout_seconds
+        stall_timeout_seconds = min(
+            max(1, int(timeout_seconds)),
+            CLAUDE_PROGRESS_STALL_TIMEOUT_SECONDS,
+        )
         while True:
             if should_cancel is not None and should_cancel():
                 if on_log_line is not None:
@@ -1465,6 +1485,18 @@ def _run_claude_stream_subprocess(
                     False,
                     f"{agent_name} command timed out after {timeout_seconds}s",
                     failure_code,
+                )
+            last_progress_at = float(state.get("last_progress_at") or 0.0)
+            if time.monotonic() - last_progress_at >= stall_timeout_seconds:
+                if on_log_line is not None:
+                    on_log_line(
+                        f"[agent] no progress for {stall_timeout_seconds}s; terminating process"
+                    )
+                _terminate_agent_process_tree(process)
+                return (
+                    False,
+                    f"{agent_name} command stalled for {stall_timeout_seconds}s without progress",
+                    CLAUDE_FAILURE_CODE_STALL,
                 )
             time.sleep(1.0)
     except OSError as exc:
@@ -1591,6 +1623,23 @@ def _format_command_for_log(argv: list[str]) -> str:
     return _sanitize_log_text(" ".join(shlex.quote(token) for token in argv))
 
 
+def _build_openhands_command_argv(argv: list[str], prompt: str) -> list[str]:
+    expanded = list(argv)
+    if "--headless" not in expanded:
+        expanded.append("--headless")
+    if "--json" not in expanded:
+        expanded.append("--json")
+    has_task_or_file = any(
+        token in {"-t", "--task", "-f", "--file"} for token in expanded
+    ) or any(
+        token.startswith("--task=") or token.startswith("--file=")
+        for token in expanded
+    )
+    if prompt and not has_task_or_file:
+        expanded.extend(["--task", prompt])
+    return expanded
+
+
 def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:
     expanded = list(argv)
     if "-p" not in expanded and "--print" not in expanded:
@@ -1631,6 +1680,8 @@ def _run_agent_command(
     failure_code: str,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    argv_builder: Callable[[list[str], str], list[str]] | None = None,
+    prompt_via_stdin: bool = True,
 ) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
@@ -1650,6 +1701,8 @@ def _run_agent_command(
         )
     if not _command_exists(argv[0]):
         return False, f"{agent_name} command not found: {argv[0]}", failure_code
+    if argv_builder is not None:
+        argv = argv_builder(argv, prompt)
 
     process: subprocess.Popen[str]
     try:
@@ -1658,7 +1711,7 @@ def _run_agent_command(
             cwd=workspace,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.PIPE if prompt_via_stdin else subprocess.DEVNULL,
             text=True,
             env=_build_agent_env(
                 run_id=run_id,
@@ -1681,7 +1734,9 @@ def _run_agent_command(
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     if on_log_line is not None:
-        on_log_line(f"[agent] starting {agent_name}: {normalized_command}")
+        on_log_line(
+            f"[agent] starting {agent_name}: {_format_command_for_log(argv)}"
+        )
     stdout_thread = threading.Thread(
         target=_consume_process_stream,
         args=(process.stdout, "stdout", stdout_chunks, on_log_line),
@@ -1695,7 +1750,7 @@ def _run_agent_command(
     stdout_thread.start()
     stderr_thread.start()
     try:
-        if process.stdin is not None:
+        if prompt_via_stdin and process.stdin is not None:
             process.stdin.write(prompt)
             process.stdin.close()
         deadline = time.monotonic() + timeout_seconds
@@ -1743,12 +1798,15 @@ def _consume_process_stream(
     stream_name: str,
     chunks: list[str],
     on_log_line: Callable[[str], None] | None,
+    state: dict[str, Any] | None = None,
 ) -> None:
     if stream is None:
         return
     try:
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
+            if state is not None:
+                state["last_progress_at"] = time.monotonic()
             rendered = _clean_terminal_log_line(raw_line.rstrip("\n"))
             if on_log_line is not None and rendered:
                 on_log_line(f"[agent][{stream_name}] {rendered}")
@@ -1767,6 +1825,7 @@ def _consume_claude_stream(
     try:
         for raw_line in iter(stream.readline, ""):
             chunks.append(raw_line)
+            state["last_progress_at"] = time.monotonic()
             _update_claude_stream_state(raw_line, state)
             try:
                 rendered_lines, result_text, error_text, saw_events = (

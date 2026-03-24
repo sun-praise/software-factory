@@ -29,6 +29,7 @@ class Settings(BaseSettings):
         "ai_not_configured",
         "ai_invalid_response",
         "ai_request_client_error",
+        "agent_claude_stalled",
         "patch_apply_failed",
         "rebase_conflict_blocker",
         "rebase_blocker",
