@@ -1,0 +1,20 @@
+name: Feature Request
+description: Suggest an idea, feature, or enhancement
+labels: ["enhancement"]
+title: "feature: "
+body:
+  - type: checkboxes
+    id: verified
+    attributes:
+      label: Feature has not already been requested.
+      options:
+        - label: I have checked for existing issues and did not find the same request.
+          required: true
+
+  - type: textarea
+    id: enhancement
+    attributes:
+      label: Describe the enhancement you want to request
+      description: What do you want to change or add? What problem does it solve?
+    validations:
+      required: true
