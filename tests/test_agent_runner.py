@@ -1466,14 +1466,60 @@ def test_run_once_marks_agent_error_as_non_retryable(
     )
 
     assert result["status"] == "failed"
+
+
+def test_run_once_marks_claude_stall_as_non_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (
+            False,
+            agent_runner.CLAUDE_FAILURE_CODE_STALL,
+            "Claude Agent SDK command stalled for 120s without progress",
+            None,
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    row = conn.execute(
+        "SELECT status, last_error_code FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert result["status"] == "failed"
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["last_error_code"] == agent_runner.CLAUDE_FAILURE_CODE_STALL
     row = conn.execute(
         "SELECT status, last_error_code, error_summary FROM autofix_runs WHERE id = ?",
         (run["id"],),
     ).fetchone()
     assert row is not None
     assert row["status"] == "failed"
-    assert row["last_error_code"] == "ai_request_client_error"
-    assert "ai_request_client_error" in str(result["error_summary"])
+    assert row["last_error_code"] == agent_runner.CLAUDE_FAILURE_CODE_STALL
+    assert agent_runner.CLAUDE_FAILURE_CODE_STALL in str(result["error_summary"])
 
 
 def test_run_once_schedules_retry_for_retryable_agent_error(
@@ -1609,7 +1655,7 @@ def test_execute_agent_sdks_falls_back_to_claude(
     assert calls == ["/tmp", "/tmp"]
 
 
-def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure(
+def test_execute_agent_sdks_falls_back_to_openhands_after_claude_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -1661,9 +1707,51 @@ def test_execute_agent_sdks_does_not_fall_back_to_openhands_after_claude_failure
         claude_agent_command_timeout_seconds=600,
     )
 
+    assert ok is True
+    assert err_code is None
+    assert err_message is None
+    assert selected_mode == "openhands"
+    assert calls == ["claude", "openhands"]
+
+
+def test_execute_agent_sdks_stops_immediately_on_cancelled_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_claude(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return False, "cancelled", agent_runner.RUN_CANCELLED_CODE
+
+    def fake_openhands(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("openhands")
+        return True, "openhands succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+    monkeypatch.setattr(agent_runner, "_run_openhands_agent", fake_openhands)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        normalized_review={},
+        modes=("claude_agent_sdk", "openhands"),
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
     assert ok is False
-    assert err_code == "agent_claude_failed"
-    assert err_message == "claude failed"
+    assert err_code == agent_runner.RUN_CANCELLED_CODE
+    assert err_message == "cancelled"
     assert selected_mode == "claude_agent_sdk"
     assert calls == ["claude"]
 
@@ -1758,6 +1846,125 @@ def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     assert env["SOFTWARE_FACTORY_PR_NUMBER"] == "7"
     assert env["SOFTWARE_FACTORY_RUN_ID"] == "9"
     assert "UNRELATED_SECRET" not in env
+
+
+def test_build_openhands_command_argv_enables_headless_json_task() -> None:
+    argv = agent_runner._build_openhands_command_argv(["openhands"], "fix this")
+    assert argv == ["openhands", "--headless", "--json", "--task", "fix this"]
+
+    existing = agent_runner._build_openhands_command_argv(
+        ["openhands", "--headless", "--json", "--task", "existing"],
+        "ignored",
+    )
+    assert existing == ["openhands", "--headless", "--json", "--task", "existing"]
+
+
+def test_run_openhands_agent_uses_headless_task_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.returncode = 0
+            self.pid = 321
+            self.stdout = None
+            self.stderr = None
+            captured["command"] = (
+                list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            )
+            captured.update(kwargs)
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
+
+    ok, message, error_code = agent_runner._run_openhands_agent(
+        workspace=str(tmp_path),
+        run_id=9,
+        repo="acme/widgets",
+        pr_number=7,
+        prompt="fix this",
+        normalized_review={},
+        command="openhands",
+        timeout_seconds=42,
+    )
+
+    assert ok is True
+    assert message == "OpenHands completed"
+    assert error_code is None
+    assert captured["command"] == [
+        "openhands",
+        "--headless",
+        "--json",
+        "--task",
+        "fix this",
+    ]
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
+
+
+def test_run_claude_stream_subprocess_fails_on_stall(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    terminated: list[int] = []
+
+    class _EmptyStream:
+        def readline(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            return None
+
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.pid = 456
+            self.returncode = None
+            self.stdout = _EmptyStream()
+            self.stderr = _EmptyStream()
+
+        def poll(self) -> int | None:
+            return None
+
+    class _FakeThread:
+        def __init__(self, target: Any, args: tuple[Any, ...], daemon: bool = False) -> None:
+            self._target = target
+            self._args = args
+
+        def start(self) -> None:
+            self._target(*self._args)
+
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+    ticks = iter([0.0, 0.0, 121.0, 121.0])
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(agent_runner.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(agent_runner.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(agent_runner.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        agent_runner,
+        "_terminate_agent_process_tree",
+        lambda process: terminated.append(process.pid),
+    )
+
+    ok, message, error_code = agent_runner._run_claude_stream_subprocess(
+        workspace=str(tmp_path),
+        argv=["claude", "--print", "fix this"],
+        display_argv=["claude", "--print"],
+        timeout_seconds=600,
+        agent_name="Claude Agent SDK",
+        failure_code=agent_runner.CLAUDE_FAILURE_CODE_COMMAND,
+    )
+
+    assert ok is False
+    assert error_code == agent_runner.CLAUDE_FAILURE_CODE_STALL
+    assert "stalled" in message
+    assert terminated == [456]
 
 
 def test_run_claude_agent_supports_docker_runtime(
