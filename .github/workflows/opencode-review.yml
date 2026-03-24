@@ -1,7 +1,7 @@
 name: OpenCode PR Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
@@ -16,11 +16,11 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - name: Checkout repository
+      - name: Checkout trusted base revision
         uses: actions/checkout@v4
         with:
-          persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
 
       - name: Prepare OpenCode cache paths
         run: |
