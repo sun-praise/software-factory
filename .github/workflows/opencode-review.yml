@@ -34,7 +34,7 @@ jobs:
 
       - name: Run OpenCode Review
         env:
-          MODEL: opencode/glm-5
+          MODEL: opencode-go/glm-5
           PROMPT: |
             Review this pull request (read-only mode, DO NOT modify any code):
 
@@ -48,6 +48,6 @@ jobs:
 
             Please respond in Chinese. DO NOT modify any code, only provide review comments.
           USE_GITHUB_TOKEN: "true"
-          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: timeout 8m opencode github run
