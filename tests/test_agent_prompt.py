@@ -118,6 +118,29 @@ def test_build_autofix_prompt_includes_operator_hints_when_present() -> None:
     assert "Only touch app/services/filter.py" in prompt
 
 
+def test_build_autofix_prompt_uses_issue_context_for_manual_issue_runs() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={
+            "source_kind": "issue",
+            "issue_number": 11,
+            "manual_issue_source_url": "https://github.com/acme/widgets/issues/11",
+        },
+        pr_metadata={
+            "title": "Do not show PR metadata",
+            "merge_state_status": "CLEAN",
+        },
+    )
+
+    assert "manually submitted GitHub issue" in prompt
+    assert "- Issue: #11" in prompt
+    assert "- Source URL: https://github.com/acme/widgets/issues/11" in prompt
+    assert "Pull Request:" not in prompt
+    assert "PR Title:" not in prompt
+
+
 def test_build_autofix_prompt_truncates_operator_hints() -> None:
     prompt = build_autofix_prompt(
         repo="acme/widgets",

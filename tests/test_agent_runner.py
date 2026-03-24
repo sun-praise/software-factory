@@ -58,6 +58,32 @@ def _enqueue_and_claim(conn: sqlite3.Connection) -> dict:
     return run
 
 
+@pytest.fixture(autouse=True)
+def _stub_pr_metadata_for_run_once_tests(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if request.node.name.startswith("test_collect_pull_request_metadata"):
+        return
+    monkeypatch.setattr(
+        agent_runner,
+        "_collect_pull_request_metadata",
+        lambda **kwargs: {},
+    )
+    if request.node.name.startswith("test_prepare_run_workspace"):
+        return
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        lambda **kwargs: (
+            str(kwargs["runtime_root"]),
+            str(kwargs["runtime_root"]),
+            kwargs.get("branch"),
+            kwargs.get("head_sha"),
+        ),
+    )
+
+
 def test_run_once_success_writes_logs_and_marks_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1973,8 +1999,77 @@ def test_consume_claude_stream_falls_back_when_renderer_raises() -> None:
 
     assert chunks == ['{"type":"assistant"}\n']
     assert lines == ['[agent][stdout] {"type":"assistant"}']
-    assert state == {}
+    assert state["last_event_type"] == "assistant"
+    assert state["last_event_subtype"] is None
     assert stream.closed is True
+
+
+def test_consume_claude_stream_tracks_last_event_metadata() -> None:
+    class _Stream:
+        def __init__(self) -> None:
+            self._lines = iter(
+                [
+                    '{"type":"system","subtype":"init","session_id":"sess-123"}\n',
+                    '{"type":"assistant","message":{"content":"hi"}}\n',
+                    "",
+                ]
+            )
+            self.closed = False
+
+        def readline(self) -> str:
+            return next(self._lines)
+
+        def close(self) -> None:
+            self.closed = True
+
+    lines: list[str] = []
+    chunks: list[str] = []
+    state: dict[str, object] = {}
+    stream = _Stream()
+
+    _consume_claude_stream(stream, chunks, lines.append, state)
+
+    assert state["session_id"] == "sess-123"
+    assert state["last_event_type"] == "assistant"
+    assert state["last_event_subtype"] is None
+    assert state["saw_events"] is True
+    assert stream.closed is True
+
+
+def test_build_claude_process_failure_message_uses_diagnostics_instead_of_raw_init_event() -> None:
+    message = agent_runner._build_claude_process_failure_message(
+        agent_name="Claude Agent SDK",
+        returncode=1,
+        stdout='{"type":"system","subtype":"init"}\n',
+        stderr="",
+        result_text=None,
+        error_text=None,
+        state={
+            "last_event_type": "system",
+            "last_event_subtype": "init",
+            "session_id": "sess-123",
+        },
+    )
+
+    assert "exited without an explicit error result" in message
+    assert "exit_code=1" in message
+    assert "last_event=system/init" in message
+    assert "session_id=sess-123" in message
+    assert '{"type":"system","subtype":"init"}' not in message
+
+
+def test_build_claude_process_failure_message_reports_signal_termination() -> None:
+    message = agent_runner._build_claude_process_failure_message(
+        agent_name="Claude Agent SDK",
+        returncode=-15,
+        stdout="",
+        stderr="",
+        result_text=None,
+        error_text=None,
+        state={},
+    )
+
+    assert "signal=SIGTERM" in message
 
 
 def test_build_run_progress_callback_updates_file_database_from_worker_thread(
