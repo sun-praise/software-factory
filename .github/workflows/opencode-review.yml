@@ -9,7 +9,7 @@ jobs:
     name: AI Code Review
     if: github.event.pull_request.draft == false
     timeout-minutes: 15
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
@@ -34,7 +34,7 @@ jobs:
 
       - name: Run OpenCode Review
         env:
-          MODEL: zhipuai-coding-plan/glm-5
+          MODEL: opencode/glm-5
           PROMPT: |
             Review this pull request (read-only mode, DO NOT modify any code):
 
