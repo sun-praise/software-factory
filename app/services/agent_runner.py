@@ -229,7 +229,7 @@ def run_once(
 ) -> dict[str, Any]:
     settings = get_settings()
     active_ops = ops or RunnerOps()
-    runtime_root = _validate_runtime_root(workspace_dir)
+    runtime_root = _resolve_repo_workspace(workspace_dir, run.get("repo"))
     run_id = int(run["id"])
     repo = str(run.get("repo") or "")
     pr_number = int(run.get("pr_number") or 0)
@@ -2265,12 +2265,11 @@ def _terminate_agent_process_tree_by_pid(pid: int) -> None:
 def _build_agent_environment(
     *, repo: str, pr_number: int, run_id: int
 ) -> dict[str, str]:
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in _ALLOWED_AGENT_ENV_KEYS
-        or any(key.startswith(prefix) for prefix in _ALLOWED_AGENT_ENV_PREFIXES)
-    }
+    # 继承完整环境，确保 node/claude 需要的所有系统变量都在
+    env = dict(os.environ)
+    # 移除空值的 ANTHROPIC_API_KEY，避免覆盖 OAuth 认证
+    if not env.get("ANTHROPIC_API_KEY", "").strip():
+        env.pop("ANTHROPIC_API_KEY", None)
     env["SOFTWARE_FACTORY_REPO"] = repo
     env["SOFTWARE_FACTORY_PR_NUMBER"] = str(pr_number)
     env["SOFTWARE_FACTORY_RUN_ID"] = str(run_id)
@@ -2352,7 +2351,7 @@ def _build_claude_agent_environment(
         if deepseek_key:
             env["ANTHROPIC_AUTH_TOKEN"] = deepseek_key
             env["ANTHROPIC_API_KEY"] = deepseek_key
-    else:
+    elif normalized_provider:
         openrouter_key = str(os.environ.get("OPENROUTER_API_KEY", "")).strip()
         if openrouter_key:
             env["ANTHROPIC_AUTH_TOKEN"] = openrouter_key
@@ -3585,6 +3584,39 @@ def _validate_runtime_root(workspace_dir: str) -> str:
     if not resolved.exists() or not resolved.is_dir():
         raise ValueError(f"Invalid workspace_dir: {workspace_dir}")
     return str(resolved)
+
+
+def _resolve_repo_workspace(workspace_dir: str, repo: Any) -> str:
+    """根据 repo 名自动查找 workspace_dir 下对应的仓库子目录。
+
+    如果 workspace_dir 本身就是 git 仓库，直接返回。
+    否则尝试按 repo name（如 owner/TradeMaster -> TradeMaster）查找子目录。
+    """
+    base = Path(workspace_dir).expanduser().resolve()
+    if not base.exists() or not base.is_dir():
+        raise ValueError(f"Invalid workspace_dir: {workspace_dir}")
+
+    # workspace_dir 本身是 git 仓库
+    if (base / ".git").exists():
+        return str(base)
+
+    # 从 repo (owner/name) 提取 name，在 workspace_dir 下查找
+    repo_str = str(repo or "").strip()
+    if "/" in repo_str:
+        repo_name = repo_str.split("/")[-1]
+        # 精确匹配
+        candidate = base / repo_name
+        if candidate.is_dir() and (candidate / ".git").exists():
+            return str(candidate)
+        # 大小写不敏感匹配
+        for child in base.iterdir():
+            if child.is_dir() and child.name.lower() == repo_name.lower():
+                if (child / ".git").exists():
+                    return str(child)
+
+    raise ValueError(
+        f"No git repository found for repo '{repo_str}' in {workspace_dir}"
+    )
 
 
 def _sanitize_log_text(text: str) -> str:
