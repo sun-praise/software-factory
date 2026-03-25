@@ -46,6 +46,7 @@ from app.services.queue import (
     update_run_opened_pr,
 )
 from app.services.retry import RetryConfig, schedule_retry
+from app.services.run_hints import parse_execution_hints
 
 
 Executor = Callable[[str, str], Any]
@@ -292,7 +293,11 @@ def run_once(
     )
     head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
-    commands = active_ops.collect_check_commands(project_type)
+    initial_operator_hints = get_run_operator_hints(conn, run_id)
+    initial_execution_hints = parse_execution_hints(initial_operator_hints)
+    commands = list(initial_execution_hints.check_commands) or active_ops.collect_check_commands(
+        project_type
+    )
     cleanup_archived_logs(
         base_dir=runtime_root,
         archive_subdir=settings.log_archive_subdir,
@@ -470,6 +475,36 @@ def run_once(
                 commit_sha=None,
                 checks=checks_summary,
             )
+    try:
+        execution_workspace = _resolve_execution_workspace(
+            agent_workspace,
+            initial_execution_hints.project_root,
+        )
+    except ValueError as exc:
+        execution_error = f"invalid_execution_hints: {exc}"
+        logger.append(execution_error)
+        logs_path = logger.logs_path
+        status, scheduled_error = _finish_failed_run(
+            conn=conn,
+            run_id=run_id,
+            error_summary=execution_error,
+            logs_path=logs_path,
+            error_code="invalid_execution_hints",
+        )
+        return _build_terminal_result(
+            status=status,
+            error_summary=scheduled_error,
+            logs_path=logs_path,
+            commit_sha=None,
+            checks=checks_summary,
+        )
+    if initial_execution_hints.project_root:
+        logger.append(f"execution_project_root={initial_execution_hints.project_root}")
+    if initial_execution_hints.check_commands:
+        logger.append(
+            "execution_check_commands="
+            + " | ".join(initial_execution_hints.check_commands)
+        )
 
     base_ref = _safe_text(pr_metadata.get("base_ref"))
     is_merge_conflict = pr_metadata.get("is_merge_conflict")
@@ -556,45 +591,61 @@ def run_once(
         status = "failed"
         run_error_code: str | None = None
         commit_sha: str | None = None
-        check_workspace = runtime_root
-        baseline_check_workspace = agent_workspace
-        try:
-            baseline_check_results, baseline_checks_summary = _run_validation_cycle(
-                conn=conn,
-                run_id=run_id,
-                workspace_dir=baseline_check_workspace,
-                commands=commands,
-                execute=execute,
-                logger=logger,
-                log_prefix="baseline",
-            )
-        except RuntimeError as exc:
-            if str(exc) != "cancel_requested_before_checks":
-                raise
-            logger.append("cancel_requested: stopping run before baseline checks")
-            logs_path = logger.flush()
-            status, run_error_summary = _finish_cancelled_run(
-                conn,
-                run_id,
-                logs_path,
-            )
-            return _build_terminal_result(
-                status=status,
-                error_summary=run_error_summary,
-                logs_path=logs_path,
-                commit_sha=None,
-                checks=checks_summary,
-            )
-        baseline_failure_index = _build_check_failure_index(baseline_check_results)
-        if baseline_failure_index:
-            logger.append(
-                "preexisting_check_failures: "
-                + ", ".join(sorted(baseline_failure_index))
-            )
+        check_workspace = execution_workspace
+        baseline_check_workspace = execution_workspace
+        baseline_check_results: list[dict[str, Any]] = []
+        baseline_checks_summary = {
+            "overall_status": "passed",
+            "passed_count": 0,
+            "failed_count": 0,
+            "failed_commands": [],
+        }
+        if initial_execution_hints.skip_baseline_checks:
+            logger.append("baseline_checks_skipped=true")
+        else:
+            try:
+                baseline_check_results, baseline_checks_summary = _run_validation_cycle(
+                    conn=conn,
+                    run_id=run_id,
+                    workspace_dir=baseline_check_workspace,
+                    commands=commands,
+                    execute=execute,
+                    logger=logger,
+                    log_prefix="baseline",
+                )
+            except RuntimeError as exc:
+                if str(exc) != "cancel_requested_before_checks":
+                    raise
+                logger.append("cancel_requested: stopping run before baseline checks")
+                logs_path = logger.flush()
+                status, run_error_summary = _finish_cancelled_run(
+                    conn,
+                    run_id,
+                    logs_path,
+                )
+                return _build_terminal_result(
+                    status=status,
+                    error_summary=run_error_summary,
+                    logs_path=logs_path,
+                    commit_sha=None,
+                    checks=checks_summary,
+                )
+            baseline_failure_index = _build_check_failure_index(baseline_check_results)
+            if baseline_failure_index:
+                logger.append(
+                    "preexisting_check_failures: "
+                    + ", ".join(sorted(baseline_failure_index))
+                )
 
         new_failure_results: list[dict[str, Any]] = []
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
             operator_hints = get_run_operator_hints(conn, run_id)
+            execution_hints = parse_execution_hints(operator_hints)
+            commands_for_attempt = list(execution_hints.check_commands) or commands
+            check_workspace = _resolve_execution_workspace(
+                agent_workspace,
+                execution_hints.project_root or initial_execution_hints.project_root,
+            )
             prompt_for_attempt = active_ops.build_autofix_prompt(
                 repo=repo,
                 pr_number=pr_number,
@@ -640,7 +691,10 @@ def run_once(
                 )
             )
             if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
-                check_workspace = agent_workspace
+                check_workspace = _resolve_execution_workspace(
+                    agent_workspace,
+                    execution_hints.project_root or initial_execution_hints.project_root,
+                )
             logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
             if sdk_error_message:
                 logger.append(f"agent_error: {sdk_error_message}")
@@ -688,7 +742,7 @@ def run_once(
                     conn=conn,
                     run_id=run_id,
                     workspace_dir=check_workspace,
-                    commands=commands,
+                    commands=commands_for_attempt,
                     execute=execute,
                     logger=logger,
                 )
@@ -2447,6 +2501,24 @@ def _prepare_run_workspace(
         )
 
     return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
+
+
+def _resolve_execution_workspace(
+    workspace_dir: str,
+    project_root: str | None,
+) -> str:
+    root = Path(workspace_dir).resolve()
+    normalized = str(project_root or "").strip()
+    if not normalized:
+        return str(root)
+    candidate = (root / normalized).resolve()
+    if root not in {candidate, *candidate.parents}:
+        raise ValueError(f"project_root escapes workspace: {normalized}")
+    if not candidate.exists():
+        raise ValueError(f"project_root does not exist: {normalized}")
+    if not candidate.is_dir():
+        raise ValueError(f"project_root is not a directory: {normalized}")
+    return str(candidate)
 
 
 def _ensure_repo_cache(

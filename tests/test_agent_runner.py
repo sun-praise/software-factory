@@ -1135,6 +1135,154 @@ def test_run_once_rereads_operator_hints_between_attempts(
     assert "Only touch app/services/filter.py" in prompts[1]
 
 
+def test_run_once_uses_execution_hints_for_project_root_and_check_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_issue_and_claim(conn)
+    nested = tmp_path / "latex-agent"
+    nested.mkdir()
+    executed: list[tuple[str, str]] = []
+    append_run_operator_hint(
+        conn,
+        int(run["id"]),
+        "\n".join(
+            [
+                "project_root: latex-agent",
+                "check_command: python -m pytest -q",
+                "check_command: python -m ruff check .",
+            ]
+        ),
+    )
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        executed.append((command, workspace_dir))
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_bootstrap_workspace_runtime",
+        lambda workspace_dir, **kwargs: agent_runner.WorkspaceBootstrapResult(
+            ok=True,
+            skipped=True,
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert executed
+    assert {workspace for _, workspace in executed} == {str(nested)}
+    assert {command for command, _ in executed} == {
+        "python -m pytest -q",
+        "python -m ruff check .",
+    }
+
+
+def test_run_once_can_skip_baseline_checks_via_execution_hints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    executed_commands: list[str] = []
+    append_run_operator_hint(conn, int(run["id"]), "skip_baseline_checks: true")
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        executed_commands.append(command)
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "feature/test",
+            "pushed_ref": "origin/feature/test",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m ruff check ."],
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_bootstrap_workspace_runtime",
+        lambda workspace_dir, **kwargs: agent_runner.WorkspaceBootstrapResult(
+            ok=True,
+            skipped=True,
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert executed_commands == ["python -m ruff check ."]
+
+
+def test_run_once_fails_for_invalid_execution_hint_project_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    append_run_operator_hint(conn, int(run["id"]), "project_root: missing-dir")
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "claude_agent_sdk"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+    )
+
+    assert result["status"] in {"failed", "retry_scheduled"}
+    assert "invalid_execution_hints" in str(result["error_summary"])
+
+
 def test_run_once_allows_push_when_only_preexisting_failures_remain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
