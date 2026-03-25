@@ -8,3 +8,9 @@ data/*.db
 .ralph/
 
 .runtime
+
+# ignore log file
+logs
+
+# cache folder
+.software-factory-repo-cache
