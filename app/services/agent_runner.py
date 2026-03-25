@@ -41,6 +41,7 @@ from app.services.queue import (
     get_run_status,
     is_run_cancel_requested,
     mark_run_finished,
+    resume_waits_for_baseline_fix,
     touch_run_progress,
     update_run_logs_path,
     update_run_opened_pr,
@@ -297,9 +298,9 @@ def run_once(
     initial_execution_hints = parse_execution_hints(initial_operator_hints)
     # Blank `check_command:` lines are ignored by the parser, so an empty tuple
     # means "no override" and should fall back to the project-type defaults.
-    commands = list(initial_execution_hints.check_commands) or active_ops.collect_check_commands(
-        project_type
-    )
+    commands = list(
+        initial_execution_hints.check_commands
+    ) or active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
         base_dir=runtime_root,
         archive_subdir=settings.log_archive_subdir,
@@ -639,7 +640,11 @@ def run_once(
                     + ", ".join(sorted(baseline_failure_index))
                 )
                 # Check if we should auto-fix baseline failures
-                if settings.autofix_baseline_failures:
+                # Skip if current run is already a baseline fix to prevent infinite loop
+                if (
+                    settings.autofix_baseline_failures
+                    and _safe_text(run.get("trigger_source")) != "baseline_fix"
+                ):
                     baseline_fix_result = _handle_baseline_failures(
                         conn=conn,
                         run_id=run_id,
@@ -878,6 +883,16 @@ def run_once(
                 opened_pr_number=opened_pr_number,
                 opened_pr_url=opened_pr_url,
             )
+            if _safe_text(run.get("trigger_source")) == "baseline_fix":
+                resumed = resume_waits_for_baseline_fix(
+                    conn=conn,
+                    repo=repo,
+                    pr_number=pr_number,
+                    baseline_run_id=run_id,
+                    baseline_success=True,
+                )
+                if resumed:
+                    logger.append(f"resumed_waiting_runs: {resumed}")
         else:
             status, run_error_summary = _finish_failed_run(
                 conn,
@@ -886,6 +901,19 @@ def run_once(
                 logs_path,
                 error_code=run_error_code or _infer_error_code(run_error_summary),
             )
+            if (
+                status == "failed"
+                and _safe_text(run.get("trigger_source")) == "baseline_fix"
+            ):
+                resumed = resume_waits_for_baseline_fix(
+                    conn=conn,
+                    repo=repo,
+                    pr_number=pr_number,
+                    baseline_run_id=run_id,
+                    baseline_success=False,
+                )
+                if resumed:
+                    logger.append(f"resumed_waiting_runs (failed): {resumed}")
     finally:
         if agent_worktree is not None:
             _cleanup_openhands_workspace(
@@ -1178,10 +1206,9 @@ def _handle_baseline_failures(
     from app.services.queue import enqueue_autofix_run
     from app.services.github_events import build_task_idempotency_key
 
+    settings = get_settings()
     result = {"baseline_fix_enqueued": False, "baseline_run_id": None}
 
-    # Build normalized review for baseline fix
-    failed_commands = sorted(baseline_failure_index.keys())
     baseline_fix_items: list[dict[str, Any]] = []
     for check_result in baseline_check_results:
         command = str(check_result.get("command", "")).strip()
@@ -1197,14 +1224,16 @@ def _handle_baseline_failures(
             failure_text += f"Stderr:\n{stderr}\n"
         if stdout:
             failure_text += f"Stdout:\n{stdout}\n"
-        baseline_fix_items.append({
-            "source": "baseline_check",
-            "path": None,
-            "line": None,
-            "text": failure_text,
-            "severity": "P0",  # Highest priority for baseline failures
-            "source_url": "",
-        })
+        baseline_fix_items.append(
+            {
+                "source": "baseline_check",
+                "path": None,
+                "line": None,
+                "text": failure_text,
+                "severity": "P0",  # Highest priority for baseline failures
+                "source_url": "",
+            }
+        )
 
     if not baseline_fix_items:
         return result
@@ -1225,7 +1254,9 @@ def _handle_baseline_failures(
     }
 
     # Generate idempotency key for baseline fix
-    baseline_review_json = json.dumps(baseline_review, ensure_ascii=True, sort_keys=True)
+    baseline_review_json = json.dumps(
+        baseline_review, ensure_ascii=True, sort_keys=True
+    )
     idempotency_key = build_task_idempotency_key(
         repo=repo,
         pr_number=pr_number,
@@ -1255,7 +1286,7 @@ def _handle_baseline_failures(
             normalized_review_json=baseline_review,
             trigger_source="baseline_fix",
             idempotency_key=idempotency_key,
-            max_attempts=1,  # Baseline fix gets single attempt
+            max_attempts=settings.max_baseline_fix_attempts,
         )
         if baseline_run_id:
             logger.append(f"baseline_fix_enqueued: run_id={baseline_run_id}")

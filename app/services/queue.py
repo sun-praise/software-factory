@@ -189,6 +189,58 @@ def mark_run_finished(
     conn.commit()
 
 
+def resume_waits_for_baseline_fix(
+    conn: sqlite3.Connection,
+    repo: str,
+    pr_number: int,
+    baseline_run_id: int,
+    baseline_success: bool,
+) -> list[int]:
+    """Resume runs waiting for a baseline fix run.
+
+    When a baseline_fix run completes, find all runs in 'waiting_for_baseline_fix'
+    status for the same (repo, pr_number) and requeue them.
+
+    Returns list of resumed run IDs.
+    """
+    resumed_ids: list[int] = []
+    cursor = conn.execute(
+        """
+        SELECT id, operator_hints
+        FROM autofix_runs
+        WHERE repo = ?
+          AND pr_number = ?
+          AND status = 'waiting_for_baseline_fix'
+        """,
+        (repo, pr_number),
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        run_id = int(row["id"])
+        hints = str(row["operator_hints"] or "")
+        if f"baseline fix run #{baseline_run_id}" in hints:
+            new_status = "queued" if baseline_success else "failed"
+            note = (
+                "Baseline fix succeeded, resuming."
+                if baseline_success
+                else "Baseline fix failed."
+            )
+            conn.execute(
+                """
+                UPDATE autofix_runs
+                SET status = ?,
+                    operator_hints = operator_hints || ? || CHAR(10),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (new_status, note, run_id),
+            )
+            resumed_ids.append(run_id)
+    if resumed_ids:
+        conn.commit()
+    return resumed_ids
+
+
 def update_run_logs_path(conn: sqlite3.Connection, run_id: int, logs_path: str) -> None:
     conn.execute(
         """
@@ -246,7 +298,11 @@ def append_run_operator_hint(
         )
 
     existing = get_run_operator_hints(conn, run_id)
-    combined = normalized if not existing else f"{existing}{OPERATOR_HINT_SEPARATOR}{normalized}"
+    combined = (
+        normalized
+        if not existing
+        else f"{existing}{OPERATOR_HINT_SEPARATOR}{normalized}"
+    )
     if len(combined) > OPERATOR_HINTS_MAX_CHARS:
         raise ValueError(
             f"combined operator hints exceed max length of {OPERATOR_HINTS_MAX_CHARS} characters"
