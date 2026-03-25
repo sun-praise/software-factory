@@ -1,0 +1,35 @@
+schema: spec-driven
+
+# Project context
+context: |
+  # Tech stack
+  - Python 3.11+, FastAPI, SQLite
+  - pytest for testing, ruff for linting
+
+  # Version control
+  - Conventional commits: feat:, fix:, docs:, refactor:, test:, chore:
+  - Branch naming: feature/, fix/, docs/, openspec/
+  - All code changes must be in worktrees, never directly on main
+
+  # Local development constraints
+  - DB_PATH must be set and shared across all local processes
+  - Treat as local-only; not production-ready
+  - See docs/local-runtime.md for full details
+
+  # Project domain
+  - Issue/PR-driven autonomous development system
+  - AI-native GitHub Issue & PR orchestrator
+  - Core: webhook adapter, review normalizer, agent worker, thin web UI
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+    - Always link related issue/PR in "Related" section
+  design:
+    - Include architecture diagram for non-trivial changes
+    - Document failure states explicitly
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Each task should be independently verifiable
