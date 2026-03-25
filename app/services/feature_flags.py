@@ -348,6 +348,8 @@ def _normalize_runtime(value: str | None) -> str:
 
 def _normalize_provider(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
+    if not normalized:
+        return ""
     if normalized == CLAUDE_AGENT_PROVIDER_ZHIPU:
         return CLAUDE_AGENT_PROVIDER_ZHIPU
     if normalized == CLAUDE_AGENT_PROVIDER_DEEPSEEK:
