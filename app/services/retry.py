@@ -158,7 +158,7 @@ def schedule_retry(
             next_attempt_count=attempt_count,
         )
 
-    retry_number = max(1, attempt_count)
+    retry_number = max(1, attempt_count + 1)
     delay_seconds = compute_backoff_seconds(
         retry_number=retry_number,
         base_seconds=config.base_delay_seconds,
