@@ -90,7 +90,7 @@ def test_schedule_retry_marks_non_retryable_failure() -> None:
         INSERT INTO autofix_runs (repo, pr_number, status, attempt_count, max_attempts, retryable)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        ("acme/widgets", 43, "failed", 1, 3, 1),
+        ("acme/widgets", 43, "failed", 0, 3, 1),
     )
     conn.commit()
     run_id = cursor.lastrowid
@@ -148,6 +148,7 @@ def test_schedule_retry_exponential_backoff_grows_with_persisted_attempt_count()
     )
     assert plan1.scheduled is True
     assert plan1.delay_seconds == 30
+    assert plan1.retry_after == "2026-03-12T10:00:30Z"
     assert plan1.next_attempt_count == 1
 
     # Attempt count must be persisted so the second call picks up where the
@@ -161,9 +162,17 @@ def test_schedule_retry_exponential_backoff_grows_with_persisted_attempt_count()
         max_delay_seconds=1800,
     )
     assert plan2.scheduled is True
+    assert plan2.retry_after == "2026-03-12T10:02:00Z"
     # With persisted attempt_count=1, next retry number is 2 → 30*2^(2-1)=60s
     assert plan2.delay_seconds == 60
     assert plan2.next_attempt_count == 2
+
+    row = conn.execute(
+        "SELECT attempt_count, retry_after FROM autofix_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row is not None
+    assert row["attempt_count"] == 2
+    assert row["retry_after"] == "2026-03-12T10:02:00Z"
 
 
 def test_schedule_retry_backward_compat_individual_params() -> None:
