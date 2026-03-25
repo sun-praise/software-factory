@@ -159,12 +159,17 @@ env DB_PATH="$DB_PATH" python scripts/run_worker.py --loop --workspace-dir "$(pw
 
 ### 面向 LLM 的安装 Prompt
 
-当你想让 Codex / Claude / OpenCode 帮你本地安装并验证项目时，可以直接复制下面这段：
+当你想让 Codex / Claude / OpenCode 帮你本地安装并验证项目时，可以直接复制下面这段。仓库地址：`https://github.com/sun-praise/software-factory`
 
 ```text
-Install and verify this repository locally.
+Install and verify the GitHub repository https://github.com/sun-praise/software-factory locally.
+
+Repository bootstrap:
+- If the current workspace is not already the repository root for sun-praise/software-factory, clone or open this exact repository first.
+- If needed, run: git clone https://github.com/sun-praise/software-factory.git && cd software-factory
 
 Requirements:
+- Work from the repository root for sun-praise/software-factory.
 - Follow README.md and docs/local-runtime.md exactly.
 - Use Python 3.11+ and install dependencies from requirements.txt in a virtual environment.
 - Copy example.env to .env if needed.
