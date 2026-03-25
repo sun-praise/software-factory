@@ -159,29 +159,14 @@ env DB_PATH="$DB_PATH" python scripts/run_worker.py --loop --workspace-dir "$(pw
 
 ### 面向 LLM 的安装 Prompt
 
-当你想让 Codex / Claude / OpenCode 帮你本地安装并验证项目时，可以直接复制下面这段。仓库地址：`https://github.com/sun-praise/software-factory`
+当你想让 Codex / Claude / OpenCode 帮你本地安装并验证项目时，可以直接复制下面这段。详细安装步骤现在放在仓库内的 [docs/agent-install.md](docs/agent-install.md)。仓库地址：`https://github.com/sun-praise/software-factory`
 
 ```text
 Install and verify the GitHub repository https://github.com/sun-praise/software-factory locally.
-
-Repository bootstrap:
-- If the current workspace is not already the repository root for sun-praise/software-factory, clone or open this exact repository first.
-- If needed, run: git clone https://github.com/sun-praise/software-factory.git && cd software-factory
-
-Requirements:
-- Work from the repository root for sun-praise/software-factory.
-- Follow README.md and docs/local-runtime.md exactly.
-- Use Python 3.11+ and install dependencies from requirements.txt in a virtual environment.
-- Copy example.env to .env if needed.
-- Choose one writable DB_PATH and use the exact same DB_PATH for every local process.
-- Do not let the web service use ./data/software_factory.db while the worker uses a different database.
-- Initialize the SQLite database with python scripts/init_db.py.
-- Start the web service on port 8001.
-- If you start the worker, it must use the same DB_PATH as the web service.
-- Verify the setup with curl -i http://127.0.0.1:8001/healthz.
-- If both web and worker are running, verify that both processes expose the same DB_PATH.
-- Do not modify application code just to make local setup pass. Only change local env/config when needed.
-- If something fails, report the exact failing command, the root cause, and the smallest fix.
+If the repository is not already open, clone or open it first.
+Then work from the repository root and follow docs/agent-install.md and docs/local-runtime.md exactly.
+Do not modify application code just to make local setup pass.
+If something fails, report the exact failing command, the root cause, and the smallest fix.
 ```
 
 ## 本地运行
