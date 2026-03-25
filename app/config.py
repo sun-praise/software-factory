@@ -38,6 +38,8 @@ class Settings(BaseSettings):
         "rebase_fetch_failed",
     )
     autofix_comment_author: str = "software-factory[bot]"
+    autofix_baseline_failures: bool = False
+    max_baseline_fix_attempts: int = 1
     log_dir: str = "logs"
     log_archive_subdir: str = "archive"
     log_retention_days: int = 7

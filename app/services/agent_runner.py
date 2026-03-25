@@ -638,6 +638,29 @@ def run_once(
                     "preexisting_check_failures: "
                     + ", ".join(sorted(baseline_failure_index))
                 )
+                # Check if we should auto-fix baseline failures
+                if settings.autofix_baseline_failures:
+                    baseline_fix_result = _handle_baseline_failures(
+                        conn=conn,
+                        run_id=run_id,
+                        repo=repo,
+                        pr_number=pr_number,
+                        head_sha=head_sha,
+                        baseline_check_results=baseline_check_results,
+                        baseline_failure_index=baseline_failure_index,
+                        runtime_root=runtime_root,
+                        logger=logger,
+                    )
+                    if baseline_fix_result.get("baseline_fix_enqueued"):
+                        # Return waiting status, original run will be resumed after baseline fix
+                        logs_path = logger.flush()
+                        return _build_terminal_result(
+                            status="waiting_for_baseline_fix",
+                            error_summary="Baseline checks failed, enqueued fix task",
+                            logs_path=logs_path,
+                            commit_sha=None,
+                            checks=checks_summary,
+                        )
 
         new_failure_results: list[dict[str, Any]] = []
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
@@ -1133,6 +1156,128 @@ def _run_validation_cycle(
         )
 
     return check_results, summarize_check_results(check_results)
+
+
+def _handle_baseline_failures(
+    *,
+    conn: sqlite3.Connection,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    head_sha: str | None,
+    baseline_check_results: list[dict[str, Any]],
+    baseline_failure_index: dict[str, set[str]],
+    runtime_root: str | None,
+    logger: RunLogger,
+) -> dict[str, Any]:
+    """Handle baseline check failures by enqueueing a fix task.
+
+    When baseline checks fail, create a new autofix run to fix the preexisting
+    failures. The original run will be blocked until the baseline fix is complete.
+    """
+    from app.services.queue import enqueue_autofix_run
+    from app.services.github_events import build_task_idempotency_key
+
+    result = {"baseline_fix_enqueued": False, "baseline_run_id": None}
+
+    # Build normalized review for baseline fix
+    failed_commands = sorted(baseline_failure_index.keys())
+    baseline_fix_items: list[dict[str, Any]] = []
+    for check_result in baseline_check_results:
+        command = str(check_result.get("command", "")).strip()
+        if command not in baseline_failure_index:
+            continue
+        exit_code = int(check_result.get("exit_code", 0))
+        if exit_code == 0:
+            continue
+        stdout = str(check_result.get("stdout", ""))
+        stderr = str(check_result.get("stderr", ""))
+        failure_text = f"Command: {command}\nExit code: {exit_code}\n"
+        if stderr:
+            failure_text += f"Stderr:\n{stderr}\n"
+        if stdout:
+            failure_text += f"Stdout:\n{stdout}\n"
+        baseline_fix_items.append({
+            "source": "baseline_check",
+            "path": None,
+            "line": None,
+            "text": failure_text,
+            "severity": "P0",  # Highest priority for baseline failures
+            "source_url": "",
+        })
+
+    if not baseline_fix_items:
+        return result
+
+    # Build normalized review payload for baseline fix
+    baseline_review: dict[str, Any] = {
+        "repo": repo,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "must_fix": baseline_fix_items,
+        "should_fix": [],
+        "ignore": [],
+        "summary": f"{len(baseline_fix_items)} baseline check failures to fix",
+        "project_type": "python",  # Will be auto-detected
+        "source_kind": "baseline_fix",
+        "original_run_id": run_id,
+        "is_baseline_fix": True,
+    }
+
+    # Generate idempotency key for baseline fix
+    baseline_review_json = json.dumps(baseline_review, ensure_ascii=True, sort_keys=True)
+    idempotency_key = build_task_idempotency_key(
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        review_batch_id=hashlib.sha256(baseline_review_json.encode()).hexdigest()[:16],
+    )
+
+    # Check if a baseline fix is already enqueued for this run
+    existing_run = conn.execute(
+        "SELECT id FROM autofix_runs WHERE idempotency_key = ? AND status IN ('queued', 'running')",
+        (idempotency_key,),
+    ).fetchone()
+
+    if existing_run:
+        logger.append(f"baseline_fix_already_enqueued: run_id={existing_run['id']}")
+        result["baseline_run_id"] = existing_run["id"]
+        result["baseline_fix_enqueued"] = True
+        return result
+
+    # Enqueue baseline fix run
+    try:
+        baseline_run_id = enqueue_autofix_run(
+            conn=conn,
+            repo=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            normalized_review_json=baseline_review,
+            trigger_source="baseline_fix",
+            idempotency_key=idempotency_key,
+            max_attempts=1,  # Baseline fix gets single attempt
+        )
+        if baseline_run_id:
+            logger.append(f"baseline_fix_enqueued: run_id={baseline_run_id}")
+            result["baseline_run_id"] = baseline_run_id
+            result["baseline_fix_enqueued"] = True
+
+            # Update original run to waiting status
+            conn.execute(
+                """
+                UPDATE autofix_runs
+                SET status = 'waiting_for_baseline_fix',
+                    operator_hints = COALESCE(operator_hints, '') || ? || CHAR(10),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (f"Waiting for baseline fix run #{baseline_run_id}", run_id),
+            )
+            conn.commit()
+    except Exception as exc:
+        logger.append(f"baseline_fix_enqueue_failed: {exc}")
+
+    return result
 
 
 def _build_check_failure_index(
