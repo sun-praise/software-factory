@@ -243,6 +243,94 @@ def test_run_once_failure_marks_failed_and_records_error(
     assert "ruff check" in str(row["error_summary"])
 
 
+def test_resolve_project_workspace_prefers_single_nested_python_project(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "latex-agent"
+    nested.mkdir()
+    (nested / "pyproject.toml").write_text("[project]\nname='latex-agent'\n", encoding="utf-8")
+    (tmp_path / "test_cost_calc.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    resolved = agent_runner._resolve_project_workspace(str(tmp_path), "python")
+
+    assert resolved == str(nested)
+
+
+def test_resolve_project_workspace_keeps_root_when_root_is_python_project(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "latex-agent"
+    nested.mkdir()
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='workspace-root'\n", encoding="utf-8")
+    (nested / "pyproject.toml").write_text("[project]\nname='latex-agent'\n", encoding="utf-8")
+
+    resolved = agent_runner._resolve_project_workspace(str(tmp_path), "python")
+
+    assert resolved == str(tmp_path)
+
+
+def test_run_once_executes_checks_in_detected_project_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_issue_and_claim(conn)
+    nested = tmp_path / "latex-agent"
+    nested.mkdir()
+    (nested / "pyproject.toml").write_text("[project]\nname='latex-agent'\n", encoding="utf-8")
+    (tmp_path / "test_cost_calc.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    executed_workspaces: list[str] = []
+
+    def executor(command: str, workspace_dir: str) -> dict[str, object]:
+        executed_workspaces.append(workspace_dir)
+        return {
+            "returncode": 0,
+            "stdout": f"ok: {command} @ {workspace_dir}",
+            "stderr": "",
+        }
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-issue-42",
+            "pushed_ref": "origin/autofix/run-1-issue-42",
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+        collect_check_commands=lambda *_: ["python -m pytest -q"],
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_bootstrap_workspace_runtime",
+        lambda workspace_dir, **kwargs: agent_runner.WorkspaceBootstrapResult(
+            ok=True,
+            skipped=True,
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=executor,
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    assert executed_workspaces
+    assert set(executed_workspaces) == {str(nested)}
+
+
 def test_run_once_fails_fast_for_manual_issue_without_context(tmp_path: Path) -> None:
     conn = _make_conn()
     enqueue_autofix_run(

@@ -143,6 +143,20 @@ _DISALLOWED_COMMAND_TOKENS = {"&", "&&", ";", "<", "<<", ">", ">>", "|", "||"}
 _ACTIVE_AGENT_PIDS_LOCK = threading.Lock()
 _ACTIVE_AGENT_PIDS: set[int] = set()
 logger = logging.getLogger(__name__)
+_PYTHON_PROJECT_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+)
+_PROJECT_ROOT_IGNORED_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+}
 
 
 def _noop(*_args: Any, **_kwargs: Any) -> Any:
@@ -470,6 +484,9 @@ def run_once(
                 commit_sha=None,
                 checks=checks_summary,
             )
+    project_workspace = _resolve_project_workspace(agent_workspace, project_type)
+    if project_workspace != agent_workspace:
+        logger.append(f"project_workspace={project_workspace}")
 
     base_ref = _safe_text(pr_metadata.get("base_ref"))
     is_merge_conflict = pr_metadata.get("is_merge_conflict")
@@ -556,8 +573,8 @@ def run_once(
         status = "failed"
         run_error_code: str | None = None
         commit_sha: str | None = None
-        check_workspace = runtime_root
-        baseline_check_workspace = agent_workspace
+        check_workspace = project_workspace
+        baseline_check_workspace = project_workspace
         try:
             baseline_check_results, baseline_checks_summary = _run_validation_cycle(
                 conn=conn,
@@ -640,7 +657,7 @@ def run_once(
                 )
             )
             if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
-                check_workspace = agent_workspace
+                check_workspace = project_workspace
             logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
             if sdk_error_message:
                 logger.append(f"agent_error: {sdk_error_message}")
@@ -2447,6 +2464,54 @@ def _prepare_run_workspace(
         )
 
     return run_workspace_dir, run_workspace_dir, resolved_branch, resolved_head_sha
+
+
+def _resolve_project_workspace(workspace_dir: str, project_type: str | None) -> str:
+    root = Path(workspace_dir).resolve()
+    normalized_type = (project_type or "").strip().lower()
+    if normalized_type != "python":
+        return str(root)
+    if _directory_has_any_marker(root, _PYTHON_PROJECT_MARKERS):
+        return str(root)
+    candidates = _find_nested_project_roots(
+        root,
+        markers=_PYTHON_PROJECT_MARKERS,
+        max_depth=3,
+    )
+    if len(candidates) == 1:
+        return str(candidates[0])
+    return str(root)
+
+
+def _directory_has_any_marker(directory: Path, markers: tuple[str, ...]) -> bool:
+    return any((directory / marker).is_file() for marker in markers)
+
+
+def _find_nested_project_roots(
+    root: Path,
+    *,
+    markers: tuple[str, ...],
+    max_depth: int,
+) -> list[Path]:
+    candidates: set[Path] = set()
+    for marker in markers:
+        for marker_path in root.rglob(marker):
+            parent = marker_path.parent.resolve()
+            if parent == root:
+                continue
+            try:
+                relative = parent.relative_to(root)
+            except ValueError:
+                continue
+            parts = relative.parts
+            if not parts:
+                continue
+            if any(part in _PROJECT_ROOT_IGNORED_DIRS for part in parts):
+                continue
+            if len(parts) > max_depth:
+                continue
+            candidates.add(parent)
+    return sorted(candidates, key=lambda item: (len(item.relative_to(root).parts), str(item)))
 
 
 def _ensure_repo_cache(
