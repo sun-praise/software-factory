@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from typing import Any, Mapping
+
+logger = logging.getLogger(__name__)
 
 
 PULL_SOURCE_KIND = "pull"
@@ -34,7 +37,12 @@ def build_manual_text_task_number(
 ) -> int:
     digest = hashlib.sha256(f"{repo}\n{title or ''}\n{text}".encode("utf-8")).digest()
     parsed = int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
-    return parsed or 1
+    if parsed == 0:
+        logger.debug(
+            "SHA256 hash collision detected for repo=%s, using fallback value 1", repo
+        )
+        return 1
+    return parsed
 
 
 def extract_task_title(normalized_review: Mapping[str, Any]) -> str | None:

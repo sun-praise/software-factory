@@ -50,6 +50,7 @@ from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
 from app.services.task_source import (
     TEXT_SOURCE_KIND,
     build_manual_text_task_number,
+    coerce_positive_int,
 )
 
 
@@ -240,7 +241,7 @@ def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
 
 
 def _resolve_run_pr_number(row: sqlite3.Row) -> str:
-    opened_pr_number = _coerce_positive_int(row["opened_pr_number"])
+    opened_pr_number = coerce_positive_int(row["opened_pr_number"])
     if opened_pr_number is not None:
         return str(opened_pr_number)
     if _string_or_empty(row["trigger_source"]) == "manual_task":
@@ -253,7 +254,7 @@ def _resolve_run_pr_url(row: sqlite3.Row) -> str:
     if opened_pr_url:
         return opened_pr_url
     repo = _string_or_empty(row["repo"])
-    pr_number = _coerce_positive_int(row["pr_number"])
+    pr_number = coerce_positive_int(row["pr_number"])
     if not repo or pr_number is None:
         return ""
     if _string_or_empty(row["trigger_source"]) in {"manual_issue", "manual_task"}:
@@ -538,16 +539,6 @@ def _parse_fragment_numeric_id(fragment: str, prefixes: tuple[str, ...]) -> int 
     return None
 
 
-def _coerce_positive_int(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        parsed_value = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    return parsed_value if parsed_value > 0 else None
-
-
 def _string_or_empty(value: Any) -> str:
     if value is None:
         return ""
@@ -631,7 +622,7 @@ def _fetch_review_comment_context(
             "GitHub review comment is empty. Add a description to the manual issue."
         )
     path = _string_or_empty(payload.get("path")) or None
-    line = _coerce_positive_int(payload.get("line")) or _coerce_positive_int(
+    line = coerce_positive_int(payload.get("line")) or coerce_positive_int(
         payload.get("original_line")
     )
     return ManualIssueContext(
