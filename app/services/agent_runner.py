@@ -295,6 +295,8 @@ def run_once(
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
     initial_operator_hints = get_run_operator_hints(conn, run_id)
     initial_execution_hints = parse_execution_hints(initial_operator_hints)
+    # Blank `check_command:` lines are ignored by the parser, so an empty tuple
+    # means "no override" and should fall back to the project-type defaults.
     commands = list(initial_execution_hints.check_commands) or active_ops.collect_check_commands(
         project_type
     )
@@ -641,10 +643,14 @@ def run_once(
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
             operator_hints = get_run_operator_hints(conn, run_id)
             execution_hints = parse_execution_hints(operator_hints)
+            effective_project_root = _execution_project_root_for_attempt(
+                initial_project_root=initial_execution_hints.project_root,
+                attempt_project_root=execution_hints.project_root,
+            )
             commands_for_attempt = list(execution_hints.check_commands) or commands
             check_workspace = _resolve_execution_workspace(
                 agent_workspace,
-                execution_hints.project_root or initial_execution_hints.project_root,
+                effective_project_root,
             )
             prompt_for_attempt = active_ops.build_autofix_prompt(
                 repo=repo,
@@ -690,11 +696,6 @@ def run_once(
                     should_cancel=lambda: is_run_cancel_requested(conn, run_id),
                 )
             )
-            if used_agent_mode in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
-                check_workspace = _resolve_execution_workspace(
-                    agent_workspace,
-                    execution_hints.project_root or initial_execution_hints.project_root,
-                )
             logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
             if sdk_error_message:
                 logger.append(f"agent_error: {sdk_error_message}")
@@ -2521,6 +2522,18 @@ def _resolve_execution_workspace(
     if not candidate.is_dir():
         raise ValueError(f"project_root is not a directory: {normalized}")
     return str(candidate)
+
+
+def _execution_project_root_for_attempt(
+    *,
+    initial_project_root: str | None,
+    attempt_project_root: str | None,
+) -> str | None:
+    # Later operator hints inherit the initial root unless they explicitly
+    # replace it. Use `project_root: .` to target the workspace root again.
+    if attempt_project_root is not None:
+        return attempt_project_root
+    return initial_project_root
 
 
 def _ensure_repo_cache(

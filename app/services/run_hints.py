@@ -10,16 +10,31 @@ OPERATOR_HINT_SEPARATOR = "\n\n---\n"
 OPERATOR_HINT_APPEND_MAX_CHARS = 1_000
 OPERATOR_HINTS_MAX_CHARS = 4_000
 OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT = 2_000
+EXECUTION_HINT_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 @dataclass(frozen=True)
 class ExecutionHints:
+    """Structured execution overrides parsed from operator hints text."""
+
     project_root: str | None = None
     check_commands: tuple[str, ...] = ()
     skip_baseline_checks: bool = False
 
 
 def parse_execution_hints(text: str | None) -> ExecutionHints:
+    """Extract operator-provided execution overrides from free-form hints text.
+
+    Supported lines are:
+    - ``project_root: relative/path``
+    - ``check_command: python -m pytest -q``
+    - ``skip_baseline_checks: true``
+
+    Parsing is intentionally permissive: blank ``check_command`` lines are ignored,
+    and path validation happens later in the runner where workspace containment can
+    be checked against the actual execution directory.
+    """
+
     project_root: str | None = None
     check_commands: list[str] = []
     skip_baseline_checks = False
@@ -38,12 +53,7 @@ def parse_execution_hints(text: str | None) -> ExecutionHints:
         elif normalized_key == "check_command":
             check_commands.append(normalized_value)
         elif normalized_key == "skip_baseline_checks":
-            skip_baseline_checks = normalized_value.lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
+            skip_baseline_checks = normalized_value.lower() in EXECUTION_HINT_TRUE_VALUES
 
     return ExecutionHints(
         project_root=project_root,
