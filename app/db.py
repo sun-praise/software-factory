@@ -33,6 +33,7 @@ def init_db() -> None:
         _migrate_m6_columns(conn)
         _migrate_operator_hint_columns(conn)
         _migrate_app_feature_flags(conn)
+        _migrate_run_result_pr_columns(conn)
 
 
 ALLOWED_TABLES = {"pull_requests", "autofix_runs"}
@@ -97,6 +98,18 @@ def _migrate_operator_hint_columns(conn: sqlite3.Connection) -> None:
         "autofix_runs",
         {
             "operator_hints": "TEXT NOT NULL DEFAULT ''",
+        },
+    )
+    conn.commit()
+
+
+def _migrate_run_result_pr_columns(conn: sqlite3.Connection) -> None:
+    _ensure_columns(
+        conn,
+        "autofix_runs",
+        {
+            "opened_pr_number": "INTEGER",
+            "opened_pr_url": "TEXT",
         },
     )
     conn.commit()

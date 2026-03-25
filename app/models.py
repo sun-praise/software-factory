@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS autofix_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo TEXT NOT NULL,
     pr_number INTEGER NOT NULL,
+    opened_pr_number INTEGER,
+    opened_pr_url TEXT,
     head_sha TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
     trigger_source TEXT NOT NULL DEFAULT 'github_webhook',
