@@ -35,7 +35,6 @@ router = APIRouter(prefix="/github", tags=["github"])
 _REVIEW_EVENTS_ALLOWING_BOT_ACTORS = {
     "pull_request_review",
     "pull_request_review_comment",
-    "issue_comment",
 }
 _AUTOFIX_SUMMARY_COMMENT_PATTERN = re.compile(r"^\s*autofix run #\d+\b", re.IGNORECASE)
 
