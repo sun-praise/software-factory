@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
+from app.services.task_source import build_task_context_lines, is_non_pr_source_kind
 
 
 PR_BODY_PREVIEW_LIMIT = 600
@@ -74,34 +75,16 @@ def _build_run_context_lines(
     head_sha: str,
     normalized_review: Mapping[str, Any],
 ) -> list[str]:
-    if _is_issue_sourced_run(normalized_review):
-        lines = [
-            "You are an autofix agent working on a manually submitted GitHub issue.",
-            "",
-            "Context:",
-            f"- Repository: {repo}",
-        ]
-        issue_number = _safe_text(normalized_review.get("issue_number"), "")
-        if issue_number:
-            lines.append(f"- Issue: #{issue_number}")
-        source_url = _safe_text(normalized_review.get("manual_issue_source_url"), "")
-        if source_url:
-            lines.append(f"- Source URL: {source_url}")
-        lines.append(f"- Head SHA: {head_sha}")
-        return lines
-
-    return [
-        "You are an autofix agent working on a pull request.",
-        "",
-        "Context:",
-        f"- Repository: {repo}",
-        f"- Pull Request: #{pr_number}",
-        f"- Head SHA: {head_sha}",
-    ]
+    return build_task_context_lines(
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        normalized_review=normalized_review,
+    )
 
 
 def _is_issue_sourced_run(normalized_review: Mapping[str, Any]) -> bool:
-    return _safe_text(normalized_review.get("source_kind"), "").lower() == "issue"
+    return is_non_pr_source_kind(normalized_review.get("source_kind"))
 
 
 def collect_check_commands(project_type: str | None = None) -> list[str]:

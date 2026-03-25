@@ -53,6 +53,15 @@ from app.services.queue import (
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.run_hints import ExecutionHints, parse_execution_hints
 from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
+from app.services.task_source import (
+    build_task_pull_request_body,
+    build_task_pull_request_title,
+    extract_task_title,
+    is_issue_source_kind,
+    is_non_pr_source_kind,
+    is_text_source_kind,
+    normalize_source_kind,
+)
 
 
 Executor = Callable[[str, str], Any]
@@ -245,10 +254,14 @@ def run_once(
     worker_id = _safe_text(run.get("worker_id")) or settings.worker_id
 
     payload = _parse_payload(run.get("normalized_review_json"))
-    source_kind = _safe_text(payload.get("source_kind"))
-    if not source_kind and _safe_text(run.get("trigger_source")) == "manual_issue":
+    source_kind = normalize_source_kind(payload.get("source_kind"))
+    trigger_source = _safe_text(run.get("trigger_source")) or ""
+    if not source_kind and trigger_source == "manual_issue":
         # Backward compatibility for runs queued before source_kind was stored.
         source_kind = "issue"
+        payload["source_kind"] = source_kind
+    elif not source_kind and trigger_source == "manual_task":
+        source_kind = "text"
         payload["source_kind"] = source_kind
     issue_number = _resolve_issue_number(run, payload)
     resolved_pr_number = _resolve_run_pr_number(run, payload)
@@ -257,8 +270,13 @@ def run_once(
     project_type = _safe_text(payload.get("project_type"))
     commit_message = _safe_text(payload.get("commit_message"))
     if not commit_message:
-        if source_kind == "issue" and resolved_pr_number <= 0 and issue_number > 0:
+        task_title = extract_task_title(payload)
+        if task_title:
+            commit_message = f"fix: {task_title}"
+        elif source_kind == "issue" and resolved_pr_number <= 0 and issue_number > 0:
             commit_message = f"fix: apply autofix updates for issue #{issue_number}"
+        elif is_non_pr_source_kind(source_kind):
+            commit_message = "fix: apply autofix updates for manual task"
         else:
             commit_message = f"fix: apply autofix updates for PR #{pr_number}"
     feature_flags = resolve_agent_feature_flags(conn)
@@ -296,8 +314,10 @@ def run_once(
             },
             "comment_posted": False,
         }
-    pr_metadata = _collect_pull_request_metadata(
-        repo=repo, pr_number=resolved_pr_number
+    pr_metadata = (
+        _collect_pull_request_metadata(repo=repo, pr_number=resolved_pr_number)
+        if resolved_pr_number > 0
+        else {}
     )
     head_sha = head_sha or _safe_text(pr_metadata.get("head_sha"))
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
@@ -840,7 +860,7 @@ def run_once(
                         opened_pr_number,
                         opened_pr_url,
                         pr_creation_error,
-                    ) = _maybe_create_issue_pull_request(
+                    ) = _maybe_create_task_pull_request(
                         conn=conn,
                         run_id=run_id,
                         repo=repo,
@@ -855,12 +875,19 @@ def run_once(
                         run_error_summary = _merge_error_summary(
                             run_error_summary, pr_creation_error
                         )
-                    mergeability_error = _ensure_pr_is_mergeable_after_run(
-                        repo=repo,
-                        pr_number=pr_number,
-                        initial_metadata=pr_metadata,
-                        logger=logger,
-                    )
+                    mergeability_pr_number = opened_pr_number or resolved_pr_number
+                    mergeability_error = None
+                    if mergeability_pr_number:
+                        mergeability_error = _ensure_pr_is_mergeable_after_run(
+                            repo=repo,
+                            pr_number=mergeability_pr_number,
+                            initial_metadata=(
+                                pr_metadata
+                                if mergeability_pr_number == resolved_pr_number
+                                else None
+                            ),
+                            logger=logger,
+                        )
                     if mergeability_error:
                         status = "failed"
                         run_error_summary = mergeability_error
@@ -1003,7 +1030,7 @@ def _finalize_git_changes(
     )
 
 
-def _maybe_create_issue_pull_request(
+def _maybe_create_task_pull_request(
     *,
     conn: sqlite3.Connection,
     run_id: int,
@@ -1017,16 +1044,16 @@ def _maybe_create_issue_pull_request(
 ) -> tuple[int | None, str | None, str | None]:
     if commit_sha is None:
         return None, None, None
-    if _safe_text(normalized_review.get("source_kind")) != "issue":
+    if not is_non_pr_source_kind(normalized_review.get("source_kind")):
         return None, None, None
 
     head_branch = _safe_text(branch)
     if not head_branch:
-        logger.append("issue_pr: skipped missing_branch")
-        return None, None, "issue_pr_create_failed: missing_branch"
+        logger.append("task_pr: skipped missing_branch")
+        return None, None, "task_pr_create_failed: missing_branch"
 
-    pr_title = _build_issue_pull_request_title(normalized_review)
-    pr_body = _build_issue_pull_request_body(normalized_review)
+    pr_title = build_task_pull_request_title(normalized_review)
+    pr_body = build_task_pull_request_body(normalized_review)
     pr_result = active_ops.ensure_pull_request(
         repo_dir=workspace_dir,
         repo=repo,
@@ -1036,13 +1063,13 @@ def _maybe_create_issue_pull_request(
     )
     if not pr_result.get("success"):
         error = _safe_text(pr_result.get("error")) or "unknown_pr_create_error"
-        logger.append(f"issue_pr: failed branch={head_branch} error={error}")
-        return None, None, f"issue_pr_create_failed: {error}"
+        logger.append(f"task_pr: failed branch={head_branch} error={error}")
+        return None, None, f"task_pr_create_failed: {error}"
 
     opened_pr_number = _coerce_positive_int(pr_result.get("pr_number"))
     opened_pr_url = _safe_text(pr_result.get("pr_url"))
     if opened_pr_number is None or opened_pr_url is None:
-        logger.append(f"issue_pr: retrying metadata lookup branch={head_branch}")
+        logger.append(f"task_pr: retrying metadata lookup branch={head_branch}")
         pr_result = active_ops.ensure_pull_request(
             repo_dir=workspace_dir,
             repo=repo,
@@ -1053,10 +1080,8 @@ def _maybe_create_issue_pull_request(
         opened_pr_number = _coerce_positive_int(pr_result.get("pr_number"))
         opened_pr_url = _safe_text(pr_result.get("pr_url"))
     if opened_pr_number is None or opened_pr_url is None:
-        logger.append(
-            f"issue_pr: failed branch={head_branch} error=missing_pr_metadata"
-        )
-        return None, None, "issue_pr_create_failed: missing_pr_metadata"
+        logger.append(f"task_pr: failed branch={head_branch} error=missing_pr_metadata")
+        return None, None, "task_pr_create_failed: missing_pr_metadata"
 
     update_run_opened_pr(
         conn,
@@ -1066,58 +1091,9 @@ def _maybe_create_issue_pull_request(
     )
     verb = "reused" if pr_result.get("existing") else "created"
     logger.append(
-        f"issue_pr: {verb} pr=#{opened_pr_number} branch={head_branch} url={opened_pr_url}"
+        f"task_pr: {verb} pr=#{opened_pr_number} branch={head_branch} url={opened_pr_url}"
     )
     return opened_pr_number, opened_pr_url, None
-
-
-def _build_issue_pull_request_title(normalized_review: Mapping[str, Any]) -> str:
-    issue_title = _extract_manual_issue_title(normalized_review)
-    if issue_title:
-        return f"fix: {issue_title}"
-    issue_number = _coerce_positive_int(normalized_review.get("issue_number"))
-    if issue_number is not None:
-        return f"fix: issue #{issue_number}"
-    return "fix: resolve manual issue"
-
-
-def _build_issue_pull_request_body(normalized_review: Mapping[str, Any]) -> str:
-    issue_number = _coerce_positive_int(normalized_review.get("issue_number"))
-    source_url = _safe_text(normalized_review.get("manual_issue_source_url")) or ""
-    title = _extract_manual_issue_title(normalized_review)
-    lines = [
-        "## Summary",
-        "- Automated fix generated by software-factory.",
-    ]
-    if issue_number is not None:
-        issue_line = f"- Resolves issue #{issue_number}"
-        if title:
-            issue_line = f"{issue_line}: {title}"
-        lines.append(issue_line)
-    elif title:
-        lines.append(f"- Resolves manual issue: {title}")
-    if source_url:
-        lines.append(f"- Source: {source_url}")
-    if issue_number is not None:
-        lines.extend(["", f"Closes #{issue_number}"])
-    return "\n".join(lines)
-
-
-def _extract_manual_issue_title(normalized_review: Mapping[str, Any]) -> str | None:
-    must_fix = normalized_review.get("must_fix")
-    if not isinstance(must_fix, list):
-        return None
-    for item in must_fix:
-        if not isinstance(item, Mapping):
-            continue
-        text = _safe_text(item.get("text")) or ""
-        match = re.search(r"(?:^|\n)Title:\s*(.+)", text)
-        if match is None:
-            continue
-        title = match.group(1).strip()
-        if title:
-            return title
-    return None
 
 
 def _run_validation_cycle(
@@ -2673,12 +2649,13 @@ def _prepare_run_workspace(
         resolved_branch=resolved_branch,
         resolved_head_sha=resolved_head_sha,
     )
-    if source_kind == "issue" and pr_number <= 0 and not resolved_branch:
-        resolved_branch = _build_manual_issue_branch_name(
+    if is_non_pr_source_kind(source_kind) and pr_number <= 0 and not resolved_branch:
+        resolved_branch = _build_manual_task_branch_name(
             run_id=run_id,
+            source_kind=source_kind,
             issue_number=issue_number,
         )
-        _checkout_manual_issue_branch(
+        _checkout_manual_task_branch(
             run_workspace_dir=run_workspace_dir,
             branch_name=resolved_branch,
         )
@@ -2867,14 +2844,22 @@ def _checkout_run_workspace_target(
             )
 
 
-def _build_manual_issue_branch_name(*, run_id: int, issue_number: int | None) -> str:
-    issue_suffix = (
-        issue_number if isinstance(issue_number, int) and issue_number > 0 else "manual"
-    )
-    return f"autofix/run-{run_id}-issue-{issue_suffix}"
+def _build_manual_task_branch_name(
+    *, run_id: int, source_kind: str | None, issue_number: int | None
+) -> str:
+    if is_issue_source_kind(source_kind):
+        issue_suffix = (
+            issue_number
+            if isinstance(issue_number, int) and issue_number > 0
+            else "manual"
+        )
+        return f"autofix/run-{run_id}-issue-{issue_suffix}"
+    if is_text_source_kind(source_kind):
+        return f"autofix/run-{run_id}-task"
+    return f"autofix/run-{run_id}-manual"
 
 
-def _checkout_manual_issue_branch(*, run_workspace_dir: str, branch_name: str) -> None:
+def _checkout_manual_task_branch(*, run_workspace_dir: str, branch_name: str) -> None:
     checkout_result = _run_git_command(
         repo_dir=run_workspace_dir,
         args=["checkout", "-B", branch_name],
@@ -2882,7 +2867,7 @@ def _checkout_manual_issue_branch(*, run_workspace_dir: str, branch_name: str) -
     )
     if checkout_result.returncode != 0:
         _raise_workspace_git_error(
-            "git checkout manual issue branch",
+            "git checkout manual task branch",
             checkout_result,
             cleanup_dir=run_workspace_dir,
         )
@@ -3422,9 +3407,9 @@ def _should_post_run_comment(
 ) -> bool:
     if status == "retry_scheduled":
         return False
-    if _safe_text(run.get("trigger_source")) == "manual_issue":
+    if _safe_text(run.get("trigger_source")) in {"manual_issue", "manual_task"}:
         return False
-    if _safe_text(payload.get("source_kind")) == "issue":
+    if is_non_pr_source_kind(payload.get("source_kind")):
         return False
     pr_number = run.get("pr_number")
     if not isinstance(pr_number, int):
@@ -3461,7 +3446,7 @@ def _resolve_issue_number(run: Mapping[str, Any], payload: Mapping[str, Any]) ->
     raw_issue_number = payload.get("issue_number")
     if isinstance(raw_issue_number, int) and raw_issue_number > 0:
         return raw_issue_number
-    if _safe_text(payload.get("source_kind")) == "issue":
+    if is_issue_source_kind(payload.get("source_kind")):
         raw_pr_number = run.get("pr_number")
         if isinstance(raw_pr_number, int) and raw_pr_number > 0:
             return raw_pr_number
@@ -3469,10 +3454,12 @@ def _resolve_issue_number(run: Mapping[str, Any], payload: Mapping[str, Any]) ->
 
 
 def _resolve_run_pr_number(run: Mapping[str, Any], payload: Mapping[str, Any]) -> int:
-    if _safe_text(payload.get("source_kind")) == "issue":
+    if is_issue_source_kind(payload.get("source_kind")):
         raw_resolved_pr_number = payload.get("resolved_pr_number")
         if isinstance(raw_resolved_pr_number, int) and raw_resolved_pr_number > 0:
             return raw_resolved_pr_number
+        return 0
+    if is_text_source_kind(payload.get("source_kind")):
         return 0
 
     raw_pr_number = run.get("pr_number")
