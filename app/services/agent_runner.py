@@ -34,7 +34,10 @@ from app.services.git_ops import (
     rebase_onto_base,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
-from app.services.feature_flags import resolve_agent_feature_flags
+from app.services.feature_flags import (
+    _normalize_agent_modes as normalize_agent_modes,
+    resolve_agent_feature_flags,
+)
 from app.services.policy import increment_autofix_count
 from app.services.queue import (
     get_run_operator_hints,
@@ -344,7 +347,7 @@ def run_once(
         }
 
     execute = _default_executor if executor is None else executor
-    agent_modes = _normalize_agent_modes(feature_flags.agent_sdks)
+    agent_modes = normalize_agent_modes(feature_flags.agent_sdks)
     check_results: list[dict[str, Any]] = []
     checks_summary = {
         "overall_status": "failed",
@@ -1411,24 +1414,6 @@ def _truncate_check_feedback_text(text: str, limit: int = 1200) -> str:
     if len(sanitized) <= limit:
         return sanitized
     return f"{sanitized[:limit].rstrip()}..."
-
-
-def _normalize_agent_modes(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
-    normalized: list[str] = []
-    for mode in raw_modes:
-        value = mode.strip().lower()
-        if not value:
-            continue
-        if value == "legacy":
-            value = CLAUDE_AGENT_MODE
-        if value not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
-            continue
-        if value in normalized:
-            continue
-        normalized.append(value)
-    if not normalized:
-        return (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
-    return tuple(normalized)
 
 
 def _execute_agent_sdks(

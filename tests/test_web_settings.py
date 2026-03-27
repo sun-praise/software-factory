@@ -29,6 +29,27 @@ def _setup_db(tmp_path: Path) -> Path:
         "NOISE_COMMENT_PATTERNS",
         "MANAGED_REPO_PREFIXES",
         "AUTOFIX_COMMENT_AUTHOR",
+        "AGENT_SDKS",
+        "CLAUDE_AGENT_SDKS",
+        "OPENHANDS_COMMAND",
+        "OPENHANDS_COMMAND_TIMEOUT_SECONDS",
+        "OPENHANDS_WORKTREE_BASE_DIR",
+        "CLAUDE_AGENT_COMMAND",
+        "CLAUDE_AGENT_PROVIDER",
+        "CLAUDE_AGENT_BASE_URL",
+        "CLAUDE_AGENT_MODEL",
+        "CLAUDE_AGENT_RUNTIME",
+        "CLAUDE_AGENT_CONTAINER_IMAGE",
+        "CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS",
+        "CLAUDE_AGENT_WORKTREE_BASE_DIR",
+        "CLAUDE_AGENT_SDK_COMMAND",
+        "CLAUDE_AGENT_SDK_PROVIDER",
+        "CLAUDE_AGENT_SDK_BASE_URL",
+        "CLAUDE_AGENT_SDK_MODEL",
+        "CLAUDE_AGENT_SDK_RUNTIME",
+        "CLAUDE_AGENT_SDK_CONTAINER_IMAGE",
+        "CLAUDE_AGENT_SDK_COMMAND_TIMEOUT_SECONDS",
+        "CLAUDE_AGENT_SDK_WORKTREE_BASE_DIR",
     )
     for key in runtime_env_vars:
         os.environ.pop(key, None)
@@ -53,6 +74,7 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "Managed repo prefixes" in html
     assert "Claude Agent provider" in html
     assert "Claude Agent runtime" in html
+    assert "Primary agent mode" in html
     assert "glm-5" in html
     assert "Zhipu Coding Plan" in html
     assert "software-factory/claude-agent:latest" in html
@@ -67,6 +89,7 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
             data={
                 "agent_openhands_enabled": "on",
                 "agent_claude_agent_enabled": "on",
+                "agent_primary_sdk": "openhands",
                 "github_webhook_debounce_seconds": "45",
                 "max_autofix_per_pr": "7",
                 "max_concurrent_runs": "5",
@@ -110,6 +133,7 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
 
     assert flags["agent.openhands.enabled"] == "1"
     assert flags["agent.claude_agent.enabled"] == "1"
+    assert flags["agent.sdks"] == '["openhands", "claude_agent_sdk"]'
     assert flags["runtime.github_webhook_debounce_seconds"] == "45"
     assert flags["runtime.max_autofix_per_pr"] == "7"
     assert flags["runtime.max_concurrent_runs"] == "5"
@@ -173,3 +197,4 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
     assert active_flags.claude_agent_worktree_base_dir == "tmp/claude-worktrees"
     assert "openhands" in active_flags.agent_sdks
     assert "claude_agent_sdk" in active_flags.agent_sdks
+    assert active_flags.agent_sdks == ("openhands", "claude_agent_sdk")

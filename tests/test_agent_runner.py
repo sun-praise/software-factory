@@ -21,9 +21,9 @@ from app.services.agent_runner import (
     _render_claude_stream_record,
     _run_claude_agent,
     _sanitize_log_text,
-    _normalize_agent_modes,
     run_once,
 )
+from app.services.feature_flags import _normalize_agent_modes
 from app.services.queue import (
     append_run_operator_hint,
     claim_next_queued_run,
@@ -2066,10 +2066,8 @@ def test_normalize_agent_modes() -> None:
         "claude_agent_sdk",
         "openhands",
     )
-    assert _normalize_agent_modes(("unknown", "", "other")) == (
-        "claude_agent_sdk",
-        "openhands",
-    )
+    # No recognized modes → empty tuple; callers (e.g. agent_runner) add defaults
+    assert _normalize_agent_modes(("unknown", "", "other")) == ()
 
 
 def test_execute_agent_sdks_falls_back_to_claude(

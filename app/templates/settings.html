@@ -142,6 +142,14 @@
             </label>
             <p class="muted tiny">Default mode from environment: {{ default_agent_sdks }}</p>
 
+            <label for="agent_primary_sdk">Primary agent mode</label>
+            <select id="agent_primary_sdk" name="agent_primary_sdk">
+              <option value="claude_agent_sdk" {% if agent_primary_sdk == "claude_agent_sdk" %}selected{% endif %}>Claude Agent SDK</option>
+              <option value="openhands" {% if agent_primary_sdk == "openhands" %}selected{% endif %}>OpenHands</option>
+            </select>
+            <p class="muted tiny">When both modes are enabled, this one runs first. Environment overrides still take precedence over DB settings.</p>
+            <p class="muted tiny">At least one agent mode must remain enabled. If both checkboxes are cleared, Claude Agent SDK will be automatically re-enabled on save.</p>
+
             <label for="openhands_command">OpenHands command</label>
             <input
               type="text"
