@@ -47,6 +47,7 @@ from app.services.queue import (
 )
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.run_hints import parse_execution_hints
+from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
 
 
 Executor = Callable[[str, str], Any]
@@ -227,8 +228,10 @@ def run_once(
     workspace_dir: str,
     executor: Executor | None = None,
     ops: RunnerOps | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
+    runtime_settings = runtime_settings or resolve_runtime_settings(conn)
     active_ops = ops or RunnerOps()
     runtime_root = _validate_runtime_root(workspace_dir)
     run_id = int(run["id"])
@@ -297,9 +300,9 @@ def run_once(
     initial_execution_hints = parse_execution_hints(initial_operator_hints)
     # Blank `check_command:` lines are ignored by the parser, so an empty tuple
     # means "no override" and should fall back to the project-type defaults.
-    commands = list(initial_execution_hints.check_commands) or active_ops.collect_check_commands(
-        project_type
-    )
+    commands = list(
+        initial_execution_hints.check_commands
+    ) or active_ops.collect_check_commands(project_type)
     cleanup_archived_logs(
         base_dir=runtime_root,
         archive_subdir=settings.log_archive_subdir,
@@ -403,7 +406,7 @@ def run_once(
         repo=repo,
         pr_number=pr_number,
         lock_owner=worker_id,
-        lock_ttl_seconds=settings.pr_lock_ttl_seconds,
+        lock_ttl_seconds=runtime_settings.pr_lock_ttl_seconds,
         run_id=run_id,
     )
     if not lock_acquired:
@@ -3021,11 +3024,13 @@ def _finish_failed_run(
     logs_path: str,
     *,
     error_code: str,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> tuple[str, str]:
     settings = get_settings()
+    runtime_settings = runtime_settings or resolve_runtime_settings(conn)
     config = RetryConfig(
-        base_delay_seconds=settings.retry_backoff_base_seconds,
-        max_delay_seconds=settings.retry_backoff_max_seconds,
+        base_delay_seconds=runtime_settings.retry_backoff_base_seconds,
+        max_delay_seconds=runtime_settings.retry_backoff_max_seconds,
         non_retryable_error_codes=set(settings.non_retryable_error_codes),
     )
     plan = schedule_retry(

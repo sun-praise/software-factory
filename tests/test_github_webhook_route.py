@@ -290,3 +290,63 @@ def test_check_run_event_is_recorded_without_queueing_and_enriches_next_run(
             "head_sha": "abc123",
         }
     ]
+
+
+def test_webhook_uses_db_backed_runtime_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    _get_debounce_backend.cache_clear()
+    db_path = tmp_path / "software_factory.db"
+
+    import os
+
+    os.environ["DB_PATH"] = str(db_path)
+    os.environ["GITHUB_WEBHOOK_SECRET"] = ""
+    os.environ.pop("GITHUB_WEBHOOK_DEBOUNCE_SECONDS", None)
+    os.environ.pop("MAX_RETRY_ATTEMPTS", None)
+    os.environ.pop("MANAGED_REPO_PREFIXES", None)
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123"}},
+        "review": {"id": 2001, "body": "Please fix this"},
+        "sender": {"login": "reviewer"},
+    }
+
+    with TestClient(app) as client:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+                ("runtime.github_webhook_debounce_seconds", "42"),
+            )
+            conn.execute(
+                "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+                ("runtime.max_retry_attempts", "7"),
+            )
+            conn.execute(
+                "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+                ("runtime.managed_repo_prefixes", '["acme/"]'),
+            )
+            conn.commit()
+
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={"X-GitHub-Event": "pull_request_review"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["queue_status"] == "queued"
+    assert response.json()["debounce_window_seconds"] == 42.0
+    run_id = response.json()["queued_run_id"]
+    assert isinstance(run_id, int)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT max_attempts FROM autofix_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+
+    assert row is not None
+    assert int(row["max_attempts"]) == 7

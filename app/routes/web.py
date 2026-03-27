@@ -16,11 +16,16 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.db import connect_db
-from app.config import get_settings
 from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
     build_feature_flag_context,
     save_agent_feature_flags,
+)
+from app.services.runtime_settings import (
+    build_runtime_settings_context,
+    parse_settings_list_form_value,
+    resolve_runtime_settings,
+    save_runtime_settings,
 )
 from app.schemas.issues import (
     IssueSubmissionRequest,
@@ -812,6 +817,7 @@ def _enqueue_issue_fix(
     final_idempotency_key: str | None = idempotency_key
 
     with connect_db() as conn:
+        runtime_settings = resolve_runtime_settings(conn)
         if source_url and target.url_kind == "issue":
             existing_run = _find_existing_run_by_source_url(conn, source_url)
             if existing_run is not None:
@@ -855,7 +861,10 @@ def _enqueue_issue_fix(
             head_sha=head_sha,
         )
         remaining_quota = get_remaining_autofix_quota(
-            conn, target.repo, target.pr_number
+            conn,
+            target.repo,
+            target.pr_number,
+            max_autofix_per_pr=runtime_settings.max_autofix_per_pr,
         )
         if remaining_quota == 0:
             queue_status = "autofix_limit_reached"
@@ -868,7 +877,7 @@ def _enqueue_issue_fix(
                 normalized_review_json=normalized_review,
                 trigger_source="manual_issue",
                 idempotency_key=final_idempotency_key,
-                max_attempts=get_settings().max_retry_attempts,
+                max_attempts=runtime_settings.max_retry_attempts,
             )
             queue_status = "queued" if run_id is not None else "duplicate_task"
 
@@ -1070,6 +1079,7 @@ async def settings_page(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
     with connect_db() as conn:
         flag_context = build_feature_flag_context(conn)
+        runtime_context = build_runtime_settings_context(conn)
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -1078,6 +1088,7 @@ async def settings_page(request: Request) -> HTMLResponse:
             "title": "Software Factory - Settings",
             "saved": request.query_params.get("saved") == "1",
             **flag_context,
+            **runtime_context,
         },
     )
 
@@ -1094,9 +1105,7 @@ async def save_settings(request: Request) -> RedirectResponse:
     claude_agent_base_url = str(
         form.get("claude_agent_base_url", "https://open.bigmodel.cn/api/anthropic")
     ).strip()
-    claude_agent_model = str(
-        form.get("claude_agent_model", "glm-5")
-    ).strip()
+    claude_agent_model = str(form.get("claude_agent_model", "glm-5")).strip()
     claude_agent_runtime = str(form.get("claude_agent_runtime", "host")).strip()
     claude_agent_container_image = str(
         form.get("claude_agent_container_image", "")
@@ -1120,7 +1129,73 @@ async def save_settings(request: Request) -> RedirectResponse:
     except (TypeError, ValueError):
         claude_agent_command_timeout_seconds = 1800
 
+    runtime_github_webhook_debounce_seconds = _parse_form_int(
+        form.get("github_webhook_debounce_seconds"),
+        default=60,
+        minimum=1,
+    )
+    runtime_max_autofix_per_pr = _parse_form_int(
+        form.get("max_autofix_per_pr"),
+        default=3,
+        minimum=0,
+    )
+    runtime_max_concurrent_runs = _parse_form_int(
+        form.get("max_concurrent_runs"),
+        default=3,
+        minimum=1,
+    )
+    runtime_stale_run_timeout_seconds = _parse_form_int(
+        form.get("stale_run_timeout_seconds"),
+        default=900,
+        minimum=1,
+    )
+    runtime_pr_lock_ttl_seconds = _parse_form_int(
+        form.get("pr_lock_ttl_seconds"),
+        default=900,
+        minimum=1,
+    )
+    runtime_max_retry_attempts = _parse_form_int(
+        form.get("max_retry_attempts"),
+        default=3,
+        minimum=1,
+    )
+    runtime_retry_backoff_base_seconds = _parse_form_int(
+        form.get("retry_backoff_base_seconds"),
+        default=30,
+        minimum=1,
+    )
+    runtime_retry_backoff_max_seconds = _parse_form_int(
+        form.get("retry_backoff_max_seconds"),
+        default=1800,
+        minimum=1,
+    )
+    runtime_bot_logins = parse_settings_list_form_value(form.get("bot_logins_text"))
+    runtime_noise_comment_patterns = parse_settings_list_form_value(
+        form.get("noise_comment_patterns_text")
+    )
+    runtime_managed_repo_prefixes = parse_settings_list_form_value(
+        form.get("managed_repo_prefixes_text")
+    )
+    runtime_autofix_comment_author = str(
+        form.get("autofix_comment_author", "software-factory[bot]")
+    ).strip()
+
     with connect_db() as conn:
+        save_runtime_settings(
+            conn,
+            github_webhook_debounce_seconds=runtime_github_webhook_debounce_seconds,
+            max_autofix_per_pr=runtime_max_autofix_per_pr,
+            max_concurrent_runs=runtime_max_concurrent_runs,
+            stale_run_timeout_seconds=runtime_stale_run_timeout_seconds,
+            pr_lock_ttl_seconds=runtime_pr_lock_ttl_seconds,
+            max_retry_attempts=runtime_max_retry_attempts,
+            retry_backoff_base_seconds=runtime_retry_backoff_base_seconds,
+            retry_backoff_max_seconds=runtime_retry_backoff_max_seconds,
+            bot_logins=runtime_bot_logins,
+            noise_comment_patterns=runtime_noise_comment_patterns,
+            managed_repo_prefixes=runtime_managed_repo_prefixes,
+            autofix_comment_author=runtime_autofix_comment_author,
+        )
         save_agent_feature_flags(
             conn,
             openhands_enabled=openhands_enabled,
@@ -1139,6 +1214,14 @@ async def save_settings(request: Request) -> RedirectResponse:
         )
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)
+
+
+def _parse_form_int(value: Any, *, default: int, minimum: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        return default
+    return parsed if parsed >= minimum else default
 
 
 @router.get("/issues", response_class=HTMLResponse)

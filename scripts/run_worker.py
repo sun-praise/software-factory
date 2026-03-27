@@ -20,6 +20,7 @@ from app.services.queue import claim_next_queued_run, mark_run_finished  # noqa:
 from app.services.queue import recover_stale_runs  # noqa: E402
 from app.services.retry import RetryConfig, schedule_retry  # noqa: E402
 from app.services.logging_config import get_run_log_path  # noqa: E402
+from app.services.runtime_settings import resolve_runtime_settings  # noqa: E402
 
 
 _STOP_WORKER = False
@@ -44,15 +45,21 @@ def _handle_stop_signal(signum: int, _frame: object) -> None:
 def _process_one(workspace_dir: str) -> bool:
     settings = get_settings()
     with connect_db() as conn:
+        runtime_settings = resolve_runtime_settings(conn)
         run = claim_next_queued_run(
             conn,
             worker_id=settings.worker_id,
-            max_running_runs=settings.max_concurrent_runs,
+            max_running_runs=runtime_settings.max_concurrent_runs,
         )
         if run is None:
             return False
         try:
-            run_once(conn=conn, run=run, workspace_dir=workspace_dir)
+            run_once(
+                conn=conn,
+                run=run,
+                workspace_dir=workspace_dir,
+                runtime_settings=runtime_settings,
+            )
         except Exception as exc:
             run_id = int(run["id"])
             crash_log = get_run_log_path(
@@ -64,8 +71,8 @@ def _process_one(workspace_dir: str) -> bool:
             crash_log.write_text(traceback.format_exc(), encoding="utf-8")
             error_summary = f"worker_exception: {type(exc).__name__}: {exc}"
             config = RetryConfig(
-                base_delay_seconds=settings.retry_backoff_base_seconds,
-                max_delay_seconds=settings.retry_backoff_max_seconds,
+                base_delay_seconds=runtime_settings.retry_backoff_base_seconds,
+                max_delay_seconds=runtime_settings.retry_backoff_max_seconds,
             )
             plan = schedule_retry(
                 conn,
@@ -95,9 +102,10 @@ def _process_one(workspace_dir: str) -> bool:
 def _recover_stale_runs() -> int:
     settings = get_settings()
     with connect_db() as conn:
+        runtime_settings = resolve_runtime_settings(conn)
         return recover_stale_runs(
             conn,
-            stale_after_seconds=settings.stale_run_timeout_seconds,
+            stale_after_seconds=runtime_settings.stale_run_timeout_seconds,
             worker_id=settings.worker_id,
         )
 

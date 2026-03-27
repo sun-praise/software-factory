@@ -22,6 +22,19 @@ def test_process_one_marks_failed_when_run_once_raises(
     monkeypatch.setattr(run_worker, "connect_db", lambda: _ConnContext())
     monkeypatch.setattr(
         run_worker,
+        "resolve_runtime_settings",
+        lambda conn: type(
+            "RuntimeSettings",
+            (),
+            {
+                "max_concurrent_runs": 3,
+                "retry_backoff_base_seconds": 30,
+                "retry_backoff_max_seconds": 1800,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        run_worker,
         "claim_next_queued_run",
         lambda conn, **kwargs: {"id": 9},
     )
@@ -82,11 +95,18 @@ def test_recover_stale_runs_uses_worker_settings(monkeypatch) -> None:
             return False
 
     class _Settings:
-        stale_run_timeout_seconds = 123
         worker_id = "worker-a"
+
+    class _RuntimeSettings:
+        stale_run_timeout_seconds = 123
 
     monkeypatch.setattr(run_worker, "connect_db", lambda: _ConnContext())
     monkeypatch.setattr(run_worker, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        run_worker,
+        "resolve_runtime_settings",
+        lambda conn: _RuntimeSettings(),
+    )
 
     def _recover(conn, *, stale_after_seconds, worker_id):
         calls["stale_after_seconds"] = stale_after_seconds

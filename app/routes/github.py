@@ -29,6 +29,7 @@ from app.services.github_signature import (
     SignatureStatus,
     verify_github_signature,
 )
+from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
 
 
 router = APIRouter(prefix="/github", tags=["github"])
@@ -52,8 +53,7 @@ async def _read_payload(request: Request) -> dict[str, Any]:
 
 @lru_cache
 def _get_debounce_backend() -> InMemoryDebounceBackend:
-    window_seconds = get_settings().github_webhook_debounce_seconds
-    return InMemoryDebounceBackend(window_seconds=window_seconds)
+    return InMemoryDebounceBackend(window_seconds=60)
 
 
 def _should_enqueue_for_event(event_type: str) -> bool:
@@ -70,10 +70,16 @@ def _get_filter_reason_for_event(
     repo: str | None,
     actor: str | None,
     body: str | None,
+    runtime_settings: RuntimeSettings,
 ) -> str | None:
     if _should_enqueue_for_event(event_type):
-        return get_filter_reason(repo, actor=actor, body=body)
-    return get_filter_reason(repo)
+        return get_filter_reason(
+            repo,
+            actor=actor,
+            body=body,
+            runtime_settings=runtime_settings,
+        )
+    return get_filter_reason(repo, runtime_settings=runtime_settings)
 
 
 @router.post("/webhook")
@@ -110,43 +116,45 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     if not event.head_sha and event.repo and event.pr_number:
         event, payload = _fill_pr_info_from_api(event, payload)
 
-    should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
-    event_body = extract_event_body(event_type, payload)
-    if _is_autofix_summary_comment(event_type=event_type, body=event_body):
-        return {
-            "ok": True,
-            "message": "GitHub webhook received",
-            "event_type": event_type,
-            "ignored": True,
-            "reason": "autofix_summary_comment",
-            "signature": signature_result.status,
-            "repo": event.repo,
-            "pr_number": event.pr_number,
-        }
-    filter_reason = _get_filter_reason_for_event(
-        event_type,
-        repo=event.repo,
-        actor=None if should_ignore_actor else event.actor,
-        body=event_body,
-    )
-    if filter_reason is not None:
-        return {
-            "ok": True,
-            "message": "GitHub webhook received",
-            "event_type": event_type,
-            "ignored": True,
-            "reason": filter_reason,
-            "signature": signature_result.status,
-            "repo": event.repo,
-            "pr_number": event.pr_number,
-        }
-
     run_id: int | None = None
     idempotency_key: str | None = None
     queue_status = "not_queued"
     remaining_quota: int | None = None
+    runtime_settings: RuntimeSettings | None = None
+    should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
+    event_body = extract_event_body(event_type, payload)
     try:
         with connect_db() as conn:
+            runtime_settings = resolve_runtime_settings(conn)
+            if _is_autofix_summary_comment(event_type=event_type, body=event_body):
+                return {
+                    "ok": True,
+                    "message": "GitHub webhook received",
+                    "event_type": event_type,
+                    "ignored": True,
+                    "reason": "autofix_summary_comment",
+                    "signature": signature_result.status,
+                    "repo": event.repo,
+                    "pr_number": event.pr_number,
+                }
+            filter_reason = _get_filter_reason_for_event(
+                event_type,
+                repo=event.repo,
+                actor=None if should_ignore_actor else event.actor,
+                body=event_body,
+                runtime_settings=runtime_settings,
+            )
+            if filter_reason is not None:
+                return {
+                    "ok": True,
+                    "message": "GitHub webhook received",
+                    "event_type": event_type,
+                    "ignored": True,
+                    "reason": filter_reason,
+                    "signature": signature_result.status,
+                    "repo": event.repo,
+                    "pr_number": event.pr_number,
+                }
             # 先调用 reset 函数是为了在 SHA 变更时重置 autofix 计数
             # 对于新 PR（数据库无记录），reset 返回 False 是预期行为
             # head_sha 的更新由后续 ensure_pull_request_row 统一处理
@@ -184,6 +192,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                         conn,
                         event.repo,
                         event.pr_number,
+                        max_autofix_per_pr=runtime_settings.max_autofix_per_pr,
                     )
                     if remaining_quota == 0:
                         queue_status = "autofix_limit_reached"
@@ -196,7 +205,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                             normalized_review_json=normalized_review,
                             trigger_source="github_webhook",
                             idempotency_key=idempotency_key,
-                            max_attempts=get_settings().max_retry_attempts,
+                            max_attempts=runtime_settings.max_retry_attempts,
                         )
                         queue_status = (
                             "queued" if run_id is not None else "duplicate_task"
@@ -215,7 +224,13 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             },
         ) from exc
 
+    if runtime_settings is None:
+        raise RuntimeError("runtime settings were not resolved")
+
     debounce_backend = _get_debounce_backend()
+    debounce_backend.window_seconds = float(
+        runtime_settings.github_webhook_debounce_seconds
+    )
     debounce_backend.record_event(repo=event.repo, pr_number=event.pr_number)
 
     return {
@@ -465,23 +480,33 @@ def _fill_pr_info_from_api(event, payload):
     log = logging.getLogger("webhook_debug")
     token = get_settings().github_token
     if not token:
-        log.warning("GITHUB_TOKEN not set, cannot fetch PR info for %s#%s",
-                     event.repo, event.pr_number)
+        log.warning(
+            "GITHUB_TOKEN not set, cannot fetch PR info for %s#%s",
+            event.repo,
+            event.pr_number,
+        )
         return event, payload
 
     url = f"https://api.github.com/repos/{event.repo}/pulls/{event.pr_number}"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    })
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             pr_data = json.loads(resp.read().decode("utf-8"))
         head_sha = pr_data.get("head", {}).get("sha")
         if head_sha:
-            log.info("Fetched head_sha=%s branch=%s for %s PR#%s",
-                     head_sha, pr_data.get("head", {}).get("ref"),
-                     event.repo, event.pr_number)
+            log.info(
+                "Fetched head_sha=%s branch=%s for %s PR#%s",
+                head_sha,
+                pr_data.get("head", {}).get("ref"),
+                event.repo,
+                event.pr_number,
+            )
             event = dataclasses.replace(event, head_sha=head_sha)
             payload = dict(payload)
             payload["pull_request"] = pr_data
