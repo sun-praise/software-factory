@@ -33,6 +33,8 @@ class DebounceBackend(Protocol):
 
     def pull_ready(self, now: float | None = None) -> set[DebounceKey]: ...
 
+    def set_window_seconds(self, window_seconds: float) -> None: ...
+
 
 class InMemoryDebounceBackend:
     """Single-process debounce backend keyed by (repo, pr_number)."""
@@ -58,6 +60,12 @@ class InMemoryDebounceBackend:
             )
         return key
 
+    def set_window_seconds(self, window_seconds: float) -> None:
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be greater than 0")
+        with self._lock:
+            self.window_seconds = float(window_seconds)
+
     def is_ready(
         self,
         repo: str,
@@ -67,19 +75,21 @@ class InMemoryDebounceBackend:
         key = DebounceKey(repo=repo, pr_number=pr_number)
         with self._lock:
             last_event_at = self._latest_event_at.get(key)
+            window_seconds = self.window_seconds
         if last_event_at is None:
             return False
 
         current = monotonic() if now is None else now
-        return current - last_event_at >= self.window_seconds
+        return current - last_event_at >= window_seconds
 
     def pull_ready(self, now: float | None = None) -> set[DebounceKey]:
         current = monotonic() if now is None else now
         with self._lock:
+            window_seconds = self.window_seconds
             ready: set[DebounceKey] = {
                 key
                 for key, last_event_at in self._latest_event_at.items()
-                if current - last_event_at >= self.window_seconds
+                if current - last_event_at >= window_seconds
             }
 
             for key in ready:

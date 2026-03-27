@@ -21,6 +21,103 @@
       <section>
         <form method="post" action="/settings" class="settings-form">
           <fieldset>
+            <legend>Runtime Controls</legend>
+
+            <label for="github_webhook_debounce_seconds">GitHub webhook debounce window (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="github_webhook_debounce_seconds"
+              name="github_webhook_debounce_seconds"
+              value="{{ github_webhook_debounce_seconds }}"
+            >
+
+            <label for="max_autofix_per_pr">Max autofix runs per PR</label>
+            <input
+              type="number"
+              min="0"
+              id="max_autofix_per_pr"
+              name="max_autofix_per_pr"
+              value="{{ max_autofix_per_pr }}"
+            >
+
+            <label for="max_concurrent_runs">Max concurrent runs</label>
+            <input
+              type="number"
+              min="1"
+              id="max_concurrent_runs"
+              name="max_concurrent_runs"
+              value="{{ max_concurrent_runs }}"
+            >
+
+            <label for="stale_run_timeout_seconds">Stale run timeout (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="stale_run_timeout_seconds"
+              name="stale_run_timeout_seconds"
+              value="{{ stale_run_timeout_seconds }}"
+            >
+
+            <label for="pr_lock_ttl_seconds">PR lock TTL (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="pr_lock_ttl_seconds"
+              name="pr_lock_ttl_seconds"
+              value="{{ pr_lock_ttl_seconds }}"
+            >
+
+            <label for="max_retry_attempts">Max retry attempts</label>
+            <input
+              type="number"
+              min="1"
+              id="max_retry_attempts"
+              name="max_retry_attempts"
+              value="{{ max_retry_attempts }}"
+            >
+
+            <label for="retry_backoff_base_seconds">Retry backoff base (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="retry_backoff_base_seconds"
+              name="retry_backoff_base_seconds"
+              value="{{ retry_backoff_base_seconds }}"
+            >
+
+            <label for="retry_backoff_max_seconds">Retry backoff max (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="retry_backoff_max_seconds"
+              name="retry_backoff_max_seconds"
+              value="{{ retry_backoff_max_seconds }}"
+            >
+
+            <label for="autofix_comment_author">Autofix comment author</label>
+            <input
+              type="text"
+              id="autofix_comment_author"
+              name="autofix_comment_author"
+              value="{{ autofix_comment_author }}"
+              autocomplete="off"
+            >
+
+            <label for="bot_logins_text">Bot logins</label>
+            <textarea id="bot_logins_text" name="bot_logins_text" rows="4">{{ bot_logins_text }}</textarea>
+            <p class="muted tiny">One login per line.</p>
+
+            <label for="noise_comment_patterns_text">Noise comment patterns</label>
+            <textarea id="noise_comment_patterns_text" name="noise_comment_patterns_text" rows="4">{{ noise_comment_patterns_text }}</textarea>
+            <p class="muted tiny">One regex pattern per line.</p>
+
+            <label for="managed_repo_prefixes_text">Managed repo prefixes</label>
+            <textarea id="managed_repo_prefixes_text" name="managed_repo_prefixes_text" rows="4">{{ managed_repo_prefixes_text }}</textarea>
+            <p class="muted tiny">One repo prefix per line, for example `acme/`.</p>
+          </fieldset>
+
+          <fieldset>
             <legend>Agent Runner</legend>
 
             <label class="switch">

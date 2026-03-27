@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.config import get_settings
+from app.services.runtime_settings import resolve_runtime_settings
 
 
 def ensure_pull_request_row(
@@ -45,7 +45,7 @@ def get_remaining_autofix_quota(
     *,
     max_autofix_per_pr: int | None = None,
 ) -> int:
-    limit = _resolve_max_autofix_per_pr(max_autofix_per_pr)
+    limit = _resolve_max_autofix_per_pr(conn, max_autofix_per_pr)
     count = get_autofix_count(conn, repo, pr_number)
     remaining = limit - count
     return remaining if remaining > 0 else 0
@@ -99,8 +99,15 @@ def increment_autofix_count(
     return get_autofix_count(conn, repo, pr_number)
 
 
-def _resolve_max_autofix_per_pr(value: int | None) -> int:
-    limit = value if value is not None else get_settings().max_autofix_per_pr
+def _resolve_max_autofix_per_pr(
+    conn: sqlite3.Connection,
+    value: int | None,
+) -> int:
+    limit = (
+        value
+        if value is not None
+        else resolve_runtime_settings(conn).max_autofix_per_pr
+    )
     if limit < 0:
         raise ValueError("max_autofix_per_pr must be non-negative")
     return limit

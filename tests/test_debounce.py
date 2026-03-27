@@ -40,3 +40,12 @@ def test_trigger_consumes_and_new_event_resets_window() -> None:
     assert backend.is_ready("acme/repo", 101, now=220.0) is False
     assert backend.is_ready("acme/repo", 101, now=230.0) is True
     assert backend.pull_ready(now=230.0) == {DebounceKey("acme/repo", 101)}
+
+
+def test_window_seconds_can_be_updated_safely() -> None:
+    backend = InMemoryDebounceBackend(window_seconds=60)
+
+    backend.record_event("acme/repo", 101, arrived_at=100.0)
+    backend.set_window_seconds(30)
+
+    assert backend.is_ready("acme/repo", 101, now=130.0) is True
