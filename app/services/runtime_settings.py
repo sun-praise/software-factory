@@ -249,15 +249,14 @@ def save_runtime_settings(
         (RUNTIME_AUTOFIX_COMMENT_AUTHOR_KEY, str(autofix_comment_author).strip()),
     ]
 
-    for key, value in values:
-        conn.execute(
-            """
-            INSERT INTO app_feature_flags (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-            """,
-            (key, value),
-        )
+    conn.executemany(
+        """
+        INSERT INTO app_feature_flags (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        """,
+        values,
+    )
     conn.commit()
 
 

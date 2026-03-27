@@ -16,6 +16,22 @@ def _setup_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "software_factory.db"
     import os
 
+    runtime_env_vars = (
+        "GITHUB_WEBHOOK_DEBOUNCE_SECONDS",
+        "MAX_AUTOFIX_PER_PR",
+        "MAX_CONCURRENT_RUNS",
+        "STALE_RUN_TIMEOUT_SECONDS",
+        "PR_LOCK_TTL_SECONDS",
+        "MAX_RETRY_ATTEMPTS",
+        "RETRY_BACKOFF_BASE_SECONDS",
+        "RETRY_BACKOFF_MAX_SECONDS",
+        "BOT_LOGINS",
+        "NOISE_COMMENT_PATTERNS",
+        "MANAGED_REPO_PREFIXES",
+        "AUTOFIX_COMMENT_AUTHOR",
+    )
+    for key in runtime_env_vars:
+        os.environ.pop(key, None)
     os.environ["DB_PATH"] = str(db_path)
     init_db()
     return db_path

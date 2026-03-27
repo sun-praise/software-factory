@@ -224,11 +224,8 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             },
         ) from exc
 
-    if runtime_settings is None:
-        raise RuntimeError("runtime settings were not resolved")
-
     debounce_backend = _get_debounce_backend()
-    debounce_backend.window_seconds = float(
+    debounce_backend.set_window_seconds(
         runtime_settings.github_webhook_debounce_seconds
     )
     debounce_backend.record_event(repo=event.repo, pr_number=event.pr_number)

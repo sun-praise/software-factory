@@ -28,12 +28,12 @@ def is_bot_actor(
     if login.endswith("[bot]"):
         return True
     configured_logins = _normalize_values(
-        bot_logins
-        if bot_logins is not None
-        else (
-            runtime_settings.bot_logins
-            if runtime_settings is not None
-            else get_settings().bot_logins
+        _resolve_runtime_setting(
+            explicit_value=bot_logins,
+            runtime_value=(
+                runtime_settings.bot_logins if runtime_settings is not None else None
+            ),
+            default_value=get_settings().bot_logins,
         )
     )
     return login in configured_logins
@@ -51,12 +51,14 @@ def is_noise_actor(
         return False
 
     author = _normalize_value(
-        autofix_comment_author
-        if autofix_comment_author is not None
-        else (
-            runtime_settings.autofix_comment_author
-            if runtime_settings is not None
-            else get_settings().autofix_comment_author
+        _resolve_runtime_setting(
+            explicit_value=autofix_comment_author,
+            runtime_value=(
+                runtime_settings.autofix_comment_author
+                if runtime_settings is not None
+                else None
+            ),
+            default_value=get_settings().autofix_comment_author,
         )
     )
     if author and login == author:
@@ -79,13 +81,15 @@ def is_noise_comment(
     if not text:
         return False
 
-    patterns = (
-        tuple(noise_comment_patterns)
-        if noise_comment_patterns is not None
-        else (
-            runtime_settings.noise_comment_patterns
-            if runtime_settings is not None
-            else get_settings().noise_comment_patterns
+    patterns = tuple(
+        _resolve_runtime_setting(
+            explicit_value=noise_comment_patterns,
+            runtime_value=(
+                runtime_settings.noise_comment_patterns
+                if runtime_settings is not None
+                else None
+            ),
+            default_value=get_settings().noise_comment_patterns,
         )
     )
     for pattern in patterns:
@@ -105,12 +109,14 @@ def is_managed_repo(
         return False
 
     prefixes = _normalize_values(
-        managed_repo_prefixes
-        if managed_repo_prefixes is not None
-        else (
-            runtime_settings.managed_repo_prefixes
-            if runtime_settings is not None
-            else get_settings().managed_repo_prefixes
+        _resolve_runtime_setting(
+            explicit_value=managed_repo_prefixes,
+            runtime_value=(
+                runtime_settings.managed_repo_prefixes
+                if runtime_settings is not None
+                else None
+            ),
+            default_value=get_settings().managed_repo_prefixes,
         )
     )
     if not prefixes:
@@ -185,6 +191,19 @@ def _normalize_values(values: Iterable[str]) -> tuple[str, ...]:
         if item is not None:
             normalized.append(item)
     return tuple(normalized)
+
+
+def _resolve_runtime_setting(
+    *,
+    explicit_value,
+    runtime_value,
+    default_value,
+):
+    if explicit_value is not None:
+        return explicit_value
+    if runtime_value is not None:
+        return runtime_value
+    return default_value
 
 
 def _normalize_value(value: str | None) -> str | None:

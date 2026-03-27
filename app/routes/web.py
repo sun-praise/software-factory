@@ -48,6 +48,17 @@ _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_schedule
 
 _TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
 
+_RUNTIME_INT_FIELD_SPECS: dict[str, tuple[int, int]] = {
+    "github_webhook_debounce_seconds": (60, 1),
+    "max_autofix_per_pr": (3, 0),
+    "max_concurrent_runs": (3, 1),
+    "stale_run_timeout_seconds": (900, 1),
+    "pr_lock_ttl_seconds": (900, 1),
+    "max_retry_attempts": (3, 1),
+    "retry_backoff_base_seconds": (30, 1),
+    "retry_backoff_max_seconds": (1800, 1),
+}
+
 
 def _parse_bool_like(value: str | None) -> bool:
     if value is None:
@@ -1129,46 +1140,10 @@ async def save_settings(request: Request) -> RedirectResponse:
     except (TypeError, ValueError):
         claude_agent_command_timeout_seconds = 1800
 
-    runtime_github_webhook_debounce_seconds = _parse_form_int(
-        form.get("github_webhook_debounce_seconds"),
-        default=60,
-        minimum=1,
-    )
-    runtime_max_autofix_per_pr = _parse_form_int(
-        form.get("max_autofix_per_pr"),
-        default=3,
-        minimum=0,
-    )
-    runtime_max_concurrent_runs = _parse_form_int(
-        form.get("max_concurrent_runs"),
-        default=3,
-        minimum=1,
-    )
-    runtime_stale_run_timeout_seconds = _parse_form_int(
-        form.get("stale_run_timeout_seconds"),
-        default=900,
-        minimum=1,
-    )
-    runtime_pr_lock_ttl_seconds = _parse_form_int(
-        form.get("pr_lock_ttl_seconds"),
-        default=900,
-        minimum=1,
-    )
-    runtime_max_retry_attempts = _parse_form_int(
-        form.get("max_retry_attempts"),
-        default=3,
-        minimum=1,
-    )
-    runtime_retry_backoff_base_seconds = _parse_form_int(
-        form.get("retry_backoff_base_seconds"),
-        default=30,
-        minimum=1,
-    )
-    runtime_retry_backoff_max_seconds = _parse_form_int(
-        form.get("retry_backoff_max_seconds"),
-        default=1800,
-        minimum=1,
-    )
+    runtime_int_values = {
+        field: _parse_form_int(form.get(field), default=default, minimum=minimum)
+        for field, (default, minimum) in _RUNTIME_INT_FIELD_SPECS.items()
+    }
     runtime_bot_logins = parse_settings_list_form_value(form.get("bot_logins_text"))
     runtime_noise_comment_patterns = parse_settings_list_form_value(
         form.get("noise_comment_patterns_text")
@@ -1183,14 +1158,16 @@ async def save_settings(request: Request) -> RedirectResponse:
     with connect_db() as conn:
         save_runtime_settings(
             conn,
-            github_webhook_debounce_seconds=runtime_github_webhook_debounce_seconds,
-            max_autofix_per_pr=runtime_max_autofix_per_pr,
-            max_concurrent_runs=runtime_max_concurrent_runs,
-            stale_run_timeout_seconds=runtime_stale_run_timeout_seconds,
-            pr_lock_ttl_seconds=runtime_pr_lock_ttl_seconds,
-            max_retry_attempts=runtime_max_retry_attempts,
-            retry_backoff_base_seconds=runtime_retry_backoff_base_seconds,
-            retry_backoff_max_seconds=runtime_retry_backoff_max_seconds,
+            github_webhook_debounce_seconds=runtime_int_values[
+                "github_webhook_debounce_seconds"
+            ],
+            max_autofix_per_pr=runtime_int_values["max_autofix_per_pr"],
+            max_concurrent_runs=runtime_int_values["max_concurrent_runs"],
+            stale_run_timeout_seconds=runtime_int_values["stale_run_timeout_seconds"],
+            pr_lock_ttl_seconds=runtime_int_values["pr_lock_ttl_seconds"],
+            max_retry_attempts=runtime_int_values["max_retry_attempts"],
+            retry_backoff_base_seconds=runtime_int_values["retry_backoff_base_seconds"],
+            retry_backoff_max_seconds=runtime_int_values["retry_backoff_max_seconds"],
             bot_logins=runtime_bot_logins,
             noise_comment_patterns=runtime_noise_comment_patterns,
             managed_repo_prefixes=runtime_managed_repo_prefixes,
