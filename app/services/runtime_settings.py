@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from pydantic import field_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,21 @@ RUNTIME_AUTOFIX_COMMENT_AUTHOR_KEY = "runtime.autofix_comment_author"
 
 
 _LOG = logging.getLogger(__name__)
+_LIST_OVERRIDE_FIELDS = (
+    "bot_logins",
+    "noise_comment_patterns",
+    "managed_repo_prefixes",
+)
+_POSITIVE_INT_OVERRIDE_FIELDS = (
+    "github_webhook_debounce_seconds",
+    "max_concurrent_runs",
+    "stale_run_timeout_seconds",
+    "pr_lock_ttl_seconds",
+    "max_retry_attempts",
+    "retry_backoff_base_seconds",
+    "retry_backoff_max_seconds",
+)
+_NON_NEGATIVE_INT_OVERRIDE_FIELDS = ("max_autofix_per_pr",)
 
 
 @dataclass(frozen=True)
@@ -57,46 +72,35 @@ class RuntimeSettingsEnvOverrides(BaseSettings):
     managed_repo_prefixes: tuple[str, ...] | None = None
     autofix_comment_author: str | None = None
 
-    @field_validator(
-        "bot_logins",
-        "noise_comment_patterns",
-        "managed_repo_prefixes",
-        mode="before",
-    )
+    @model_validator(mode="before")
     @classmethod
-    def _parse_list_value(cls, value: Any) -> tuple[str, ...] | None:
-        if value is None:
-            return None
-        return _parse_list_value(value)
+    def _normalize_values(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for field_name in _LIST_OVERRIDE_FIELDS:
+            if field_name in normalized and normalized[field_name] is not None:
+                normalized[field_name] = _parse_list_value(normalized[field_name])
+        if (
+            "autofix_comment_author" in normalized
+            and normalized["autofix_comment_author"] is not None
+        ):
+            normalized["autofix_comment_author"] = str(
+                normalized["autofix_comment_author"]
+            ).strip()
+        return normalized
 
-    @field_validator(
-        "github_webhook_debounce_seconds",
-        "max_concurrent_runs",
-        "stale_run_timeout_seconds",
-        "pr_lock_ttl_seconds",
-        "max_retry_attempts",
-        "retry_backoff_base_seconds",
-        "retry_backoff_max_seconds",
-    )
-    @classmethod
-    def _validate_positive_int(cls, value: int | None) -> int | None:
-        if value is not None and value <= 0:
-            raise ValueError("must be greater than 0")
-        return value
-
-    @field_validator("max_autofix_per_pr")
-    @classmethod
-    def _validate_non_negative_int(cls, value: int | None) -> int | None:
-        if value is not None and value < 0:
-            raise ValueError("must be non-negative")
-        return value
-
-    @field_validator("autofix_comment_author", mode="before")
-    @classmethod
-    def _normalize_author(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        return str(value).strip()
+    @model_validator(mode="after")
+    def _validate_numeric_ranges(self) -> RuntimeSettingsEnvOverrides:
+        for field_name in _POSITIVE_INT_OVERRIDE_FIELDS:
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be greater than 0")
+        for field_name in _NON_NEGATIVE_INT_OVERRIDE_FIELDS:
+            value = getattr(self, field_name)
+            if value is not None and value < 0:
+                raise ValueError(f"{field_name} must be non-negative")
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",
