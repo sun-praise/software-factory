@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Mapping
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -146,18 +147,19 @@ class AgentFeatureFlagEnvOverrides(BaseSettings):
         ),
     )
 
+    @field_validator("agent_sdks", mode="before")
+    @classmethod
+    def _parse_agent_sdks(cls, value: Any) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        return _parse_agent_modes(value)
+
     @model_validator(mode="before")
     @classmethod
     def _normalize_values(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         normalized = dict(data)
-        # agent_sdks may arrive under the field name or under an alias
-        # key (AGENT_SDKS / CLAUDE_AGENT_SDKS) due to validation_alias.
-        for _sdk_key in ("agent_sdks", "AGENT_SDKS", "CLAUDE_AGENT_SDKS"):
-            if _sdk_key in normalized and normalized[_sdk_key] is not None:
-                normalized[_sdk_key] = _parse_agent_modes(normalized[_sdk_key])
-                break
         for field_name in _TEXT_OVERRIDE_FIELDS:
             if field_name in normalized and normalized[field_name] is not None:
                 normalized[field_name] = str(normalized[field_name]).strip()
@@ -198,7 +200,7 @@ def load_agent_feature_flags(conn: sqlite3.Connection) -> dict[str, str]:
 
 
 def get_default_agent_feature_flags() -> AgentFeatureFlags:
-    env_overrides = AgentFeatureFlagEnvOverrides()
+    env_overrides = get_agent_feature_flag_env_overrides()
     defaults = _get_code_default_agent_feature_flags()
     return AgentFeatureFlags(
         agent_sdks=env_overrides.agent_sdks or defaults.agent_sdks,
@@ -250,7 +252,7 @@ def get_default_agent_feature_flags() -> AgentFeatureFlags:
 
 def resolve_agent_feature_flags(conn: sqlite3.Connection) -> AgentFeatureFlags:
     defaults = _get_code_default_agent_feature_flags()
-    env_overrides = AgentFeatureFlagEnvOverrides()
+    env_overrides = get_agent_feature_flag_env_overrides()
     raw_flags = load_agent_feature_flags(conn)
 
     return AgentFeatureFlags(
@@ -332,21 +334,10 @@ def resolve_agent_feature_flags(conn: sqlite3.Connection) -> AgentFeatureFlags:
 def save_agent_feature_flags(
     conn: sqlite3.Connection,
     *,
-    agent_sdks: tuple[str, ...] | list[str],
-    openhands_command: str,
-    openhands_command_timeout_seconds: int,
-    openhands_worktree_base_dir: str,
-    claude_agent_command: str,
-    claude_agent_provider: str,
-    claude_agent_base_url: str,
-    claude_agent_model: str,
-    claude_agent_runtime: str,
-    claude_agent_container_image: str,
-    claude_agent_command_timeout_seconds: int,
-    claude_agent_worktree_base_dir: str,
+    flags: AgentFeatureFlags,
     legacy_enabled: bool | None = None,
 ) -> None:
-    normalized_modes = _normalize_agent_modes(agent_sdks)
+    normalized_modes = _normalize_agent_modes(flags.agent_sdks)
     if not normalized_modes:
         normalized_modes = (CLAUDE_AGENT_MODE,)
     openhands_enabled = OPENHANDS_AGENT_MODE in normalized_modes
@@ -362,43 +353,45 @@ def save_agent_feature_flags(
         (FEATURE_FLAG_AGENT_SDKS_KEY, json.dumps(list(normalized_modes))),
         (FEATURE_FLAG_OPENHANDS_ENABLED_KEY, "1" if openhands_enabled else "0"),
         (FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY, "1" if claude_agent_enabled else "0"),
-        (FEATURE_FLAG_OPENHANDS_COMMAND_KEY, openhands_command.strip()),
+        (FEATURE_FLAG_OPENHANDS_COMMAND_KEY, flags.openhands_command.strip()),
         (
             FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY,
-            str(max(1, int(openhands_command_timeout_seconds))),
+            str(max(1, int(flags.openhands_command_timeout_seconds))),
         ),
         (
             FEATURE_FLAG_OPENHANDS_WORKTREE_DIR_KEY,
-            openhands_worktree_base_dir.strip() or _DEFAULT_AGENT_WORKTREE_BASE_DIR,
+            flags.openhands_worktree_base_dir.strip()
+            or _DEFAULT_AGENT_WORKTREE_BASE_DIR,
         ),
-        (FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY, claude_agent_command.strip()),
+        (FEATURE_FLAG_CLAUDE_AGENT_COMMAND_KEY, flags.claude_agent_command.strip()),
         (
             FEATURE_FLAG_CLAUDE_AGENT_PROVIDER_KEY,
-            _normalize_provider(claude_agent_provider),
+            _normalize_provider(flags.claude_agent_provider),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_BASE_URL_KEY,
-            claude_agent_base_url.strip(),
+            flags.claude_agent_base_url.strip(),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_MODEL_KEY,
-            claude_agent_model.strip(),
+            flags.claude_agent_model.strip(),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY,
-            _normalize_runtime(claude_agent_runtime),
+            _normalize_runtime(flags.claude_agent_runtime),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_CONTAINER_IMAGE_KEY,
-            claude_agent_container_image.strip(),
+            flags.claude_agent_container_image.strip(),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY,
-            str(max(1, int(claude_agent_command_timeout_seconds))),
+            str(max(1, int(flags.claude_agent_command_timeout_seconds))),
         ),
         (
             FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY,
-            claude_agent_worktree_base_dir.strip() or _DEFAULT_AGENT_WORKTREE_BASE_DIR,
+            flags.claude_agent_worktree_base_dir.strip()
+            or _DEFAULT_AGENT_WORKTREE_BASE_DIR,
         ),
         (FEATURE_FLAG_LEGACY_ENABLED_KEY, "1" if legacy_write_value else "0"),
     ]
@@ -489,6 +482,9 @@ def _resolve_agent_sdks(
     default_modes: tuple[str, ...],
 ) -> tuple[str, ...]:
     if env_override is not None:
+        # Treat an explicitly blank env override the same as an unset value:
+        # fall back to the configured defaults rather than allowing all agent
+        # modes to disappear from the resolved runtime configuration.
         return env_override or default_modes
 
     raw_modes = raw_flags.get(FEATURE_FLAG_AGENT_SDKS_KEY)
@@ -578,14 +574,13 @@ def _resolve_provider_value(
     raw_flags: Mapping[str, str],
     default: str,
 ) -> str:
-    if override is not None:
-        normalized = _normalize_provider(override)
-        return normalized if normalized else default
-    raw_value = raw_flags.get(key)
-    if raw_value is None:
-        return default
-    normalized = _normalize_provider(raw_value)
-    return normalized if normalized else default
+    return _resolve_normalized_value(
+        key=key,
+        override=override,
+        raw_flags=raw_flags,
+        default=default,
+        normalizer=_normalize_provider,
+    )
 
 
 def _resolve_runtime_value(
@@ -595,13 +590,30 @@ def _resolve_runtime_value(
     raw_flags: Mapping[str, str],
     default: str,
 ) -> str:
+    return _resolve_normalized_value(
+        key=key,
+        override=override,
+        raw_flags=raw_flags,
+        default=default,
+        normalizer=_normalize_runtime,
+    )
+
+
+def _resolve_normalized_value(
+    *,
+    key: str,
+    override: str | None,
+    raw_flags: Mapping[str, str],
+    default: str,
+    normalizer,
+) -> str:
     if override is not None:
-        normalized = _normalize_runtime(override)
+        normalized = normalizer(override)
         return normalized if normalized else default
     raw_value = raw_flags.get(key)
     if raw_value is None:
         return default
-    normalized = _normalize_runtime(raw_value)
+    normalized = normalizer(raw_value)
     return normalized if normalized else default
 
 
@@ -613,7 +625,10 @@ def _parse_agent_modes(value: Any) -> tuple[str, ...]:
         if not text:
             return ()
         if text.startswith("["):
-            decoded = json.loads(text)
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                return ()
             return _parse_agent_modes(decoded)
         items = [item.strip() for item in text.split(",")]
         return tuple(item for item in items if item)
@@ -642,6 +657,11 @@ def _normalize_agent_modes(values: tuple[str, ...] | list[str]) -> tuple[str, ..
             continue
         normalized_modes.append(normalized)
     return tuple(normalized_modes)
+
+
+@lru_cache
+def get_agent_feature_flag_env_overrides() -> AgentFeatureFlagEnvOverrides:
+    return AgentFeatureFlagEnvOverrides()
 
 
 def _feature_flag_default_enabled(mode: str, current_modes: tuple[str, ...]) -> bool:

@@ -7,12 +7,16 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.db import init_db
 from app.main import app
-from app.services.feature_flags import resolve_agent_feature_flags
+from app.services.feature_flags import (
+    get_agent_feature_flag_env_overrides,
+    resolve_agent_feature_flags,
+)
 from app.services.runtime_settings import resolve_runtime_settings
 
 
 def _setup_db(tmp_path: Path) -> Path:
     get_settings.cache_clear()
+    get_agent_feature_flag_env_overrides.cache_clear()
     db_path = tmp_path / "software_factory.db"
     import os
 

@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from app.db import connect_db
 from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
+    AgentFeatureFlags,
     build_selected_agent_sdks,
     build_feature_flag_context,
     save_agent_feature_flags,
@@ -1161,6 +1162,20 @@ async def save_settings(request: Request) -> RedirectResponse:
         openhands_enabled=openhands_enabled,
         claude_agent_enabled=claude_agent_enabled,
     )
+    agent_flags = AgentFeatureFlags(
+        agent_sdks=agent_sdks,
+        openhands_command=openhands_command,
+        openhands_command_timeout_seconds=openhands_command_timeout_seconds,
+        openhands_worktree_base_dir=openhands_worktree_base_dir,
+        claude_agent_command=claude_agent_command,
+        claude_agent_provider=claude_agent_provider,
+        claude_agent_base_url=claude_agent_base_url,
+        claude_agent_model=claude_agent_model,
+        claude_agent_runtime=claude_agent_runtime,
+        claude_agent_container_image=claude_agent_container_image,
+        claude_agent_command_timeout_seconds=claude_agent_command_timeout_seconds,
+        claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
+    )
 
     with connect_db() as conn:
         save_runtime_settings(
@@ -1182,18 +1197,7 @@ async def save_settings(request: Request) -> RedirectResponse:
         )
         save_agent_feature_flags(
             conn,
-            agent_sdks=agent_sdks,
-            openhands_command=openhands_command,
-            openhands_command_timeout_seconds=openhands_command_timeout_seconds,
-            openhands_worktree_base_dir=openhands_worktree_base_dir,
-            claude_agent_command=claude_agent_command,
-            claude_agent_provider=claude_agent_provider,
-            claude_agent_base_url=claude_agent_base_url,
-            claude_agent_model=claude_agent_model,
-            claude_agent_runtime=claude_agent_runtime,
-            claude_agent_container_image=claude_agent_container_image,
-            claude_agent_command_timeout_seconds=(claude_agent_command_timeout_seconds),
-            claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
+            flags=agent_flags,
         )
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)

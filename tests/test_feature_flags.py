@@ -10,6 +10,7 @@ from app.services.feature_flags import (
     FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY,
     _DEFAULT_CLAUDE_AGENT_PROVIDER,
     _DEFAULT_CLAUDE_AGENT_RUNTIME,
+    get_agent_feature_flag_env_overrides,
     build_selected_agent_sdks,
     resolve_agent_feature_flags,
 )
@@ -24,6 +25,7 @@ def _make_conn() -> sqlite3.Connection:
 
 def _clear_agent_env(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
+    get_agent_feature_flag_env_overrides.cache_clear()
     for key in (
         "AGENT_SDKS",
         "CLAUDE_AGENT_SDKS",
@@ -139,6 +141,17 @@ def test_agent_sdks_canonical_env_preferred_over_legacy(monkeypatch, tmp_path) -
     assert flags.agent_sdks == ("claude_agent_sdk",)
 
 
+def test_invalid_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    monkeypatch.setenv("AGENT_SDKS", "unknown,other")
+
+    flags = resolve_agent_feature_flags(conn)
+
+    assert flags.agent_sdks == ("claude_agent_sdk", "openhands")
+
+
 def test_blank_db_provider_falls_back_to_default(monkeypatch, tmp_path) -> None:
     """A blank provider value in the DB should fall back to the code default."""
     _clear_agent_env(monkeypatch, tmp_path)
@@ -165,6 +178,30 @@ def test_blank_db_runtime_falls_back_to_default(monkeypatch, tmp_path) -> None:
 
     flags = resolve_agent_feature_flags(conn)
     assert flags.claude_agent_runtime == _DEFAULT_CLAUDE_AGENT_RUNTIME
+
+
+def test_invalid_json_agent_sdks_in_db_falls_back_to_legacy_flags(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        (FEATURE_FLAG_AGENT_SDKS_KEY, "[invalid json"),
+    )
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        ("agent.openhands.enabled", "1"),
+    )
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        ("agent.claude_agent.enabled", "0"),
+    )
+    conn.commit()
+
+    flags = resolve_agent_feature_flags(conn)
+
+    assert flags.agent_sdks == ("openhands",)
 
 
 def test_build_selected_agent_sdks_auto_enables_claude_when_both_disabled() -> None:
