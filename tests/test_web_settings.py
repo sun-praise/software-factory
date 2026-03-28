@@ -76,12 +76,36 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "GitHub webhook debounce window" in html
     assert "Max autofix runs per PR" in html
     assert "Managed repo prefixes" in html
+    assert "Effective Runtime Config" in html
     assert "Claude Agent provider" in html
     assert "Claude Agent runtime" in html
     assert "Primary agent mode" in html
     assert "glm-5" in html
     assert "Zhipu Coding Plan" in html
     assert "software-factory/claude-agent:latest" in html
+
+
+def test_runtime_settings_api_reports_effective_values_and_sources(
+    tmp_path: Path,
+) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/runtime")
+
+    assert response.status_code == 200
+    payload = response.json()
+    max_retry = next(
+        item
+        for item in payload["settings"]
+        if item["key"] == "runtime.max_retry_attempts"
+    )
+    db_path = next(item for item in payload["env_only"] if item["env_var"] == "DB_PATH")
+
+    assert max_retry["ownership"] == "db"
+    assert max_retry["source"] == "default"
+    assert db_path["ownership"] == "env_only"
+    assert db_path["source"] == "env"
 
 
 def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
@@ -202,3 +226,42 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
     assert "openhands" in active_flags.agent_sdks
     assert "claude_agent_sdk" in active_flags.agent_sdks
     assert active_flags.agent_sdks == ("openhands", "claude_agent_sdk")
+
+
+def test_save_settings_writes_runtime_audit_log(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/settings",
+            data={
+                "agent_claude_agent_enabled": "on",
+                "github_webhook_debounce_seconds": "45",
+                "max_autofix_per_pr": "7",
+                "max_concurrent_runs": "5",
+                "stale_run_timeout_seconds": "321",
+                "pr_lock_ttl_seconds": "654",
+                "max_retry_attempts": "4",
+                "retry_backoff_base_seconds": "12",
+                "retry_backoff_max_seconds": "900",
+                "bot_logins_text": "ci-helper",
+                "noise_comment_patterns_text": "^/retest\\b",
+                "managed_repo_prefixes_text": "acme/",
+                "autofix_comment_author": "autofix-bot",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT key, changed_by, change_source FROM app_config_audit_log ORDER BY id"
+        ).fetchall()
+
+    assert rows
+    assert rows[0]["changed_by"] == "settings_ui"
+    assert rows[0]["change_source"] == "web.settings"
