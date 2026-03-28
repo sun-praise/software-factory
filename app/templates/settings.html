@@ -118,6 +118,29 @@
           </fieldset>
 
           <fieldset>
+            <legend>Effective Runtime Config</legend>
+            <p class="muted tiny">Read-only effective values and their winning source.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Setting</th>
+                  <th>Effective value</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in runtime_settings_descriptions %}
+                <tr>
+                  <td>{{ item.label }}</td>
+                  <td><code>{{ item.display_value }}</code></td>
+                  <td>{{ item.source }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </fieldset>
+
+          <fieldset>
             <legend>Agent Runner</legend>
 
             <label class="switch">

@@ -25,6 +25,7 @@ from app.services.feature_flags import (
 )
 from app.services.runtime_settings import (
     build_runtime_settings_context,
+    describe_runtime_settings,
     parse_settings_list_form_value,
     resolve_runtime_settings,
     save_runtime_settings,
@@ -1093,6 +1094,11 @@ async def settings_page(request: Request) -> HTMLResponse:
     with connect_db() as conn:
         flag_context = build_feature_flag_context(conn)
         runtime_context = build_runtime_settings_context(conn)
+        runtime_descriptions = [
+            _serialize_runtime_setting_description(item)
+            for item in describe_runtime_settings(conn)
+            if not item.sensitive
+        ]
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -1100,9 +1106,28 @@ async def settings_page(request: Request) -> HTMLResponse:
             "request": request,
             "title": "Software Factory - Settings",
             "saved": request.query_params.get("saved") == "1",
+            "runtime_settings_descriptions": runtime_descriptions,
             **flag_context,
             **runtime_context,
         },
+    )
+
+
+@router.get("/api/settings/runtime")
+async def runtime_settings_api() -> JSONResponse:
+    with connect_db() as conn:
+        descriptions = [
+            _serialize_runtime_setting_description(item)
+            for item in describe_runtime_settings(conn)
+            if not item.sensitive
+        ]
+    return JSONResponse(
+        {
+            "settings": [item for item in descriptions if item["ownership"] == "db"],
+            "env_only": [
+                item for item in descriptions if item["ownership"] == "env_only"
+            ],
+        }
     )
 
 
@@ -1194,6 +1219,8 @@ async def save_settings(request: Request) -> RedirectResponse:
             noise_comment_patterns=runtime_noise_comment_patterns,
             managed_repo_prefixes=runtime_managed_repo_prefixes,
             autofix_comment_author=runtime_autofix_comment_author,
+            changed_by="settings_ui",
+            change_source="web.settings",
         )
         save_agent_feature_flags(
             conn,
@@ -1209,6 +1236,33 @@ def _parse_form_int(value: Any, *, default: int, minimum: int) -> int:
     except (TypeError, ValueError, AttributeError):
         return default
     return parsed if parsed >= minimum else default
+
+
+def _serialize_runtime_setting_description(value: Any) -> dict[str, Any]:
+    return {
+        "key": value.key,
+        "label": value.label,
+        "ownership": value.ownership,
+        "sensitive": value.sensitive,
+        "env_var": value.env_var,
+        "effective": _serialize_runtime_setting_value(value.effective),
+        "display_value": _display_runtime_setting_value(value.effective),
+        "source": value.source,
+        "updated_at": value.updated_at,
+    }
+
+
+def _serialize_runtime_setting_value(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _display_runtime_setting_value(value: Any) -> str:
+    if isinstance(value, tuple):
+        return ", ".join(str(item) for item in value) if value else "(empty)"
+    text = str(value).strip()
+    return text if text else "(empty)"
 
 
 @router.get("/issues", response_class=HTMLResponse)
