@@ -291,8 +291,8 @@ class RuntimeSettingsEnvOverrides(BaseSettings):
     )
 
 
-class RuntimeEnvOnlyInspectSettings(BaseSettings):
-    db_path: str = _DEFAULT_DB_PATH
+class RuntimeEnvOnlyOverrides(BaseSettings):
+    db_path: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -325,7 +325,7 @@ def describe_runtime_settings(
 ) -> tuple[RuntimeSettingDescription, ...]:
     runtime_settings = resolve_runtime_settings(conn)
     overrides = RuntimeSettingsEnvOverrides()
-    env_only_settings = RuntimeEnvOnlyInspectSettings()
+    env_only_overrides = RuntimeEnvOnlyOverrides()
     stored_records = load_runtime_setting_records(conn)
 
     descriptions: list[RuntimeSettingDescription] = []
@@ -370,11 +370,12 @@ def describe_runtime_settings(
                 ownership=spec.ownership,
                 sensitive=spec.sensitive,
                 env_var=spec.env_var,
-                effective=str(getattr(env_only_settings, spec.field_name)).strip(),
-                source=(
-                    _ENV_SOURCE
-                    if spec.field_name in env_only_settings.model_fields_set
-                    else _DEFAULT_SOURCE
+                effective=_resolve_env_only_effective_value(
+                    getattr(env_only_overrides, spec.field_name),
+                    default=spec.default,
+                ),
+                source=_resolve_env_only_source(
+                    getattr(env_only_overrides, spec.field_name),
                 ),
                 updated_at=None,
             )
@@ -537,9 +538,10 @@ def save_runtime_setting_values(
             )
         text_value = _normalize_persisted_runtime_value(spec, value)
         normalized_values.append((key, text_value))
+        stored_row = stored_records.get(key)
         old_value = (
-            str(stored_records[key]["value"])
-            if key in stored_records and stored_records[key]["value"] is not None
+            str(stored_row["value"])
+            if stored_row is not None and stored_row["value"] is not None
             else None
         )
         if old_value != text_value:
@@ -623,6 +625,16 @@ def _normalize_persisted_runtime_value(spec: RuntimeSettingSpec, value: Any) -> 
     if spec.value_type == "list":
         return _serialize_list_value(parsed)
     return str(parsed)
+
+
+def _resolve_env_only_effective_value(value: Any, *, default: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    return text if text else str(default).strip()
+
+
+def _resolve_env_only_source(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    return _ENV_SOURCE if text else _DEFAULT_SOURCE
 
 
 def _resolve_positive_int(

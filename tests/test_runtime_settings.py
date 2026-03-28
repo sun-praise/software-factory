@@ -29,6 +29,7 @@ def _make_conn() -> sqlite3.Connection:
 def _clear_runtime_override_env(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     for key in (
+        "DB_PATH",
         "GITHUB_WEBHOOK_DEBOUNCE_SECONDS",
         "MAX_AUTOFIX_PER_PR",
         "MAX_CONCURRENT_RUNS",
@@ -241,6 +242,22 @@ def test_describe_runtime_settings_reports_sources_and_ownership(
     assert described_by_key[RUNTIME_MAX_RETRY_ATTEMPTS_KEY].updated_at is not None
     assert described_by_key[RUNTIME_DB_PATH_KEY].ownership == "env_only"
     assert described_by_key[RUNTIME_DB_PATH_KEY].source == "env"
+
+
+def test_describe_runtime_settings_treats_blank_db_path_override_as_default(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text("DB_PATH=\n", encoding="utf-8")
+    conn = _make_conn()
+
+    described = describe_runtime_settings(conn)
+    described_by_key = {item.key: item for item in described}
+
+    assert (
+        described_by_key[RUNTIME_DB_PATH_KEY].effective == "./data/software_factory.db"
+    )
+    assert described_by_key[RUNTIME_DB_PATH_KEY].source == "default"
 
 
 def test_save_runtime_settings_records_audit_rows_only_for_changed_values(
