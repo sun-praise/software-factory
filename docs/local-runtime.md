@@ -1,5 +1,7 @@
 # Local runtime notes
 
+See also: `docs/runtime-config.md` for the DB-vs-env ownership rules and the dev/prod rollout guidance for mutable runtime settings.
+
 ## Single source of truth for runtime state
 
 When running the local `web` service and the local `worker`, both processes must use the same database file.
@@ -15,6 +17,8 @@ Known-good local database path:
 ## Required startup rule
 
 Always start `web` and `worker` with the same `DB_PATH`.
+
+`DB_PATH` is bootstrap configuration and stays env-only. Do not move it into SQLite or the `/settings` form.
 
 Example:
 
@@ -67,3 +71,5 @@ If this is wrong, the UI and the worker will read different SQLite files:
 - deleting a run in the UI may appear to do nothing
 
 If the UI state and worker behavior disagree, check `DB_PATH` first.
+
+In local development, runtime knobs like retry limits or bot filters may live in DB, but `DB_PATH` must still come from env so both processes point at the same SQLite file.
