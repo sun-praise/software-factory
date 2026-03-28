@@ -228,6 +228,16 @@ _RUNTIME_SETTING_SPECS = (
 _RUNTIME_SETTING_SPECS_BY_KEY = {spec.key: spec for spec in _RUNTIME_SETTING_SPECS}
 
 
+def get_runtime_form_int_field_specs() -> dict[str, tuple[int, int]]:
+    specs: dict[str, tuple[int, int]] = {}
+    for spec in _RUNTIME_SETTING_SPECS:
+        if spec.value_type not in {"positive_int", "non_negative_int"}:
+            continue
+        minimum = 0 if spec.value_type == "non_negative_int" else 1
+        specs[spec.field_name] = (int(spec.default), minimum)
+    return specs
+
+
 class RuntimeSettingsEnvOverrides(BaseSettings):
     github_webhook_debounce_seconds: int | None = None
     max_autofix_per_pr: int | None = None

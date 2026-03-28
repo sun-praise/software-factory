@@ -12,6 +12,7 @@ from app.services.runtime_settings import (
     RUNTIME_MAX_RETRY_ATTEMPTS_KEY,
     build_runtime_settings_context,
     describe_runtime_settings,
+    get_runtime_form_int_field_specs,
     resolve_runtime_settings,
     save_runtime_settings,
     save_runtime_setting_values,
@@ -330,3 +331,13 @@ def test_save_runtime_setting_values_rejects_invalid_db_values(
         assert RUNTIME_MAX_RETRY_ATTEMPTS_KEY in str(exc)
     else:
         raise AssertionError("expected ValueError for invalid runtime setting value")
+
+
+def test_get_runtime_form_int_field_specs_matches_runtime_registry() -> None:
+    specs = get_runtime_form_int_field_specs()
+
+    assert specs["github_webhook_debounce_seconds"] == (60, 1)
+    assert specs["max_autofix_per_pr"] == (3, 0)
+    assert specs["max_retry_attempts"] == (3, 1)
+    assert "bot_logins" not in specs
+    assert "db_path" not in specs

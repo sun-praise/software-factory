@@ -26,6 +26,7 @@ from app.services.feature_flags import (
 from app.services.runtime_settings import (
     build_runtime_settings_context,
     describe_runtime_settings,
+    get_runtime_form_int_field_specs,
     parse_settings_list_form_value,
     resolve_runtime_settings,
     save_runtime_settings,
@@ -51,16 +52,7 @@ _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_schedule
 
 _TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
 
-_RUNTIME_INT_FIELD_SPECS: dict[str, tuple[int, int]] = {
-    "github_webhook_debounce_seconds": (60, 1),
-    "max_autofix_per_pr": (3, 0),
-    "max_concurrent_runs": (3, 1),
-    "stale_run_timeout_seconds": (900, 1),
-    "pr_lock_ttl_seconds": (900, 1),
-    "max_retry_attempts": (3, 1),
-    "retry_backoff_base_seconds": (30, 1),
-    "retry_backoff_max_seconds": (1800, 1),
-}
+_RUNTIME_INT_FIELD_SPECS = get_runtime_form_int_field_specs()
 
 
 def _parse_bool_like(value: str | None) -> bool:
