@@ -33,6 +33,7 @@ def init_db() -> None:
         _migrate_m6_columns(conn)
         _migrate_operator_hint_columns(conn)
         _migrate_app_feature_flags(conn)
+        _migrate_app_config_audit_log(conn)
         _migrate_run_result_pr_columns(conn)
 
 
@@ -88,6 +89,26 @@ def _migrate_app_feature_flags(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
+    )
+    conn.commit()
+
+
+def _migrate_app_config_audit_log(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_config_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            changed_by TEXT NOT NULL,
+            change_source TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_app_config_audit_log_key_created_at ON app_config_audit_log(key, created_at DESC);"
     )
     conn.commit()
 
