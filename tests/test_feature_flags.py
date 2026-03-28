@@ -10,6 +10,7 @@ from app.services.feature_flags import (
     FEATURE_FLAG_CLAUDE_AGENT_RUNTIME_KEY,
     _DEFAULT_CLAUDE_AGENT_PROVIDER,
     _DEFAULT_CLAUDE_AGENT_RUNTIME,
+    build_feature_flag_context,
     get_agent_feature_flag_env_overrides,
     build_selected_agent_sdks,
     resolve_agent_feature_flags,
@@ -152,6 +153,17 @@ def test_invalid_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) ->
     assert flags.agent_sdks == ("claude_agent_sdk", "openhands")
 
 
+def test_blank_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    monkeypatch.setenv("AGENT_SDKS", "")
+
+    flags = resolve_agent_feature_flags(conn)
+
+    assert flags.agent_sdks == ("claude_agent_sdk", "openhands")
+
+
 def test_blank_db_provider_falls_back_to_default(monkeypatch, tmp_path) -> None:
     """A blank provider value in the DB should fall back to the code default."""
     _clear_agent_env(monkeypatch, tmp_path)
@@ -202,6 +214,20 @@ def test_invalid_json_agent_sdks_in_db_falls_back_to_legacy_flags(
     flags = resolve_agent_feature_flags(conn)
 
     assert flags.agent_sdks == ("openhands",)
+
+
+def test_build_feature_flag_context_reuses_resolved_defaults(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+    monkeypatch.setenv("AGENT_SDKS", "openhands,claude_agent_sdk")
+    get_agent_feature_flag_env_overrides.cache_clear()
+
+    context = build_feature_flag_context(conn)
+
+    assert context["default_agent_sdks"] == "openhands,claude_agent_sdk"
+    assert context["agent_primary_sdk"] == "openhands"
 
 
 def test_build_selected_agent_sdks_auto_enables_claude_when_both_disabled() -> None:

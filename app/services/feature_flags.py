@@ -199,8 +199,9 @@ def load_agent_feature_flags(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(key): str(value) for key, value in rows}
 
 
-def get_default_agent_feature_flags() -> AgentFeatureFlags:
-    env_overrides = get_agent_feature_flag_env_overrides()
+def _build_default_agent_feature_flags(
+    env_overrides: AgentFeatureFlagEnvOverrides,
+) -> AgentFeatureFlags:
     defaults = _get_code_default_agent_feature_flags()
     return AgentFeatureFlags(
         agent_sdks=env_overrides.agent_sdks or defaults.agent_sdks,
@@ -250,11 +251,29 @@ def get_default_agent_feature_flags() -> AgentFeatureFlags:
     )
 
 
-def resolve_agent_feature_flags(conn: sqlite3.Connection) -> AgentFeatureFlags:
-    defaults = _get_code_default_agent_feature_flags()
+def get_default_agent_feature_flags() -> AgentFeatureFlags:
     env_overrides = get_agent_feature_flag_env_overrides()
-    raw_flags = load_agent_feature_flags(conn)
+    return _build_default_agent_feature_flags(env_overrides)
 
+
+def resolve_agent_feature_flags(conn: sqlite3.Connection) -> AgentFeatureFlags:
+    raw_flags = load_agent_feature_flags(conn)
+    env_overrides = get_agent_feature_flag_env_overrides()
+    defaults = _build_default_agent_feature_flags(env_overrides)
+
+    return _resolve_agent_feature_flags_from_sources(
+        raw_flags=raw_flags,
+        defaults=defaults,
+        env_overrides=env_overrides,
+    )
+
+
+def _resolve_agent_feature_flags_from_sources(
+    *,
+    raw_flags: Mapping[str, str],
+    defaults: AgentFeatureFlags,
+    env_overrides: AgentFeatureFlagEnvOverrides,
+) -> AgentFeatureFlags:
     return AgentFeatureFlags(
         agent_sdks=_resolve_agent_sdks(
             env_override=env_overrides.agent_sdks,
@@ -408,8 +427,14 @@ def save_agent_feature_flags(
 
 
 def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
-    default_flags = get_default_agent_feature_flags()
-    flags = resolve_agent_feature_flags(conn)
+    raw_flags = load_agent_feature_flags(conn)
+    env_overrides = get_agent_feature_flag_env_overrides()
+    default_flags = _build_default_agent_feature_flags(env_overrides)
+    flags = _resolve_agent_feature_flags_from_sources(
+        raw_flags=raw_flags,
+        defaults=default_flags,
+        env_overrides=env_overrides,
+    )
 
     return {
         "agent_openhands_enabled": OPENHANDS_AGENT_MODE in flags.agent_sdks,
