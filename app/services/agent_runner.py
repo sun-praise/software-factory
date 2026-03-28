@@ -347,7 +347,7 @@ def run_once(
         }
 
     execute = _default_executor if executor is None else executor
-    agent_modes = normalize_agent_modes(feature_flags.agent_sdks)
+    agent_modes = _resolve_agent_modes_for_execution(feature_flags.agent_sdks)
     check_results: list[dict[str, Any]] = []
     checks_summary = {
         "overall_status": "failed",
@@ -1414,6 +1414,13 @@ def _truncate_check_feedback_text(text: str, limit: int = 1200) -> str:
     if len(sanitized) <= limit:
         return sanitized
     return f"{sanitized[:limit].rstrip()}..."
+
+
+def _resolve_agent_modes_for_execution(raw_modes: tuple[str, ...]) -> tuple[str, ...]:
+    normalized_modes = normalize_agent_modes(raw_modes)
+    if normalized_modes:
+        return normalized_modes
+    return (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
 
 
 def _execute_agent_sdks(

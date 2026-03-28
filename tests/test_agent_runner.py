@@ -19,6 +19,7 @@ from app.services.agent_runner import (
     _default_executor,
     _build_run_progress_callback,
     _render_claude_stream_record,
+    _resolve_agent_modes_for_execution,
     _run_claude_agent,
     _sanitize_log_text,
     run_once,
@@ -2068,6 +2069,13 @@ def test_normalize_agent_modes() -> None:
     )
     # No recognized modes → empty tuple; callers (e.g. agent_runner) add defaults
     assert _normalize_agent_modes(("unknown", "", "other")) == ()
+
+
+def test_resolve_agent_modes_for_execution_falls_back_to_defaults() -> None:
+    assert _resolve_agent_modes_for_execution(("unknown", "", "other")) == (
+        "claude_agent_sdk",
+        "openhands",
+    )
 
 
 def test_execute_agent_sdks_falls_back_to_claude(

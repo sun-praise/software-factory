@@ -216,6 +216,30 @@ def test_invalid_json_agent_sdks_in_db_falls_back_to_legacy_flags(
     assert flags.agent_sdks == ("openhands",)
 
 
+def test_empty_json_agent_sdks_in_db_falls_back_to_legacy_flags(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        (FEATURE_FLAG_AGENT_SDKS_KEY, "[]"),
+    )
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        ("agent.openhands.enabled", "0"),
+    )
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        ("agent.claude_agent.enabled", "1"),
+    )
+    conn.commit()
+
+    flags = resolve_agent_feature_flags(conn)
+
+    assert flags.agent_sdks == ("claude_agent_sdk",)
+
+
 def test_build_feature_flag_context_reuses_resolved_defaults(
     monkeypatch, tmp_path
 ) -> None:
