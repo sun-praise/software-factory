@@ -221,6 +221,10 @@ def test_describe_runtime_settings_reports_sources_and_ownership(
         "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
         (RUNTIME_MAX_RETRY_ATTEMPTS_KEY, "7"),
     )
+    conn.execute(
+        "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+        (RUNTIME_MAX_AUTOFIX_PER_PR_KEY, "9"),
+    )
     conn.commit()
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "4")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "runtime.db"))
@@ -231,6 +235,7 @@ def test_describe_runtime_settings_reports_sources_and_ownership(
     assert described_by_key[RUNTIME_MAX_AUTOFIX_PER_PR_KEY].source == "env"
     assert described_by_key[RUNTIME_MAX_AUTOFIX_PER_PR_KEY].ownership == "db"
     assert described_by_key[RUNTIME_MAX_AUTOFIX_PER_PR_KEY].effective == 4
+    assert described_by_key[RUNTIME_MAX_AUTOFIX_PER_PR_KEY].updated_at is None
     assert described_by_key[RUNTIME_MAX_RETRY_ATTEMPTS_KEY].source == "db"
     assert described_by_key[RUNTIME_MAX_RETRY_ATTEMPTS_KEY].updated_at is not None
     assert described_by_key[RUNTIME_DB_PATH_KEY].ownership == "env_only"
@@ -306,3 +311,22 @@ def test_save_runtime_setting_values_rejects_env_only_keys(
         assert "env_only" in str(exc)
     else:
         raise AssertionError("expected ValueError for env_only runtime setting")
+
+
+def test_save_runtime_setting_values_rejects_invalid_db_values(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    try:
+        save_runtime_setting_values(
+            conn,
+            {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "0"},
+            changed_by="settings_ui",
+            change_source="web.settings",
+        )
+    except ValueError as exc:
+        assert RUNTIME_MAX_RETRY_ATTEMPTS_KEY in str(exc)
+    else:
+        raise AssertionError("expected ValueError for invalid runtime setting value")

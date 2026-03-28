@@ -344,7 +344,8 @@ def describe_runtime_settings(
                     source=source,
                     updated_at=(
                         str(stored_row["updated_at"])
-                        if stored_row is not None
+                        if source == _DB_SOURCE
+                        and stored_row is not None
                         and stored_row["updated_at"] is not None
                         else None
                     ),
@@ -524,7 +525,7 @@ def save_runtime_setting_values(
             raise ValueError(
                 f"runtime setting {key} is {spec.ownership} and cannot be persisted"
             )
-        text_value = str(value)
+        text_value = _normalize_persisted_runtime_value(spec, value)
         normalized_values.append((key, text_value))
         old_value = (
             str(stored_records[key]["value"])
@@ -603,6 +604,15 @@ def _parse_db_runtime_value(spec: RuntimeSettingSpec, value: Any) -> Any:
     if spec.value_type == "text":
         return str(value).strip()
     raise ValueError(f"unsupported runtime setting value type: {spec.value_type}")
+
+
+def _normalize_persisted_runtime_value(spec: RuntimeSettingSpec, value: Any) -> str:
+    parsed = _parse_db_runtime_value(spec, value)
+    if parsed is _MISSING:
+        raise ValueError(f"invalid runtime setting value for {spec.key}: {value!r}")
+    if spec.value_type == "list":
+        return _serialize_list_value(parsed)
+    return str(parsed)
 
 
 def _resolve_positive_int(
