@@ -1664,14 +1664,14 @@ def _enqueue_task_from_input(
     description: str | None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    head_sha: str | None = None
     normalized_review = build_normalized_review_from_task_input(
         task_input=task_input,
         repo=repo,
         description=description,
         pr_number=None,
-        head_sha=None,
+        head_sha=head_sha,
     )
-    head_sha: str | None = None
     effective_repo = normalized_review["repo"]
     effective_pr_number = normalized_review["pr_number"]
 

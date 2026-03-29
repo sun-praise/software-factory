@@ -151,7 +151,14 @@ def parse_task_input(raw_input: str) -> TaskInput:
 
     for provider in _PROVIDER_REGISTRY:
         if provider.can_handle(stripped):
-            return provider.parse(stripped)
+            try:
+                return provider.parse(stripped)
+            except ValueError:
+                logger.warning(
+                    "Provider %s claimed to handle input but failed to parse",
+                    provider.provider_name,
+                )
+                raise
 
     raise ValueError("No registered provider can handle this input.")
 
