@@ -19,6 +19,45 @@ from app.services.feature_flags import get_agent_feature_flag_env_overrides
 from app.services.patch_applier import ApplyResult
 
 
+_TEST_ENV_KEYS = (
+    "DB_PATH",
+    "GITHUB_WEBHOOK_SECRET",
+    "GITHUB_WEBHOOK_DEBOUNCE_SECONDS",
+    "MAX_AUTOFIX_PER_PR",
+    "MAX_CONCURRENT_RUNS",
+    "STALE_RUN_TIMEOUT_SECONDS",
+    "PR_LOCK_TTL_SECONDS",
+    "MAX_RETRY_ATTEMPTS",
+    "RETRY_BACKOFF_BASE_SECONDS",
+    "RETRY_BACKOFF_MAX_SECONDS",
+    "BOT_LOGINS",
+    "NOISE_COMMENT_PATTERNS",
+    "MANAGED_REPO_PREFIXES",
+    "AUTOFIX_COMMENT_AUTHOR",
+    "AGENT_SDKS",
+    "CLAUDE_AGENT_SDKS",
+    "OPENHANDS_COMMAND",
+    "OPENHANDS_COMMAND_TIMEOUT_SECONDS",
+    "OPENHANDS_WORKTREE_BASE_DIR",
+    "CLAUDE_AGENT_COMMAND",
+    "CLAUDE_AGENT_PROVIDER",
+    "CLAUDE_AGENT_BASE_URL",
+    "CLAUDE_AGENT_MODEL",
+    "CLAUDE_AGENT_RUNTIME",
+    "CLAUDE_AGENT_CONTAINER_IMAGE",
+    "CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS",
+    "CLAUDE_AGENT_WORKTREE_BASE_DIR",
+    "CLAUDE_AGENT_SDK_COMMAND",
+    "CLAUDE_AGENT_SDK_PROVIDER",
+    "CLAUDE_AGENT_SDK_BASE_URL",
+    "CLAUDE_AGENT_SDK_MODEL",
+    "CLAUDE_AGENT_SDK_RUNTIME",
+    "CLAUDE_AGENT_SDK_CONTAINER_IMAGE",
+    "CLAUDE_AGENT_SDK_COMMAND_TIMEOUT_SECONDS",
+    "CLAUDE_AGENT_SDK_WORKTREE_BASE_DIR",
+)
+
+
 def make_in_memory_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -26,10 +65,18 @@ def make_in_memory_conn() -> sqlite3.Connection:
     return conn
 
 
-def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
+def reset_test_env_and_caches() -> None:
+    import os
+
     get_settings.cache_clear()
     get_agent_feature_flag_env_overrides.cache_clear()
     _get_debounce_backend.cache_clear()
+    for key in _TEST_ENV_KEYS:
+        os.environ.pop(key, None)
+
+
+def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
+    reset_test_env_and_caches()
     db_path = tmp_path / "software_factory.db"
     import os
 
