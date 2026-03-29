@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,9 +50,14 @@ class BugSubmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     def to_bug_input(self) -> BugInput:
+        ctx = self.context or BugContext()
         return BugInput(
-            **self.model_dump(exclude={"dry_run", "context"}),
-            context=self.context or BugContext(),
+            provider=self.provider,
+            title=self.title,
+            description=self.description,
+            repo=self.repo,
+            source_url=self.source_url,
+            context=ctx,
         )
 
 

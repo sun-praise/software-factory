@@ -4,12 +4,12 @@ import hashlib
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import APIKeyHeader
 
+from app.config import get_settings
 from app.db import connect_db
 from app.schemas.bug_input import (
-    BugProviderKind,
     BugSubmissionRequest,
     BugSubmissionResponse,
 )
@@ -18,7 +18,7 @@ from app.services.bug_input import (
     build_bug_idempotency_key,
     resolve_provider,
 )
-from app.services.github_events import build_review_batch_id, build_task_idempotency_key
+from app.services.github_events import build_review_batch_id
 from app.services.policy import (
     ensure_pull_request_row,
     get_remaining_autofix_quota,
@@ -30,8 +30,26 @@ from app.services.runtime_settings import resolve_runtime_settings
 
 router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 
+_BUG_API_KEY_HEADER = APIKeyHeader(name="X-Bug-Api-Key", auto_error=False)
 _DEFAULT_REPO = "local/unspecified"
 _SYNTHETIC_PR_OFFSET = 9_000_000
+
+
+async def _verify_bug_api_key(
+    api_key: str | None = Depends(_BUG_API_KEY_HEADER),
+) -> None:
+    configured_key = get_settings().bug_input_api_key
+    if not configured_key:
+        return
+    if not api_key or api_key != configured_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "ok": False,
+                "message": "Invalid or missing API key",
+                "reason": "bug_input_auth_failed",
+            },
+        )
 
 
 def _synthetic_pr_number(repo: str, title: str) -> int:
@@ -113,7 +131,11 @@ def _enqueue_bug_fix(
     }
 
 
-@router.post("", response_model=BugSubmissionResponse)
+@router.post(
+    "",
+    response_model=BugSubmissionResponse,
+    dependencies=[Depends(_verify_bug_api_key)],
+)
 async def submit_bug(payload: BugSubmissionRequest) -> BugSubmissionResponse:
     bug_input = payload.to_bug_input()
     repo = bug_input.repo or _DEFAULT_REPO

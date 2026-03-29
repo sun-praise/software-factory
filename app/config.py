@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     port: int = 8000
     db_path: str = "./data/software_factory.db"
     github_webhook_secret: str = ""
+    bug_input_api_key: str = ""
     github_token: str = ""
     github_webhook_debounce_seconds: int = 60
     max_autofix_per_pr: int = 3

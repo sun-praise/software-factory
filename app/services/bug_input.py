@@ -27,7 +27,7 @@ import logging
 import re
 from typing import Any, Protocol, runtime_checkable
 
-from app.schemas.bug_input import BugContext, BugInput, BugProviderKind
+from app.schemas.bug_input import BugInput, BugProviderKind
 
 
 logger = logging.getLogger(__name__)
@@ -399,7 +399,9 @@ def _classify_severity_from_errors(errors: list[str]) -> str:
 
 def _extract_file_references(text: str) -> list[str]:
     matches = _FILE_REFERENCE_PATTERN.findall(text)
-    return list(dict.fromkeys(m[0] for m in matches if m[0]))
+    return list(
+        dict.fromkeys(m[0] for m in matches if m[0] and not m[0].startswith("/"))
+    )
 
 
 def _extract_error_messages(text: str) -> list[str]:
