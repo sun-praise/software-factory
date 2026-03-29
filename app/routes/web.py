@@ -1664,13 +1664,10 @@ def _enqueue_task_from_input(
     description: str | None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    head_sha: str | None = None
     normalized_review = build_normalized_review_from_task_input(
         task_input=task_input,
         repo=repo,
         description=description,
-        pr_number=None,
-        head_sha=head_sha,
     )
     effective_repo = normalized_review["repo"]
     effective_pr_number = normalized_review["pr_number"]
@@ -1680,7 +1677,7 @@ def _enqueue_task_from_input(
     idempotency_key = build_task_idempotency_key(
         repo=effective_repo,
         pr_number=effective_pr_number,
-        head_sha=head_sha,
+        head_sha=None,
         review_batch_id=review_batch_id,
     )
 
@@ -1694,7 +1691,7 @@ def _enqueue_task_from_input(
             "queued_run_id": None,
             "idempotency_key": idempotency_key,
             "remaining_quota": None,
-            "head_sha": head_sha,
+            "head_sha": None,
             "provider": task_input.provider,
             "task_title": task_input.title,
             "existing_run_id": None,
@@ -1713,7 +1710,7 @@ def _enqueue_task_from_input(
                 effective_repo,
                 effective_pr_number,
                 branch=None,
-                head_sha=head_sha,
+                head_sha=None,
             )
             remaining_quota = get_remaining_autofix_quota(
                 conn,
@@ -1731,7 +1728,7 @@ def _enqueue_task_from_input(
                 conn=conn,
                 repo=effective_repo,
                 pr_number=effective_pr_number,
-                head_sha=head_sha,
+                head_sha=None,
                 normalized_review_json=normalized_review,
                 trigger_source=f"task_input:{task_input.provider}",
                 idempotency_key=idempotency_key,
@@ -1748,7 +1745,7 @@ def _enqueue_task_from_input(
         "queued_run_id": run_id,
         "idempotency_key": idempotency_key,
         "remaining_quota": remaining_quota,
-        "head_sha": head_sha,
+        "head_sha": None,
         "provider": task_input.provider,
         "task_title": task_input.title,
         "existing_run_id": None,
