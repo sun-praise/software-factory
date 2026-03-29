@@ -29,7 +29,7 @@ Do not let `web` fall back to its default `./data/software_factory.db` while `wo
 Known-good local database path:
 
 ```bash
-/home/svtter/work/project/software-factory-homepage/data/software_factory.db
+${HOME}/data/software_factory.db
 ```
 
 ## Required startup rule
@@ -41,7 +41,7 @@ Always start `web` and `worker` with the same `DB_PATH`.
 Example:
 
 ```bash
-export DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db
+export DB_PATH=${HOME}/data/software_factory.db
 ```
 
 Start `web` (recommended — uses the isolation script):
@@ -59,7 +59,7 @@ env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
   -u ZHIPU_API_KEY -u ZHIPU_AUTH_TOKEN -u API_TIMEOUT_MS \
   -u DEEPSEEK_API_KEY -u ENABLE_TOOL_SEARCH \
   -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
-  DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db \
+  DB_PATH=${HOME}/data/software_factory.db \
   python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
@@ -78,8 +78,8 @@ Start `worker` with DeepSeek backend:
 Start `worker` (manual):
 
 ```bash
-env DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db \
-  python3 scripts/run_worker.py --loop --workspace-dir /home/svtter/work/project/software-factory-aider
+env DB_PATH=${HOME}/data/software_factory.db \
+  python3 scripts/run_worker.py --loop --workspace-dir ${HOME}/project/software-factory
 ```
 
 ## Quick verification

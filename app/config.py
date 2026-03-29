@@ -8,24 +8,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-_AI_TOKEN_ENV_VARS = frozenset(
-    {
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_SMALL_FAST_MODEL",
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_MODEL",
-        "ZHIPU_API_KEY",
-        "ZHIPU_AUTH_TOKEN",
-        "API_TIMEOUT_MS",
-        "DEEPSEEK_API_KEY",
-        "ENABLE_TOOL_SEARCH",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    }
+_TOKEN_VARS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "config", "ai_token_env_vars.txt"
 )
+
+
+def _load_token_env_vars() -> frozenset[str]:
+    with open(_TOKEN_VARS_FILE) as f:
+        return frozenset(line.strip() for line in f if line.strip())
+
+
+_AI_TOKEN_ENV_VARS = _load_token_env_vars()
 
 
 class Settings(BaseSettings):
