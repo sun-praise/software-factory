@@ -13,6 +13,16 @@ class IssueItem(BaseModel):
     line: PositiveInt | None = None
     severity: Literal["P0", "P1", "P2", "P3"]
     text: NonEmptyStr
+    semantic_type: Literal[
+        "blocking_defect",
+        "non_blocking_suggestion",
+        "clarification",
+        "informational",
+        "needs_human_decision",
+    ] = "non_blocking_suggestion"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    needs_human_review: bool = False
+    group_id: str | None = None
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -39,5 +49,7 @@ class NormalizedReview(BaseModel):
     ci_status: NonEmptyStr | None = None
     ci_checks: list[CICheckItem] = Field(default_factory=list)
     summary: str
+    needs_human_review_count: int = 0
+    semantic_groups: list[dict] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
