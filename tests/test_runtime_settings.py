@@ -369,7 +369,7 @@ def test_get_runtime_form_int_field_specs_matches_runtime_registry() -> None:
     assert "db_path" not in specs
 
 
-def test_sensitive_setting_audit_log_redacted(monkeypatch, tmp_path) -> None:
+def test_non_sensitive_setting_audit_log_not_redacted(monkeypatch, tmp_path) -> None:
     _clear_runtime_override_env(monkeypatch, tmp_path)
     conn = _make_conn()
 
@@ -386,6 +386,47 @@ def test_sensitive_setting_audit_log_redacted(monkeypatch, tmp_path) -> None:
     assert len(rows) == 1
     assert rows[0]["old_value"] is None
     assert rows[0]["new_value"] == "5"
+
+
+def test_sensitive_setting_audit_log_redacted(monkeypatch, tmp_path) -> None:
+    from unittest.mock import patch
+
+    from app.services.runtime_settings import (
+        RuntimeSettingSpec,
+        _REDACTED_AUDIT_VALUE,
+    )
+
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    sensitive_spec = RuntimeSettingSpec(
+        key="runtime.max_retry_attempts",
+        field_name="max_retry_attempts",
+        label="Max retry attempts",
+        env_var="MAX_RETRY_ATTEMPTS",
+        ownership="db",
+        sensitive=True,
+        default=3,
+        value_type="positive_int",
+    )
+
+    with patch(
+        "app.services.runtime_settings._RUNTIME_SETTING_SPECS_BY_KEY",
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: sensitive_spec},
+    ):
+        save_runtime_setting_values(
+            conn,
+            {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "5"},
+            changed_by="test",
+            change_source="test",
+        )
+
+    rows = conn.execute(
+        "SELECT old_value, new_value FROM app_config_audit_log ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["old_value"] == _REDACTED_AUDIT_VALUE
+    assert rows[0]["new_value"] == _REDACTED_AUDIT_VALUE
 
 
 def test_concurrent_writers_do_not_corrupt(monkeypatch, tmp_path) -> None:
@@ -441,9 +482,6 @@ def test_concurrent_writers_do_not_corrupt(monkeypatch, tmp_path) -> None:
 
 
 def test_runtime_settings_payload_accepts_list_and_tuple(monkeypatch, tmp_path) -> None:
-    import os
-
-    os.environ.pop("MANAGED_REPO_PREFIXES", None)
     _clear_runtime_override_env(monkeypatch, tmp_path)
     conn = _make_conn()
 
