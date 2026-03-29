@@ -2780,7 +2780,24 @@ def _create_run_workspace_clone(
         _raise_workspace_git_error(
             "git clone", clone_result, cleanup_dir=run_workspace_dir
         )
+    _strip_git_alternates(run_workspace_dir)
     return run_workspace_dir
+
+
+_ALTERNATES_PATH = ".git/objects/info/alternates"
+
+
+def _strip_git_alternates(workspace_dir: str) -> None:
+    alternates_file = Path(workspace_dir) / _ALTERNATES_PATH
+    if alternates_file.exists():
+        try:
+            alternates_file.unlink()
+            logger.debug("removed git alternates from workspace: %s", workspace_dir)
+        except OSError:
+            logger.warning(
+                "failed to remove git alternates from workspace: %s",
+                workspace_dir,
+            )
 
 
 def _checkout_run_workspace_target(
@@ -3024,7 +3041,40 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         "is_merge_conflict": is_merge_conflict,
         "is_behind": is_behind,
         "is_blocked": is_blocked,
+        "changed_file_paths": _collect_changed_file_paths(
+            repo=repo, pr_number=pr_number
+        ),
     }
+
+
+CHANGED_FILES_PATH_LIMIT = 50
+
+
+def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "diff",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--name-only",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    paths = [
+        line.strip() for line in result.stdout.strip().splitlines() if line.strip()
+    ]
+    return paths[:CHANGED_FILES_PATH_LIMIT]
 
 
 def _pr_requires_mergeability_gate(metadata: Mapping[str, Any] | None) -> bool:
