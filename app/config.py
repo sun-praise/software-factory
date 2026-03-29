@@ -12,9 +12,18 @@ _AI_TOKEN_ENV_VARS = frozenset(
     {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
         "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
         "ZHIPU_API_KEY",
+        "ZHIPU_AUTH_TOKEN",
+        "API_TIMEOUT_MS",
         "DEEPSEEK_API_KEY",
+        "ENABLE_TOOL_SEARCH",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     }
 )
 
@@ -132,14 +141,21 @@ def get_settings() -> Settings:
 def validate_web_env() -> list[str]:
     """Check that the web process does not have AI tokens in its environment.
 
-    Returns a list of offending env var names found.  Call this at web startup
-    and log / abort if the list is non-empty.
+    Returns a list of offending env var names found.  Raises RuntimeError
+    in non-development environments so the process aborts rather than leak
+    tokens.
     """
     found = [v for v in _AI_TOKEN_ENV_VARS if os.environ.get(v)]
-    if found:
-        logger.warning(
-            "web process has AI tokens in environment: %s — "
-            "strip them before starting the web service to avoid token leaks",
-            ", ".join(sorted(found)),
-        )
+    if not found:
+        return found
+    msg = (
+        "web process has AI tokens in environment: %s — "
+        "strip them before starting the web service to avoid token leaks"
+    )
+    if (
+        os.environ.get("APP_ENV", os.environ.get("app_env", "development"))
+        != "development"
+    ):
+        raise RuntimeError(msg % ", ".join(sorted(found)))
+    logger.warning(msg, ", ".join(sorted(found)))
     return found

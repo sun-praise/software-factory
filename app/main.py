@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 validate_web_env()
 
-
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"

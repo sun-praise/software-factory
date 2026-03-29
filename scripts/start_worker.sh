@@ -7,6 +7,11 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 TOKENS_FILE="${TOKENS_FILE:-${REPO_ROOT}/.tokens.local}"
 
 if [[ -f "${TOKENS_FILE}" ]]; then
+  token_perms=$(stat -c '%a' "${TOKENS_FILE}" 2>/dev/null || stat -f '%Lp' "${TOKENS_FILE}" 2>/dev/null || echo "")
+  if [[ -n "${token_perms}" && "${token_perms#?}" != "00" ]]; then
+    printf '[start_worker] WARNING: %s has permissions %s (should be 0600); leaking tokens possible\n' \
+      "${TOKENS_FILE}" "${token_perms}" >&2
+  fi
   set -a
   # shellcheck disable=SC1090
   source "${TOKENS_FILE}"

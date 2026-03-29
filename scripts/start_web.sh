@@ -16,7 +16,7 @@ else
   PYTHON_CMD="python3"
 fi
 
-AI_TOKEN_PATTERNS=(
+AI_TOKEN_ENV_VARS=(
   ANTHROPIC_API_KEY
   ANTHROPIC_AUTH_TOKEN
   ANTHROPIC_BASE_URL
@@ -34,7 +34,7 @@ AI_TOKEN_PATTERNS=(
 )
 
 UNSET_ARGS=()
-for var in "${AI_TOKEN_PATTERNS[@]}"; do
+for var in "${AI_TOKEN_ENV_VARS[@]}"; do
   if [[ -n "${!var:-}" ]]; then
     UNSET_ARGS+=("-u" "${var}")
   fi
@@ -42,12 +42,9 @@ done
 
 echo "[start_web] stripping AI tokens: ${UNSET_ARGS[*]:-none}" >&2
 
-exec env -i \
-  HOME="${HOME:-}" \
-  PATH="${PATH:-}" \
-  TERM="${TERM:-}" \
+exec env \
+  "${UNSET_ARGS[@]}" \
   DB_PATH="${DB_PATH}" \
   HOST="${HOST}" \
   PORT="${PORT}" \
-  "${UNSET_ARGS[@]}" \
   "${PYTHON_CMD}" -m uvicorn app.main:app --host "${HOST}" --port "${PORT}"
