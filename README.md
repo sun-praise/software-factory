@@ -242,6 +242,13 @@ Logging settings (M6):
 - `LOG_RETENTION_DAYS` (`7`): log retention days
 - `WORKER_ID` (`worker-default`): worker identifier
 
+Agent runner settings:
+
+- The Settings page now supports three runner modes: `Ralph`, `Claude Agent SDK`, and `OpenHands`
+- `RALPH_COMMAND` (default `ralph`): optional env override for the Ralph CLI command used by the worker
+- `RALPH_COMMAND_TIMEOUT_SECONDS` (default `1800`): optional env override for Ralph execution timeout
+- The worker host must have a usable `ralph` executable in `PATH` if Ralph mode is enabled or selected as primary
+
 3. Initialize the SQLite database.
 
 ```bash

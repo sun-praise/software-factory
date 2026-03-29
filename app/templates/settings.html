@@ -146,6 +146,17 @@
             <label class="switch">
               <input
                 type="checkbox"
+                name="agent_ralph_enabled"
+                id="agent_ralph_enabled"
+                {% if agent_ralph_enabled %}checked{% endif %}
+              >
+              <span>Enable Ralph agent mode</span>
+            </label>
+            <p class="muted tiny">Runs Ralph through the same background runner and fallback pipeline.</p>
+
+            <label class="switch">
+              <input
+                type="checkbox"
                 name="agent_openhands_enabled"
                 id="agent_openhands_enabled"
                 {% if agent_openhands_enabled %}checked{% endif %}
@@ -167,11 +178,30 @@
 
             <label for="agent_primary_sdk">Primary agent mode</label>
             <select id="agent_primary_sdk" name="agent_primary_sdk">
+              <option value="ralph" {% if agent_primary_sdk == "ralph" %}selected{% endif %}>Ralph</option>
               <option value="claude_agent_sdk" {% if agent_primary_sdk == "claude_agent_sdk" %}selected{% endif %}>Claude Agent SDK</option>
               <option value="openhands" {% if agent_primary_sdk == "openhands" %}selected{% endif %}>OpenHands</option>
             </select>
             <p class="muted tiny">When both modes are enabled, this one runs first. Environment overrides still take precedence over DB settings.</p>
             <p class="muted tiny">At least one agent mode must remain enabled. If both checkboxes are cleared, Claude Agent SDK will be automatically re-enabled on save.</p>
+
+            <label for="ralph_command">Ralph command</label>
+            <input
+              type="text"
+              id="ralph_command"
+              name="ralph_command"
+              value="{{ ralph_command }}"
+              autocomplete="off"
+            >
+
+            <label for="ralph_command_timeout_seconds">Ralph command timeout (seconds)</label>
+            <input
+              type="number"
+              min="1"
+              id="ralph_command_timeout_seconds"
+              name="ralph_command_timeout_seconds"
+              value="{{ ralph_command_timeout_seconds }}"
+            >
 
             <label for="openhands_command">OpenHands command</label>
             <input

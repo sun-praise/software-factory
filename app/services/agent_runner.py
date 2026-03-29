@@ -62,8 +62,10 @@ GIT_COMMAND_TIMEOUT_SECONDS = 30
 CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
+RALPH_AGENT_MODE = "ralph"
 OPENHANDS_AGENT_MODE = "openhands"
 CLAUDE_AGENT_MODE = "claude_agent_sdk"
+RALPH_FAILURE_CODE_COMMAND = "agent_ralph_failed"
 OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
@@ -720,6 +722,10 @@ def run_once(
                     prompt=prompt_for_attempt,
                     normalized_review=payload,
                     modes=agent_modes,
+                    ralph_command=feature_flags.ralph_command,
+                    ralph_command_timeout_seconds=(
+                        feature_flags.ralph_command_timeout_seconds
+                    ),
                     openhands_command=feature_flags.openhands_command,
                     openhands_command_timeout_seconds=(
                         feature_flags.openhands_command_timeout_seconds
@@ -1441,6 +1447,8 @@ def _execute_agent_sdks(
     prompt: str,
     normalized_review: Mapping[str, Any],
     modes: tuple[str, ...],
+    ralph_command: str,
+    ralph_command_timeout_seconds: int,
     openhands_command: str,
     openhands_command_timeout_seconds: int,
     claude_agent_command: str,
@@ -1457,6 +1465,35 @@ def _execute_agent_sdks(
     last_error_message: str | None = None
     last_mode: str | None = None
     for mode in modes:
+        if mode == RALPH_AGENT_MODE:
+            ralph_kwargs: dict[str, Any] = {
+                "workspace": workspace,
+                "run_id": run_id,
+                "repo": repo,
+                "pr_number": pr_number,
+                "prompt": prompt,
+                "normalized_review": normalized_review,
+                "command": ralph_command,
+                "timeout_seconds": ralph_command_timeout_seconds,
+            }
+            if on_log_line is not None:
+                ralph_kwargs["on_log_line"] = on_log_line
+            if should_cancel is not None:
+                ralph_kwargs["should_cancel"] = should_cancel
+            ralph_ok, ralph_message, ralph_error_code = _run_ralph_agent(
+                **ralph_kwargs,
+            )
+            if ralph_ok:
+                return True, None, None, RALPH_AGENT_MODE
+
+            if ralph_error_code == RUN_CANCELLED_CODE:
+                return False, ralph_error_code, ralph_message, RALPH_AGENT_MODE
+
+            last_error_code = ralph_error_code
+            last_error_message = ralph_message
+            last_mode = RALPH_AGENT_MODE
+            continue
+
         if mode == OPENHANDS_AGENT_MODE:
             openhands_kwargs: dict[str, Any] = {
                 "workspace": workspace,
@@ -1528,6 +1565,37 @@ def _execute_agent_sdks(
             continue
 
     return False, last_error_code, last_error_message, last_mode
+
+
+def _run_ralph_agent(
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    normalized_review: Mapping[str, Any],
+    *,
+    command: str,
+    timeout_seconds: int,
+    on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[bool, str, str | None]:
+    return _run_agent_command(
+        workspace=workspace,
+        run_id=run_id,
+        repo=repo,
+        pr_number=pr_number,
+        prompt=prompt,
+        normalized_review=normalized_review,
+        command=command,
+        timeout_seconds=timeout_seconds,
+        agent_name="Ralph",
+        failure_code=RALPH_FAILURE_CODE_COMMAND,
+        on_log_line=on_log_line,
+        should_cancel=should_cancel,
+        argv_builder=_build_ralph_command_argv,
+        prompt_via_stdin=False,
+    )
 
 
 def _run_openhands_agent(
@@ -2018,6 +2086,16 @@ def _build_openhands_command_argv(argv: list[str], prompt: str) -> list[str]:
         token.startswith("--task=") or token.startswith("--file=") for token in expanded
     )
     if prompt and not has_task_or_file:
+        expanded.extend(["--task", prompt])
+    return expanded
+
+
+def _build_ralph_command_argv(argv: list[str], prompt: str) -> list[str]:
+    expanded = list(argv)
+    has_task = any(token in {"-t", "--task"} for token in expanded) or any(
+        token.startswith("--task=") for token in expanded
+    )
+    if prompt and not has_task:
         expanded.extend(["--task", prompt])
     return expanded
 

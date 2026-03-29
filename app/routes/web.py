@@ -1166,10 +1166,12 @@ async def runtime_settings_api() -> JSONResponse:
 @router.post("/settings", response_class=HTMLResponse)
 async def save_settings(request: Request) -> RedirectResponse:
     form = await request.form()
+    ralph_enabled = "agent_ralph_enabled" in form
     openhands_enabled = "agent_openhands_enabled" in form
     claude_agent_enabled = "agent_claude_agent_enabled" in form
     agent_primary_sdk = str(form.get("agent_primary_sdk", "claude_agent_sdk")).strip()
 
+    ralph_command = str(form.get("ralph_command", "ralph")).strip()
     openhands_command = str(form.get("openhands_command", "openhands")).strip()
     claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
     claude_agent_provider = str(form.get("claude_agent_provider", "zhipu")).strip()
@@ -1187,6 +1189,11 @@ async def save_settings(request: Request) -> RedirectResponse:
     claude_agent_worktree_base_dir = str(
         form.get("claude_agent_worktree_base_dir", ".software-factory-worktrees")
     ).strip()
+    ralph_timeout_raw = str(form.get("ralph_command_timeout_seconds", "1800"))
+    try:
+        ralph_command_timeout_seconds = max(1, int(ralph_timeout_raw.strip()))
+    except (TypeError, ValueError):
+        ralph_command_timeout_seconds = 1800
     timeout_raw = str(form.get("openhands_command_timeout_seconds", "600"))
     try:
         openhands_command_timeout_seconds = max(1, int(timeout_raw.strip()))
@@ -1216,11 +1223,14 @@ async def save_settings(request: Request) -> RedirectResponse:
     ).strip()
     agent_sdks = build_selected_agent_sdks(
         agent_primary_sdk,
+        ralph_enabled=ralph_enabled,
         openhands_enabled=openhands_enabled,
         claude_agent_enabled=claude_agent_enabled,
     )
     agent_flags = AgentFeatureFlags(
         agent_sdks=agent_sdks,
+        ralph_command=ralph_command,
+        ralph_command_timeout_seconds=ralph_command_timeout_seconds,
         openhands_command=openhands_command,
         openhands_command_timeout_seconds=openhands_command_timeout_seconds,
         openhands_worktree_base_dir=openhands_worktree_base_dir,

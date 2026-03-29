@@ -236,6 +236,13 @@ Webhook 配置：
 - `LOG_RETENTION_DAYS`（`7`）：日志保留天数
 - `WORKER_ID`（`worker-default`）：Worker 标识
 
+Agent Runner 配置：
+
+- 设置页现在支持三种 runner mode：`Ralph`、`Claude Agent SDK` 和 `OpenHands`
+- `RALPH_COMMAND`（默认 `ralph`）：可选的环境变量覆盖，用来指定 worker 调用的 Ralph CLI 命令
+- `RALPH_COMMAND_TIMEOUT_SECONDS`（默认 `1800`）：可选的 Ralph 执行超时覆盖
+- 如果启用了 Ralph 或将它设为 primary mode，worker 所在环境必须能在 `PATH` 中找到可执行的 `ralph`
+
 3. 初始化数据库。
 
 ```bash

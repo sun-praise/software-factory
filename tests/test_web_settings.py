@@ -36,12 +36,14 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "System Settings" in html
     assert "Enable OpenHands agent mode" in html
     assert "Enable Claude Agent SDK mode" in html
+    assert "Enable Ralph agent mode" in html
     assert "GitHub webhook debounce window" in html
     assert "Max autofix runs per PR" in html
     assert "Managed repo prefixes" in html
     assert "Effective Runtime Config" in html
     assert "Claude Agent provider" in html
     assert "Claude Agent runtime" in html
+    assert "Ralph command" in html
     assert "Primary agent mode" in html
     assert "glm-5" in html
     assert "Zhipu Coding Plan" in html
@@ -99,7 +101,8 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
             data={
                 "agent_openhands_enabled": "on",
                 "agent_claude_agent_enabled": "on",
-                "agent_primary_sdk": "openhands",
+                "agent_ralph_enabled": "on",
+                "agent_primary_sdk": "ralph",
                 "github_webhook_debounce_seconds": "45",
                 "max_autofix_per_pr": "7",
                 "max_concurrent_runs": "5",
@@ -115,6 +118,8 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
                 "openhands_command": "openhands-test",
                 "openhands_command_timeout_seconds": "123",
                 "openhands_worktree_base_dir": "tmp/worktrees",
+                "ralph_command": "ralph --engine codex",
+                "ralph_command_timeout_seconds": "321",
                 "claude_agent_command": "claude-test",
                 "claude_agent_provider": "deepseek",
                 "claude_agent_base_url": "https://api.deepseek.com/anthropic",
@@ -143,7 +148,8 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
 
     assert flags["agent.openhands.enabled"] == "1"
     assert flags["agent.claude_agent.enabled"] == "1"
-    assert flags["agent.sdks"] == '["openhands", "claude_agent_sdk"]'
+    assert flags["agent.ralph.enabled"] == "1"
+    assert flags["agent.sdks"] == '["ralph", "claude_agent_sdk", "openhands"]'
     assert flags["runtime.github_webhook_debounce_seconds"] == "45"
     assert flags["runtime.max_autofix_per_pr"] == "7"
     assert flags["runtime.max_concurrent_runs"] == "5"
@@ -172,6 +178,8 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
     assert flags["agent.openhands.command"] == "openhands-test"
     assert flags["agent.openhands.command_timeout_seconds"] == "123"
     assert flags["agent.openhands.worktree_base_dir"] == "tmp/worktrees"
+    assert flags["agent.ralph.command"] == "ralph --engine codex"
+    assert flags["agent.ralph.command_timeout_seconds"] == "321"
     assert flags["agent.legacy.enabled"] == "1"
 
     with sqlite3.connect(db_path) as conn:
@@ -194,6 +202,8 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
     assert active_flags.openhands_command == "openhands-test"
     assert active_flags.openhands_command_timeout_seconds == 123
     assert active_flags.openhands_worktree_base_dir == "tmp/worktrees"
+    assert active_flags.ralph_command == "ralph --engine codex"
+    assert active_flags.ralph_command_timeout_seconds == 321
     assert active_flags.claude_agent_command == "claude-test"
     assert active_flags.claude_agent_provider == "deepseek"
     assert active_flags.claude_agent_base_url == "https://api.deepseek.com/anthropic"
@@ -205,9 +215,10 @@ def test_save_settings_updates_feature_flags(tmp_path: Path) -> None:
     )
     assert active_flags.claude_agent_command_timeout_seconds == 222
     assert active_flags.claude_agent_worktree_base_dir == "tmp/claude-worktrees"
+    assert "ralph" in active_flags.agent_sdks
     assert "openhands" in active_flags.agent_sdks
     assert "claude_agent_sdk" in active_flags.agent_sdks
-    assert active_flags.agent_sdks == ("openhands", "claude_agent_sdk")
+    assert active_flags.agent_sdks == ("ralph", "claude_agent_sdk", "openhands")
 
 
 def test_save_settings_writes_runtime_audit_log(tmp_path: Path) -> None:

@@ -11,6 +11,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 FEATURE_FLAG_AGENT_SDKS_KEY = "agent.sdks"
+FEATURE_FLAG_RALPH_ENABLED_KEY = "agent.ralph.enabled"
+FEATURE_FLAG_RALPH_COMMAND_KEY = "agent.ralph.command"
+FEATURE_FLAG_RALPH_TIMEOUT_KEY = "agent.ralph.command_timeout_seconds"
 FEATURE_FLAG_OPENHANDS_ENABLED_KEY = "agent.openhands.enabled"
 FEATURE_FLAG_OPENHANDS_COMMAND_KEY = "agent.openhands.command"
 FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY = "agent.openhands.command_timeout_seconds"
@@ -26,6 +29,7 @@ FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seco
 FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY = "agent.claude_agent.worktree_base_dir"
 FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
 
+RALPH_AGENT_MODE = "ralph"
 OPENHANDS_AGENT_MODE = "openhands"
 CLAUDE_AGENT_MODE = "claude_agent_sdk"
 LEGACY_AGENT_MODE = "legacy"
@@ -36,6 +40,7 @@ CLAUDE_AGENT_RUNTIME_HOST = "host"
 CLAUDE_AGENT_RUNTIME_DOCKER = "docker"
 
 _DEFAULT_AGENT_SDKS = (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
+_DEFAULT_RALPH_COMMAND = "ralph"
 _DEFAULT_OPENHANDS_COMMAND = "openhands"
 _DEFAULT_CLAUDE_AGENT_COMMAND = "claude"
 _DEFAULT_CLAUDE_AGENT_PROVIDER = CLAUDE_AGENT_PROVIDER_ZHIPU
@@ -43,10 +48,12 @@ _DEFAULT_CLAUDE_AGENT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
 _DEFAULT_CLAUDE_AGENT_MODEL = "glm-5"
 _DEFAULT_CLAUDE_AGENT_RUNTIME = CLAUDE_AGENT_RUNTIME_HOST
 _DEFAULT_CLAUDE_AGENT_CONTAINER_IMAGE = "software-factory/claude-agent:latest"
+_DEFAULT_RALPH_COMMAND_TIMEOUT_SECONDS = 1800
 _DEFAULT_OPENHANDS_COMMAND_TIMEOUT_SECONDS = 600
 _DEFAULT_CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS = 1800
 _DEFAULT_AGENT_WORKTREE_BASE_DIR = ".software-factory-worktrees"
 _TEXT_OVERRIDE_FIELDS = (
+    "ralph_command",
     "openhands_command",
     "openhands_worktree_base_dir",
     "claude_agent_command",
@@ -58,6 +65,7 @@ _TEXT_OVERRIDE_FIELDS = (
     "claude_agent_worktree_base_dir",
 )
 _POSITIVE_INT_OVERRIDE_FIELDS = (
+    "ralph_command_timeout_seconds",
     "openhands_command_timeout_seconds",
     "claude_agent_command_timeout_seconds",
 )
@@ -66,6 +74,8 @@ _POSITIVE_INT_OVERRIDE_FIELDS = (
 @dataclass(frozen=True)
 class AgentFeatureFlags:
     agent_sdks: tuple[str, ...]
+    ralph_command: str
+    ralph_command_timeout_seconds: int
     openhands_command: str
     openhands_command_timeout_seconds: int
     openhands_worktree_base_dir: str
@@ -87,6 +97,8 @@ class AgentFeatureFlagEnvOverrides(BaseSettings):
             "CLAUDE_AGENT_SDKS",
         ),
     )
+    ralph_command: str | None = None
+    ralph_command_timeout_seconds: int | None = None
     openhands_command: str | None = None
     openhands_command_timeout_seconds: int | None = None
     openhands_worktree_base_dir: str | None = None
@@ -205,6 +217,14 @@ def _build_default_agent_feature_flags(
     defaults = _get_code_default_agent_feature_flags()
     return AgentFeatureFlags(
         agent_sdks=env_overrides.agent_sdks or defaults.agent_sdks,
+        ralph_command=_resolve_override_or_default(
+            env_overrides.ralph_command,
+            defaults.ralph_command,
+        ),
+        ralph_command_timeout_seconds=(
+            env_overrides.ralph_command_timeout_seconds
+            or defaults.ralph_command_timeout_seconds
+        ),
         openhands_command=_resolve_override_or_default(
             env_overrides.openhands_command,
             defaults.openhands_command,
@@ -279,6 +299,18 @@ def _resolve_agent_feature_flags_from_sources(
             env_override=env_overrides.agent_sdks,
             raw_flags=raw_flags,
             default_modes=defaults.agent_sdks,
+        ),
+        ralph_command=_resolve_text_value(
+            key=FEATURE_FLAG_RALPH_COMMAND_KEY,
+            override=env_overrides.ralph_command,
+            raw_flags=raw_flags,
+            default=defaults.ralph_command,
+        ),
+        ralph_command_timeout_seconds=_resolve_positive_int_value(
+            key=FEATURE_FLAG_RALPH_TIMEOUT_KEY,
+            override=env_overrides.ralph_command_timeout_seconds,
+            raw_flags=raw_flags,
+            default=defaults.ralph_command_timeout_seconds,
         ),
         openhands_command=_resolve_text_value(
             key=FEATURE_FLAG_OPENHANDS_COMMAND_KEY,
@@ -359,6 +391,7 @@ def save_agent_feature_flags(
     normalized_modes = _normalize_agent_modes(flags.agent_sdks)
     if not normalized_modes:
         normalized_modes = (CLAUDE_AGENT_MODE,)
+    ralph_enabled = RALPH_AGENT_MODE in normalized_modes
     openhands_enabled = OPENHANDS_AGENT_MODE in normalized_modes
     claude_agent_enabled = CLAUDE_AGENT_MODE in normalized_modes
     # agent.legacy.enabled is intentionally mirrored from Claude Agent mode
@@ -370,8 +403,14 @@ def save_agent_feature_flags(
     )
     values: list[tuple[str, str]] = [
         (FEATURE_FLAG_AGENT_SDKS_KEY, json.dumps(list(normalized_modes))),
+        (FEATURE_FLAG_RALPH_ENABLED_KEY, "1" if ralph_enabled else "0"),
         (FEATURE_FLAG_OPENHANDS_ENABLED_KEY, "1" if openhands_enabled else "0"),
         (FEATURE_FLAG_CLAUDE_AGENT_ENABLED_KEY, "1" if claude_agent_enabled else "0"),
+        (FEATURE_FLAG_RALPH_COMMAND_KEY, flags.ralph_command.strip()),
+        (
+            FEATURE_FLAG_RALPH_TIMEOUT_KEY,
+            str(max(1, int(flags.ralph_command_timeout_seconds))),
+        ),
         (FEATURE_FLAG_OPENHANDS_COMMAND_KEY, flags.openhands_command.strip()),
         (
             FEATURE_FLAG_OPENHANDS_TIMEOUT_KEY,
@@ -437,11 +476,14 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
     )
 
     return {
+        "agent_ralph_enabled": RALPH_AGENT_MODE in flags.agent_sdks,
         "agent_openhands_enabled": OPENHANDS_AGENT_MODE in flags.agent_sdks,
         "agent_claude_agent_enabled": CLAUDE_AGENT_MODE in flags.agent_sdks,
         "agent_primary_sdk": flags.agent_sdks[0]
         if flags.agent_sdks
         else CLAUDE_AGENT_MODE,
+        "ralph_command": flags.ralph_command,
+        "ralph_command_timeout_seconds": str(flags.ralph_command_timeout_seconds),
         "openhands_command": flags.openhands_command,
         "openhands_command_timeout_seconds": str(
             flags.openhands_command_timeout_seconds
@@ -464,10 +506,11 @@ def build_feature_flag_context(conn: sqlite3.Connection) -> Mapping[str, Any]:
 def build_selected_agent_sdks(
     primary_mode: str,
     *,
+    ralph_enabled: bool,
     openhands_enabled: bool,
     claude_agent_enabled: bool,
 ) -> tuple[str, ...]:
-    if not openhands_enabled and not claude_agent_enabled:
+    if not ralph_enabled and not openhands_enabled and not claude_agent_enabled:
         claude_agent_enabled = True
     preferred_modes = _normalize_agent_modes((primary_mode,))
     if not preferred_modes:
@@ -475,6 +518,7 @@ def build_selected_agent_sdks(
     return tuple(
         _resolve_enabled_modes(
             preferred_modes=preferred_modes,
+            ralph_enabled=ralph_enabled,
             openhands_enabled=openhands_enabled,
             claude_enabled=claude_agent_enabled,
         )
@@ -484,6 +528,8 @@ def build_selected_agent_sdks(
 def _get_code_default_agent_feature_flags() -> AgentFeatureFlags:
     return AgentFeatureFlags(
         agent_sdks=_DEFAULT_AGENT_SDKS,
+        ralph_command=_DEFAULT_RALPH_COMMAND,
+        ralph_command_timeout_seconds=_DEFAULT_RALPH_COMMAND_TIMEOUT_SECONDS,
         openhands_command=_DEFAULT_OPENHANDS_COMMAND,
         openhands_command_timeout_seconds=_DEFAULT_OPENHANDS_COMMAND_TIMEOUT_SECONDS,
         openhands_worktree_base_dir=_DEFAULT_AGENT_WORKTREE_BASE_DIR,
@@ -519,6 +565,10 @@ def _resolve_agent_sdks(
         if normalized_modes:
             return normalized_modes
 
+    ralph_enabled = _coerce_bool(
+        raw_flags.get(FEATURE_FLAG_RALPH_ENABLED_KEY),
+        _feature_flag_default_enabled(RALPH_AGENT_MODE, default_modes),
+    )
     openhands_enabled = _coerce_bool(
         raw_flags.get(FEATURE_FLAG_OPENHANDS_ENABLED_KEY),
         _feature_flag_default_enabled(OPENHANDS_AGENT_MODE, default_modes),
@@ -537,12 +587,13 @@ def _resolve_agent_sdks(
     if legacy_flag_present:
         claude_enabled = legacy_enabled
 
-    if not openhands_enabled and not claude_enabled:
+    if not ralph_enabled and not openhands_enabled and not claude_enabled:
         claude_enabled = True
 
     return tuple(
         _resolve_enabled_modes(
             preferred_modes=default_modes,
+            ralph_enabled=ralph_enabled,
             openhands_enabled=openhands_enabled,
             claude_enabled=claude_enabled,
         )
@@ -676,7 +727,11 @@ def _normalize_agent_modes(values: tuple[str, ...] | list[str]) -> tuple[str, ..
         normalized = str(raw_mode).strip().lower()
         if normalized == LEGACY_AGENT_MODE:
             normalized = CLAUDE_AGENT_MODE
-        if normalized not in {OPENHANDS_AGENT_MODE, CLAUDE_AGENT_MODE}:
+        if normalized not in {
+            RALPH_AGENT_MODE,
+            OPENHANDS_AGENT_MODE,
+            CLAUDE_AGENT_MODE,
+        }:
             continue
         if normalized in normalized_modes:
             continue
@@ -696,6 +751,7 @@ def _feature_flag_default_enabled(mode: str, current_modes: tuple[str, ...]) -> 
 def _resolve_enabled_modes(
     *,
     preferred_modes: tuple[str, ...],
+    ralph_enabled: bool,
     openhands_enabled: bool,
     claude_enabled: bool,
 ) -> list[str]:
@@ -705,12 +761,16 @@ def _resolve_enabled_modes(
         ordered_modes.append(CLAUDE_AGENT_MODE)
     if OPENHANDS_AGENT_MODE not in ordered_modes:
         ordered_modes.append(OPENHANDS_AGENT_MODE)
+    if RALPH_AGENT_MODE not in ordered_modes:
+        ordered_modes.append(RALPH_AGENT_MODE)
 
     resolved: list[str] = []
     for mode in ordered_modes:
         if mode == CLAUDE_AGENT_MODE and claude_enabled:
             resolved.append(mode)
         if mode == OPENHANDS_AGENT_MODE and openhands_enabled:
+            resolved.append(mode)
+        if mode == RALPH_AGENT_MODE and ralph_enabled:
             resolved.append(mode)
     return resolved
 
