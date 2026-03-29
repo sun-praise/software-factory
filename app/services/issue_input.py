@@ -153,7 +153,7 @@ def parse_task_input(raw_input: str) -> TaskInput:
         if provider.can_handle(stripped):
             return provider.parse(stripped)
 
-    return PlainTextProvider().parse(stripped)
+    raise ValueError("No registered provider can handle this input.")
 
 
 def parse_task_input_with_provider(raw_input: str, provider_name: str) -> TaskInput:

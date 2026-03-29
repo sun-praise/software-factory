@@ -1671,7 +1671,7 @@ def _enqueue_task_from_input(
         pr_number=None,
         head_sha=None,
     )
-    head_sha = None
+    head_sha: str | None = None
     effective_repo = normalized_review["repo"]
     effective_pr_number = normalized_review["pr_number"]
 

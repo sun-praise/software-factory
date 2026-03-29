@@ -192,6 +192,11 @@ class TestRegisterProvider:
         register_provider(CustomProvider())
         assert "custom" in get_registered_providers()
 
+    def test_no_provider_matches_raises(self):
+        _PROVIDER_REGISTRY.clear()
+        with pytest.raises(ValueError, match="No registered provider"):
+            parse_task_input("some input")
+
 
 class TestBuildNormalizedReviewFromTaskInput:
     def test_github_task_input(self):
