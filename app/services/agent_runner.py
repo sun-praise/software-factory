@@ -56,6 +56,7 @@ from app.services.runtime_settings import RuntimeSettings, resolve_runtime_setti
 
 Executor = Callable[[str, str], Any]
 CHECK_COMMAND_TIMEOUT_SECONDS = 300
+TERMINATE_GRACE_PERIOD_SECONDS = 5.0
 BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 600
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 CACHE_LOCK_TIMEOUT_SECONDS = 30.0
@@ -3480,10 +3481,17 @@ def _default_executor(
     try:
         stdout, stderr = process.communicate(timeout=CHECK_COMMAND_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        logger.warning(
+            "Check command timed out after %ss: %s", CHECK_COMMAND_TIMEOUT_SECONDS, argv
+        )
         _terminate_check_process_tree(process)
         try:
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=TERMINATE_GRACE_PERIOD_SECONDS)
         except Exception:
+            logger.debug(
+                "Failed to collect stdout/stderr after terminating timed-out process: %s",
+                argv,
+            )
             stdout, stderr = "", ""
         timeout_msg = f"command timed out after {CHECK_COMMAND_TIMEOUT_SECONDS}s"
         return subprocess.CompletedProcess(
@@ -3501,6 +3509,7 @@ def _default_executor(
 
 
 def _terminate_check_process_tree(process: subprocess.Popen[str]) -> None:
+    """Send SIGTERM to the process group, wait up to TERMINATE_GRACE_PERIOD_SECONDS, then SIGKILL."""
     if process.pid is None:
         return
     try:
@@ -3510,7 +3519,7 @@ def _terminate_check_process_tree(process: subprocess.Popen[str]) -> None:
     except OSError:
         return
 
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + TERMINATE_GRACE_PERIOD_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return

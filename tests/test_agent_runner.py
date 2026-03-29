@@ -6,6 +6,7 @@ import signal
 import sqlite3
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -1696,6 +1697,52 @@ def test_default_executor_handles_timeout(monkeypatch, tmp_path: Path) -> None:
     assert "timed out" in result.stderr.lower()
     assert str(CHECK_COMMAND_TIMEOUT_SECONDS) in result.stderr
     assert signal.SIGTERM in killed_signals
+
+
+def test_default_executor_timeout_escalates_to_sigkill(
+    monkeypatch, tmp_path: Path
+) -> None:
+    killed_pids: list[int] = []
+    killed_signals: list[int] = []
+    monotonic_calls = [0]
+
+    def fake_killpg(pid, sig):
+        killed_pids.append(pid)
+        killed_signals.append(sig)
+
+    def fake_monotonic():
+        monotonic_calls[0] += 1
+        return monotonic_calls[0]
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            self.pid = 77777
+            self.returncode = None
+            self._terminated = False
+            self._communicate_count = 0
+
+        def communicate(self, timeout=None):
+            self._communicate_count += 1
+            if self._communicate_count == 1:
+                raise subprocess.TimeoutExpired(
+                    self.pid, timeout, output="partial stdout", stderr="partial stderr"
+                )
+            return ("", "")
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = _default_executor("pytest -q", str(tmp_path))
+
+    assert result.returncode == -1
+    assert "timed out" in result.stderr.lower()
+    assert signal.SIGTERM in killed_signals
+    assert signal.SIGKILL in killed_signals
 
 
 def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
