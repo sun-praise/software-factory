@@ -176,6 +176,16 @@ start_worker() {
     cd "${REPO_ROOT}"
     TOKENS_FILE="${TOKENS_FILE:-${REPO_ROOT}/.tokens.local}"
     if [[ -f "${TOKENS_FILE}" ]]; then
+      local resolved
+      resolved=$(cd "$(dirname "${TOKENS_FILE}")" 2>/dev/null && pwd)/$(basename "${TOKENS_FILE}") || {
+        printf 'start_worker: ERROR: cannot resolve TOKENS_FILE path %s\n' "${TOKENS_FILE}" >&2
+        exit 1
+      }
+      if [[ "${resolved}" != "${REPO_ROOT}/"* && "${resolved}" != "${REPO_ROOT}" ]]; then
+        printf 'start_worker: ERROR: TOKENS_FILE %s is outside repo root %s; refusing to source\n' \
+          "${TOKENS_FILE}" "${REPO_ROOT}" >&2
+        exit 1
+      fi
       set -a
       # shellcheck disable=SC1090
       source "${TOKENS_FILE}"
