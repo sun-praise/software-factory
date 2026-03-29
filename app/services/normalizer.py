@@ -15,38 +15,42 @@ SEMANTIC_CLARIFICATION = "clarification"
 SEMANTIC_INFORMATIONAL = "informational"
 SEMANTIC_NEEDS_HUMAN_DECISION = "needs_human_decision"
 
-_SEVERITY_BLOCKING_TERMS = (
-    "security",
-    "critical",
-    "crash",
-    "data loss",
-    "null",
-    "none",
-    "exception",
-    "error",
-    "fail",
-    "bug",
-    "incorrect",
-    "wrong",
-    "broken",
-    "invalid",
-    "vulnerability",
-    "exploit",
-    "injection",
+_SEVERITY_BLOCKING_TERMS = frozenset(
+    {
+        "security",
+        "critical",
+        "crash",
+        "data loss",
+        "null",
+        "none",
+        "exception",
+        "error",
+        "fail",
+        "bug",
+        "incorrect",
+        "wrong",
+        "broken",
+        "invalid",
+        "vulnerability",
+        "exploit",
+        "injection",
+    }
 )
 
-_SEVERITY_P0_TERMS = ("security", "critical", "crash", "data loss")
-_SEVERITY_P1_TERMS = ("null", "none", "exception", "error", "fail", "bug")
-_SEVERITY_P2_TERMS = ("refactor", "maintainability", "performance")
+_SEVERITY_P0_TERMS = frozenset({"security", "critical", "crash", "data loss"})
+_SEVERITY_P1_TERMS = frozenset({"null", "none", "exception", "error", "fail", "bug"})
+_SEVERITY_P2_TERMS = frozenset({"refactor", "maintainability", "performance"})
 
-_IGNORE_TEXTS = {
-    "+1",
-    "lgtm",
-    "thanks",
-    "thank you",
-    "thx",
-    "ty",
-}
+_IGNORE_TEXTS = frozenset(
+    {
+        "+1",
+        "lgtm",
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+    }
+)
 
 _QUESTION_MARKERS = (
     re.compile(r"\?$"),
@@ -90,6 +94,8 @@ _BLOCKING_MARKERS = (
     ),
     re.compile(r"\b(?:crash|data loss|corruption|deadlock|race condition)\b"),
 )
+
+_KEYWORD_PATTERN = re.compile(r"\b[a-z]{3,}\b")
 
 _STOP_WORDS = frozenset(
     {
@@ -147,6 +153,7 @@ _STEMMING_EXCEPTIONS = frozenset(
         "analysis",
         "basis",
         "class",
+        "classes",
         "crisis",
         "diagnosis",
         "emphasis",
@@ -163,27 +170,45 @@ _STEMMING_EXCEPTIONS = frozenset(
         "yes",
         "access",
         "process",
+        "processes",
         "address",
+        "addresses",
         "compress",
+        "compresses",
         "express",
+        "expresses",
         "dismiss",
+        "dismisses",
         "excess",
         "success",
+        "successes",
         "witness",
         "assess",
+        "assesses",
         "business",
+        "businesses",
         "discuss",
+        "discusses",
         "response",
+        "responses",
         "release",
+        "releases",
         "cause",
+        "causes",
         "because",
         "pause",
+        "pauses",
         "clause",
+        "clauses",
         "issue",
+        "issues",
         "tissue",
+        "tissues",
         "across",
         "focus",
+        "focuses",
         "virus",
+        "viruses",
         "bonus",
         "census",
         "consensus",
@@ -304,6 +329,9 @@ def normalize_review_events(
 
     semantic_groups: list[dict[str, Any]] = []
     if enable_semantic and all_actionable_items:
+        # Two-phase approach: build items first, then detect groups across all
+        # items and assign group_ids. This avoids side-effects inside
+        # _detect_semantic_groups and keeps the grouping logic decoupled.
         semantic_groups, group_assignments = _detect_semantic_groups(
             all_actionable_items
         )
@@ -357,6 +385,8 @@ def _classify_semantic_type(
     if not normalized:
         return SEMANTIC_INFORMATIONAL, 1.0
 
+    # Confidence levels: 0.9=strong signal, 0.8=moderate, 0.7=likely,
+    # 0.6=weak signal, 0.5=uncertain/needs human review
     if any(p.search(normalized) for p in _INFORMATIONAL_MARKERS):
         return SEMANTIC_INFORMATIONAL, 0.9
 
@@ -369,9 +399,11 @@ def _classify_semantic_type(
     suggestion_count = sum(1 for p in _SUGGESTION_MARKERS if p.search(normalized))
     has_suggestion = suggestion_count > 0
 
+    # Conflicting signals (suggestion + blocking) → defer to human
     if has_suggestion and (has_blocking_terms or has_explicit_blocking):
         return SEMANTIC_NEEDS_HUMAN_DECISION, 0.5
 
+    # Suggestion confidence scales with marker count (0.7–0.9)
     if has_suggestion:
         confidence = 0.7 + min(suggestion_count * 0.1, 0.2)
         return SEMANTIC_NON_BLOCKING_SUGGESTION, confidence
@@ -385,9 +417,11 @@ def _classify_semantic_type(
     if any(p.search(normalized) for p in _NEEDS_HUMAN_MARKERS):
         return SEMANTIC_NEEDS_HUMAN_DECISION, 0.6
 
+    # is_must_fix with no other signal → low-confidence blocking
     if is_must_fix:
         return SEMANTIC_BLOCKING_DEFECT, 0.5
 
+    # Default: treat as low-confidence suggestion
     return SEMANTIC_NON_BLOCKING_SUGGESTION, 0.5
 
 
@@ -495,7 +529,7 @@ def _detect_semantic_groups(
 
 def _extract_keywords(text: str) -> set[str]:
     normalized = text.lower().strip()
-    words = re.findall(r"\b[a-z]{3,}\b", normalized)
+    words = _KEYWORD_PATTERN.findall(normalized)
     stemmed: set[str] = set()
     for w in words:
         if w in _STOP_WORDS:
@@ -601,7 +635,7 @@ def _normalize_text_for_dedupe(text: str) -> str:
     return re.sub(r"\s+", " ", lowered)
 
 
-def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+def _contains_any(text: str, terms: frozenset[str] | tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
