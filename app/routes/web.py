@@ -159,7 +159,7 @@ def _fetch_runs(
         ).fetchone()
         rows = conn.execute(
             f"""
-            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at
+            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at, normalized_review_json
             FROM autofix_runs
             {sql_where}
             ORDER BY id DESC
@@ -177,12 +177,16 @@ def _fetch_runs(
             "repo": str(row["repo"]) if row["repo"] is not None else "-",
             "pr_number": _resolve_run_pr_number(row),
             "pr_url": _resolve_run_pr_url(row),
+            "trigger_source": row["trigger_source"],
+            "issue_number": issue_meta["issue_number"],
+            "issue_url": issue_meta["issue_url"],
             "status": str(row["status"]),
             "status_class": _status_class(str(row["status"])),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
         }
         for row in rows
+        for issue_meta in [_extract_issue_metadata(row)]
     ]
     return {
         "items": runs,
@@ -209,6 +213,23 @@ def _status_class(status: str) -> str:
     if normalized in {"retry_scheduled"}:
         return "retry"
     return "queued"
+
+
+def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
+    trigger = _string_or_empty(row["trigger_source"])
+    if trigger != "manual_issue":
+        return {"trigger_source": "pr", "issue_number": "", "issue_url": ""}
+    try:
+        review_json = json.loads(row["normalized_review_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {"trigger_source": "manual_issue", "issue_number": "", "issue_url": ""}
+    issue_number = _coerce_positive_int(review_json.get("issue_number"))
+    source_url = _string_or_empty(review_json.get("manual_issue_source_url"))
+    return {
+        "trigger_source": "manual_issue",
+        "issue_number": str(issue_number) if issue_number else "",
+        "issue_url": source_url,
+    }
 
 
 def _resolve_run_pr_number(row: sqlite3.Row) -> str:
@@ -262,7 +283,7 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     with connect_db() as conn:
         row = conn.execute(
             """
-            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at, logs_path, operator_hints
+            SELECT id, repo, pr_number, opened_pr_number, opened_pr_url, trigger_source, status, created_at, updated_at, logs_path, operator_hints, normalized_review_json
             FROM autofix_runs
             WHERE id = ?
             """,
@@ -275,6 +296,9 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
             "repo": "-",
             "pr_number": "-",
             "pr_url": "",
+            "trigger_source": "pr",
+            "issue_number": "",
+            "issue_url": "",
             "status": "not_found",
             "created_at": "-",
             "updated_at": "-",
@@ -286,11 +310,15 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     repo = str(row["repo"]) if row["repo"] is not None else "-"
     pr_number = _resolve_run_pr_number(row)
     pr_url = _resolve_run_pr_url(row)
+    issue_meta = _extract_issue_metadata(row)
     return {
         "id": str(row["id"]),
         "repo": repo,
         "pr_number": pr_number,
         "pr_url": pr_url,
+        "trigger_source": issue_meta["trigger_source"],
+        "issue_number": issue_meta["issue_number"],
+        "issue_url": issue_meta["issue_url"],
         "status": str(row["status"]),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),

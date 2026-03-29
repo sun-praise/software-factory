@@ -36,7 +36,7 @@ def test_manual_issue_run_detail_omits_fake_pull_request_link(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert "https://github.com/acme/widgets/pull/42" not in response.text
-    assert 'id="run-pr">' in response.text
+    assert 'id="run-source-link">' in response.text
 
 
 def test_manual_issue_run_prefers_opened_pull_request_link(tmp_path: Path) -> None:
