@@ -641,23 +641,31 @@ def test_collect_pull_request_metadata_returns_empty_on_timeout(
     )
 
 
-def test_collect_pull_request_metadata_includes_merge_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _make_fake_gh_run(view_stdout: str, diff_stdout: str = ""):
     def fake_run(*args, **kwargs):
         cmd = list(args[0]) if args else []
         if "diff" in cmd:
-            return agent_runner.subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="app/main.py\napp/utils.py", stderr=""
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=diff_stdout, stderr=""
             )
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Fix bug", "body": "desc", "baseRefName": "main", "headRefName": "feature", "headRefOid": "abc123", "changedFiles": 3, "additions": 10, "deletions": 5, "mergeStateStatus": "CONFLICTING", "canBeRebased": true, "mergeable": false}',
-            stderr="",
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=view_stdout, stderr=""
         )
 
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    return fake_run
+
+
+def test_collect_pull_request_metadata_includes_merge_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Fix bug", "body": "desc", "baseRefName": "main", "headRefName": "feature", "headRefOid": "abc123", "changedFiles": 3, "additions": 10, "deletions": 5, "mergeStateStatus": "CONFLICTING", "canBeRebased": true, "mergeable": false}',
+            diff_stdout="app/main.py\napp/utils.py",
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -676,20 +684,13 @@ def test_collect_pull_request_metadata_includes_merge_state(
 def test_collect_pull_request_metadata_detects_behind_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return agent_runner.subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Feature", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BEHIND", "canBeRebased": true, "mergeable": true}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Feature", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BEHIND", "canBeRebased": true, "mergeable": true}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -705,20 +706,13 @@ def test_collect_pull_request_metadata_detects_behind_state(
 def test_collect_pull_request_metadata_detects_clean_mergeable_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return agent_runner.subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Clean PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "MERGEABLE", "canBeRebased": true, "mergeable": true}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Clean PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "MERGEABLE", "canBeRebased": true, "mergeable": true}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -733,20 +727,13 @@ def test_collect_pull_request_metadata_detects_clean_mergeable_state(
 def test_collect_pull_request_metadata_detects_dirty_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return agent_runner.subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Dirty PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "DIRTY", "canBeRebased": true, "mergeable": false}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Dirty PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "DIRTY", "canBeRebased": true, "mergeable": false}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -760,20 +747,13 @@ def test_collect_pull_request_metadata_detects_dirty_state(
 def test_collect_pull_request_metadata_detects_blocked_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return agent_runner.subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Blocked PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BLOCKED", "canBeRebased": true, "mergeable": false}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Blocked PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BLOCKED", "canBeRebased": true, "mergeable": false}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -3604,16 +3584,11 @@ def test_collect_pull_request_metadata_logs_unknown_state(
 ) -> None:
     import json
 
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        result = subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps(
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout=json.dumps(
                 {
                     "title": "Test PR",
                     "body": "",
@@ -3628,11 +3603,8 @@ def test_collect_pull_request_metadata_logs_unknown_state(
                     "mergeable": True,
                 }
             ),
-            stderr="",
-        )
-        return result
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        ),
+    )
 
     import logging
 
@@ -3652,16 +3624,11 @@ def test_collect_pull_request_metadata_logs_unstable_state(
 ) -> None:
     import json
 
-    def fake_run(*args, **kwargs):
-        cmd = list(args[0]) if args else []
-        if "diff" in cmd:
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        result = subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps(
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout=json.dumps(
                 {
                     "title": "Test PR",
                     "body": "",
@@ -3676,11 +3643,8 @@ def test_collect_pull_request_metadata_logs_unstable_state(
                     "mergeable": True,
                 }
             ),
-            stderr="",
-        )
-        return result
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        ),
+    )
 
     import logging
 

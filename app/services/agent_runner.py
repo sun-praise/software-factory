@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, cast
 
 from app.config import get_settings
 from app.services.agent_prompt import (
+    CHANGED_FILE_PATHS_LIMIT,
     build_autofix_prompt,
     collect_check_commands,
     summarize_check_results,
@@ -2789,15 +2790,17 @@ _ALTERNATES_PATH = ".git/objects/info/alternates"
 
 def _strip_git_alternates(workspace_dir: str) -> None:
     alternates_file = Path(workspace_dir) / _ALTERNATES_PATH
-    if alternates_file.exists():
-        try:
-            alternates_file.unlink()
-            logger.debug("removed git alternates from workspace: %s", workspace_dir)
-        except OSError:
-            logger.warning(
-                "failed to remove git alternates from workspace: %s",
-                workspace_dir,
-            )
+    try:
+        alternates_file.unlink()
+        logger.debug("removed git alternates from workspace: %s", workspace_dir)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.warning(
+            "failed to remove git alternates from workspace: %s",
+            workspace_dir,
+            exc_info=True,
+        )
 
 
 def _checkout_run_workspace_target(
@@ -3047,7 +3050,7 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
     }
 
 
-CHANGED_FILES_PATH_LIMIT = 50
+CHANGED_FILES_PATH_LIMIT = CHANGED_FILE_PATHS_LIMIT
 
 
 def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
