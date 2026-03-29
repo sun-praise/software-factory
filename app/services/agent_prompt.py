@@ -36,9 +36,7 @@ def build_autofix_prompt(
         head_sha=head_sha,
         normalized_review=normalized_review,
     )
-    if not _is_issue_sourced_run(normalized_review) and not _is_task_input_run(
-        normalized_review
-    ):
+    if _is_pr_sourced_run(normalized_review):
         _append_pr_merge_state_context(lines, metadata)
         _append_pr_metadata(lines, metadata)
     _append_repo_instructions(lines, repo_instructions)
@@ -119,6 +117,12 @@ def _build_run_context_lines(
         f"- Pull Request: #{pr_number}",
         f"- Head SHA: {head_sha}",
     ]
+
+
+def _is_pr_sourced_run(normalized_review: Mapping[str, Any]) -> bool:
+    return not _is_issue_sourced_run(normalized_review) and not _is_task_input_run(
+        normalized_review
+    )
 
 
 def _is_issue_sourced_run(normalized_review: Mapping[str, Any]) -> bool:

@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+MAX_TASK_INPUT_LENGTH = 100_000
+
 
 @dataclass(frozen=True)
 class TaskInput:
@@ -56,7 +58,7 @@ class GitHubIssueProvider:
                 ):
                     return True
         except ValueError:
-            pass
+            return False
         return False
 
     def parse(self, raw_input: str) -> TaskInput:
@@ -139,6 +141,10 @@ def get_registered_providers() -> list[str]:
 
 
 def parse_task_input(raw_input: str) -> TaskInput:
+    if len(raw_input) > MAX_TASK_INPUT_LENGTH:
+        raise ValueError(
+            f"Input exceeds maximum length of {MAX_TASK_INPUT_LENGTH} characters."
+        )
     stripped = raw_input.strip()
     if not stripped:
         raise ValueError("Input must not be empty.")
