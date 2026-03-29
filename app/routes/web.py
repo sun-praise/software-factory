@@ -218,7 +218,7 @@ def _status_class(status: str) -> str:
 def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
     trigger = _string_or_empty(row["trigger_source"])
     if trigger != "manual_issue":
-        return {"trigger_source": "pr", "issue_number": "", "issue_url": ""}
+        return {"trigger_source": trigger or "pr", "issue_number": "", "issue_url": ""}
     try:
         review_json = json.loads(row["normalized_review_json"] or "{}")
     except (json.JSONDecodeError, TypeError):
@@ -296,7 +296,7 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
             "repo": "-",
             "pr_number": "-",
             "pr_url": "",
-            "trigger_source": "pr",
+            "trigger_source": "",
             "issue_number": "",
             "issue_url": "",
             "status": "not_found",
