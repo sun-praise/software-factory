@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.db import init_db
+from app.routes.bugs import router as bugs_router
 from app.routes.github import router as github_router
 from app.routes.hooks import router as hooks_router
 from app.routes.web import router as web_router
@@ -29,6 +30,7 @@ app.state.templates = templates
 
 app.include_router(hooks_router)
 app.include_router(github_router)
+app.include_router(bugs_router)
 app.include_router(web_router)
 
 
