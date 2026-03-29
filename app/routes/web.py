@@ -1328,7 +1328,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
         )
 
     description = _string_or_empty(payload.description) or None
-    project_root = _string_or_empty(payload.project_root) or None
+    project_root = payload.project_root
     try:
         resolved_context = _resolve_manual_issue_context(
             target,
@@ -1399,7 +1399,7 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
         ) from exc
 
     description = _string_or_empty(payload.description) or None
-    project_root = _string_or_empty(payload.project_root) or None
+    project_root = payload.project_root
     try:
         resolved_context = _resolve_manual_issue_context(
             target,
@@ -1571,7 +1571,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
                 description=description,
                 resolved_context=resolved_context,
                 dry_run=payload.dry_run,
-                project_root=project_root,
+                project_root=payload.project_root,
             )
         except ValueError as exc:
             results.append(
