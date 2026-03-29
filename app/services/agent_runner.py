@@ -2789,6 +2789,11 @@ _ALTERNATES_PATH: str = ".git/objects/info/alternates"
 
 
 def _strip_git_alternates(workspace_dir: str) -> None:
+    """Remove git alternates to prevent agent from accessing files outside the workspace.
+
+    Git alternates can reference objects in other repositories, which could
+    leak sensitive information or allow unauthorized file access.
+    """
     alternates_file = Path(workspace_dir) / _ALTERNATES_PATH
     try:
         alternates_file.unlink()
@@ -2802,7 +2807,7 @@ def _strip_git_alternates(workspace_dir: str) -> None:
         )
     except OSError as e:
         logger.warning(
-            "failed to remove git alternates from workspace %s: %s",
+            "failed to remove git alternates from workspace: %s: %s",
             workspace_dir,
             e,
             exc_info=True,
