@@ -142,6 +142,61 @@ NEEDS_HUMAN_REVIEW_CONFIDENCE_THRESHOLD = 0.5
 SHORT_TEXT_THRESHOLD = 10
 KEYWORD_OVERLAP_THRESHOLD = 0.2
 
+_STEMMING_EXCEPTIONS = frozenset(
+    {
+        "analysis",
+        "basis",
+        "class",
+        "crisis",
+        "diagnosis",
+        "emphasis",
+        "hypothesis",
+        "oasis",
+        "parenthesis",
+        "status",
+        "thesis",
+        "this",
+        "bus",
+        "gas",
+        "has",
+        "was",
+        "yes",
+        "access",
+        "process",
+        "address",
+        "compress",
+        "express",
+        "dismiss",
+        "excess",
+        "success",
+        "witness",
+        "assess",
+        "business",
+        "discuss",
+        "response",
+        "release",
+        "cause",
+        "because",
+        "pause",
+        "clause",
+        "issue",
+        "tissue",
+        "across",
+        "focus",
+        "virus",
+        "bonus",
+        "census",
+        "consensus",
+        "corpus",
+        "stimulus",
+        "radius",
+        "genus",
+        "nexus",
+        "plus",
+        "thus",
+    }
+)
+
 
 def normalize_review_events(
     repo: str,
@@ -249,7 +304,13 @@ def normalize_review_events(
 
     semantic_groups: list[dict[str, Any]] = []
     if enable_semantic and all_actionable_items:
-        semantic_groups = _detect_semantic_groups(all_actionable_items)
+        semantic_groups, group_assignments = _detect_semantic_groups(
+            all_actionable_items
+        )
+        for item in all_actionable_items:
+            gid = group_assignments.get(id(item))
+            if gid is not None:
+                item["group_id"] = gid
 
     summary = (
         f"{len(must_fix)} blocking issues, "
@@ -375,7 +436,7 @@ def _needs_human_review(
 
 def _detect_semantic_groups(
     items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[int, str]]:
     summary_items = [
         i
         for i in items
@@ -385,9 +446,10 @@ def _detect_semantic_groups(
     inline_items = [i for i in items if i["source"] == "pull_request_review_comment"]
 
     if not summary_items or not inline_items:
-        return []
+        return [], {}
 
     groups: list[dict[str, Any]] = []
+    group_assignments: dict[int, str] = {}
     assigned_inline_ids: set[int] = set()
 
     for summary_idx, summary in enumerate(summary_items):
@@ -423,12 +485,12 @@ def _detect_semantic_groups(
         if group["inline_indices"]:
             group_id = f"sg_{summary_idx}"
             group["group_id"] = group_id
-            summary["group_id"] = group_id
+            group_assignments[id(summary)] = group_id
             for idx in group["inline_indices"]:
-                inline_items[idx]["group_id"] = group_id
+                group_assignments[id(inline_items[idx])] = group_id
             groups.append(group)
 
-    return groups
+    return groups, group_assignments
 
 
 def _extract_keywords(text: str) -> set[str]:
@@ -438,7 +500,12 @@ def _extract_keywords(text: str) -> set[str]:
     for w in words:
         if w in _STOP_WORDS:
             continue
-        if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        if (
+            w.endswith("s")
+            and not w.endswith("ss")
+            and len(w) > 3
+            and w not in _STEMMING_EXCEPTIONS
+        ):
             w = w[:-1]
         stemmed.add(w)
     return stemmed
