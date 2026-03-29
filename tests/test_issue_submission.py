@@ -717,3 +717,19 @@ def test_submit_issue_api_accepts_whitespace_only_project_root_as_none() -> None
         project_root="   ",
     )
     assert req.project_root is None
+
+
+def test_submit_issue_api_accepts_dot_project_root() -> None:
+    req = IssueSubmissionRequest(
+        url="https://github.com/acme/widgets/issues/42",
+        project_root=".",
+    )
+    assert req.project_root == "."
+
+
+def test_submit_issue_api_rejects_oversized_project_root() -> None:
+    with pytest.raises(Exception):
+        IssueSubmissionRequest(
+            url="https://github.com/acme/widgets/issues/42",
+            project_root="a" * 257,
+        )
