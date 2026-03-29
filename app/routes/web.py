@@ -633,7 +633,11 @@ def _resolve_manual_issue_context(
     return None
 
 
-def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, Any]:
+def _fetch_pull_request_feedback_review(
+    target: ParsedIssueTarget,
+    *,
+    project_root: str | None = None,
+) -> dict[str, Any]:
     review_comments = _github_get_list(
         f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/comments?per_page=100",
         not_found_message="Pull request review comments not found or unavailable.",
@@ -674,6 +678,7 @@ def _fetch_pull_request_feedback_review(target: ParsedIssueTarget) -> dict[str, 
         head_sha=None,
     )
     normalized["project_type"] = "python"
+    normalized["project_root"] = project_root
     normalized["source_kind"] = target.url_kind
     normalized["resolved_pr_number"] = target.resolved_pr_number
     normalized["manual_issue_source_url"] = target.source_url
@@ -712,6 +717,7 @@ def _build_issue_normalized_review(
     target: ParsedIssueTarget,
     description: str | None,
     resolved_context: ManualIssueContext | None,
+    project_root: str | None = None,
 ) -> dict[str, Any]:
     issue_parts = [f"Manual issue submission: {target.source_url}"]
     if target.issue_number is not None:
@@ -748,6 +754,7 @@ def _build_issue_normalized_review(
         "ignore": [],
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
+        "project_root": project_root,
         "source_kind": target.url_kind,
         "resolved_pr_number": target.resolved_pr_number,
         "issue_number": target.issue_number,
@@ -761,6 +768,7 @@ def _enqueue_issue_fix(
     description: str | None,
     resolved_context: ManualIssueContext | None,
     dry_run: bool = False,
+    project_root: str | None = None,
 ) -> dict[str, Any]:
     run_id: int | None = None
     existing_run_id: int | None = None
@@ -770,7 +778,9 @@ def _enqueue_issue_fix(
     queue_status = "not_queued"
 
     if target.url_kind == "pull" and not target.source_fragment and description is None:
-        normalized_review = _fetch_pull_request_feedback_review(target)
+        normalized_review = _fetch_pull_request_feedback_review(
+            target, project_root=project_root
+        )
         if not normalized_review.get("must_fix") and not normalized_review.get(
             "should_fix"
         ):
@@ -786,6 +796,7 @@ def _enqueue_issue_fix(
             target=target,
             description=description,
             resolved_context=resolved_context,
+            project_root=project_root,
         )
     normalized_review.setdefault("source_kind", target.url_kind)
     normalized_review.setdefault("resolved_pr_number", target.resolved_pr_number)
@@ -1280,6 +1291,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
     request_data = {
         "url": str(form.get("url", "")).strip(),
         "description": str(form.get("description", "")).strip() or None,
+        "project_root": str(form.get("project_root", "")).strip() or None,
         "dry_run": form.get("dry_run") == "true",
     }
 
@@ -1316,6 +1328,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
         )
 
     description = _string_or_empty(payload.description) or None
+    project_root = _string_or_empty(payload.project_root) or None
     try:
         resolved_context = _resolve_manual_issue_context(
             target,
@@ -1341,6 +1354,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
             description=description,
             resolved_context=resolved_context,
             dry_run=payload.dry_run,
+            project_root=project_root,
         )
     except ValueError as exc:
         return templates.TemplateResponse(
@@ -1385,6 +1399,7 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
         ) from exc
 
     description = _string_or_empty(payload.description) or None
+    project_root = _string_or_empty(payload.project_root) or None
     try:
         resolved_context = _resolve_manual_issue_context(
             target,
@@ -1402,6 +1417,7 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
             description=description,
             resolved_context=resolved_context,
             dry_run=payload.dry_run,
+            project_root=project_root,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -1484,6 +1500,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
         row_number = row_index + 2
         url = str(row.get("url", "")).strip()
         description = str(row.get("description", "")).strip() or None
+        project_root = str(row.get("project_root", "")).strip() or None
         dry_run = _parse_bool_like(row.get("dry_run"))
 
         if not url:
@@ -1502,6 +1519,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
             payload = IssueSubmissionRequest(
                 url=url,
                 description=description,
+                project_root=project_root,
                 dry_run=dry_run,
             )
         except ValidationError as exc:
@@ -1553,6 +1571,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
                 description=description,
                 resolved_context=resolved_context,
                 dry_run=payload.dry_run,
+                project_root=project_root,
             )
         except ValueError as exc:
             results.append(

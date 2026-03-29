@@ -12,6 +12,7 @@ PositiveInt = Annotated[int, Field(gt=0)]
 class IssueSubmissionRequest(BaseModel):
     url: NonEmptyStr
     description: str | None = None
+    project_root: str | None = None
     dry_run: bool = False
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
