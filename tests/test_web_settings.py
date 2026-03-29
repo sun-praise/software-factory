@@ -85,6 +85,22 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
     assert "software-factory/claude-agent:latest" in html
 
 
+def test_setup_db_then_e2e_env_sees_fresh_agent_commands(tmp_path: Path) -> None:
+    from tests.fixtures.e2e_fixtures import setup_e2e_env
+
+    _setup_db(tmp_path / "web")
+    stale_overrides = get_agent_feature_flag_env_overrides()
+    assert stale_overrides.openhands_command is None
+    assert stale_overrides.claude_agent_command is None
+
+    setup_e2e_env(tmp_path / "e2e")
+
+    overrides = get_agent_feature_flag_env_overrides()
+
+    assert overrides.openhands_command == "true"
+    assert overrides.claude_agent_command == "true"
+
+
 def test_runtime_settings_api_reports_effective_values_and_sources(
     tmp_path: Path,
 ) -> None:
