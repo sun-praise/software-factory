@@ -31,14 +31,25 @@
         <dl class="meta">
           <dt>Repository</dt>
           <dd id="run-repo">{{ run.repo | default("-") }}</dd>
+          {% if run.trigger_source == "manual_issue" and run.issue_number %}
+          <dt>Issue</dt>
+          <dd id="run-source-link">
+            {% if run.issue_url %}
+            <a href="{{ run.issue_url }}" target="_blank" rel="noreferrer">#{{ run.issue_number }}</a>
+            {% else %}
+            #{{ run.issue_number }}
+            {% endif %}
+          </dd>
+          {% else %}
           <dt>Pull Request</dt>
-          <dd id="run-pr">
+          <dd id="run-source-link">
             {% if run.pr_url %}
             <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">#{{ run.pr_number }}</a>
             {% else %}
             -
             {% endif %}
           </dd>
+          {% endif %}
           <dt>Status</dt>
           <dd id="run-status-text">{{ run.status | default("pending") }}</dd>
           <dt>Created At</dt>
@@ -98,7 +109,7 @@
         const statusPill = document.getElementById("run-status-pill");
         const statusText = document.getElementById("run-status-text");
         const repoText = document.getElementById("run-repo");
-        const prText = document.getElementById("run-pr");
+        const sourceLinkText = document.getElementById("run-source-link");
         const createdAt = document.getElementById("run-created-at");
         const updatedAt = document.getElementById("run-updated-at");
         const logNode = document.getElementById("run-log");
@@ -174,23 +185,27 @@
           }
         };
 
-        const setPrUrl = (url, prNumber) => {
+        const setSourceLink = (run) => {
+          if (!sourceLinkText) return;
+          const isIssue = run.trigger_source === "manual_issue" && run.issue_number;
+          const url = isIssue ? (run.issue_url || "") : (run.pr_url || "");
+          const number = isIssue ? run.issue_number : (run.pr_number || "");
           if (!url) {
-            prText.textContent = "-";
+            sourceLinkText.textContent = isIssue ? (number ? `#${number}` : "-") : "-";
             return;
           }
-          prText.innerHTML = "";
+          sourceLinkText.innerHTML = "";
           const link = document.createElement("a");
           link.href = url;
           link.target = "_blank";
           link.rel = "noreferrer";
-          link.textContent = prNumber ? `#${prNumber}` : url;
-          prText.appendChild(link);
+          link.textContent = number ? `#${number}` : url;
+          sourceLinkText.appendChild(link);
         };
 
         const updateView = (run) => {
           repoText.textContent = run.repo || "-";
-          setPrUrl(run.pr_url || "", run.pr_number || "");
+          setSourceLink(run);
           setStatus(run.status || "not_found");
           updateStopButton(run.status || "not_found");
           updateDeleteButton(run.status || "not_found");

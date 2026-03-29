@@ -69,12 +69,28 @@
               </span>
             </div>
             <dl class="meta run-meta">
+              {% if run.trigger_source == "manual_issue" and run.issue_number %}
+              <dt>Issue</dt>
+              <dd>
+                {% if run.issue_url %}
+                <a href="{{ run.issue_url }}" target="_blank" rel="noreferrer">
+                  #{{ run.issue_number }}
+                </a>
+                {% else %}
+                #{{ run.issue_number }}
+                {% endif %}
+              </dd>
+              {% elif run.pr_url %}
               <dt>Pull Request</dt>
               <dd>
                 <a href="{{ run.pr_url }}" target="_blank" rel="noreferrer">
                   #{{ run.pr_number }}
                 </a>
               </dd>
+              {% else %}
+              <dt>Source</dt>
+              <dd>#{{ run.pr_number }}</dd>
+              {% endif %}
               <dt>Created</dt>
               <dd>{{ run.created_at }}</dd>
               <dt>Updated</dt>
