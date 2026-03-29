@@ -38,6 +38,10 @@
         <label for="url">GitHub pull request or issue URL</label>
         <input type="url" id="url" name="url" required value="{{ form.url | default('') }}" placeholder="https://github.com/owner/repo/pull/123">
 
+        <label for="project_root">Project root (optional)</label>
+        <input type="text" id="project_root" name="project_root" value="{{ form.project_root | default('') }}" placeholder="e.g. latex-agent">
+        <p class="tiny muted">Relative path from repo root to the project subdirectory. Needed for multi-project or monorepo layouts.</p>
+
         <div class="actions">
           <button type="submit">Enqueue autofix</button>
         </div>

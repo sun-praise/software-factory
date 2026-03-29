@@ -50,7 +50,7 @@ from app.services.queue import (
     update_run_opened_pr,
 )
 from app.services.retry import RetryConfig, schedule_retry
-from app.services.run_hints import parse_execution_hints
+from app.services.run_hints import ExecutionHints, parse_execution_hints
 from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
 
 
@@ -302,6 +302,14 @@ def run_once(
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
     initial_operator_hints = get_run_operator_hints(conn, run_id)
     initial_execution_hints = parse_execution_hints(initial_operator_hints)
+    payload_root = _safe_text(payload.get("project_root")) or None
+    effective_root = initial_execution_hints.project_root or payload_root
+    if effective_root:
+        initial_execution_hints = ExecutionHints(
+            project_root=effective_root,
+            check_commands=initial_execution_hints.check_commands,
+            skip_baseline_checks=initial_execution_hints.skip_baseline_checks,
+        )
     # Blank `check_command:` lines are ignored by the parser, so an empty tuple
     # means "no override" and should fall back to the project-type defaults.
     commands = list(
