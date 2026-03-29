@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 from typing import Any
 
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/api/bugs", tags=["bugs"])
 _BUG_API_KEY_HEADER = APIKeyHeader(name="X-Bug-Api-Key", auto_error=False)
 _DEFAULT_REPO = "local/unspecified"
 _SYNTHETIC_PR_OFFSET = 9_000_000
+_logger = logging.getLogger(__name__)
 
 
 async def _verify_bug_api_key(
@@ -40,6 +42,10 @@ async def _verify_bug_api_key(
 ) -> None:
     configured_key = get_settings().bug_input_api_key
     if not configured_key:
+        _logger.warning(
+            "BUG_INPUT_API_KEY is not set; /api/bugs endpoint is open to all requests. "
+            "Set this variable in production to enable authentication."
+        )
         return
     if not api_key or api_key != configured_key:
         raise HTTPException(

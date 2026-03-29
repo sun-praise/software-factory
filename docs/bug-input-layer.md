@@ -192,3 +192,19 @@ The existing GitHub webhook and issue submission flows remain unchanged. The bug
 | GitHub Webhook | `POST /github/webhook` | `github_webhook` |
 | Issue Submission | `POST /api/issues` | `manual_issue` |
 | **Bug Input (new)** | `POST /api/bugs` | `bug_input` |
+
+## Authentication
+
+The `/api/bugs` endpoint supports optional API Key authentication.
+
+### Configuration
+
+Set the `BUG_INPUT_API_KEY` environment variable to enable authentication. When configured, all requests to `POST /api/bugs` must include the header:
+
+```
+X-Bug-Api-Key: <your-api-key>
+```
+
+Requests with a missing or incorrect key receive a `401 Unauthorized` response.
+
+When `BUG_INPUT_API_KEY` is **not set**, the endpoint accepts all requests without authentication. A warning is logged at request time to remind operators to configure this in production.
