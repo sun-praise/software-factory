@@ -49,6 +49,7 @@ _ENV_SOURCE = "env"
 _DB_SOURCE = "db"
 _DEFAULT_SOURCE = "default"
 _MISSING = object()
+_REDACTED_AUDIT_VALUE = "***REDACTED***"
 
 
 @dataclass(frozen=True)
@@ -323,6 +324,16 @@ def load_runtime_setting_rows(conn: sqlite3.Connection) -> dict[str, str]:
 def describe_runtime_settings(
     conn: sqlite3.Connection,
 ) -> tuple[RuntimeSettingDescription, ...]:
+    """Return a full description of every runtime setting.
+
+    No caching is applied: this function performs a fresh DB read and env
+    resolution on every call.  This is intentional — the endpoint is
+    operator-only and called infrequently (settings page load, manual API
+    inspection).  Adding a TTL cache would introduce subtle staleness
+    without a measurable performance benefit at current traffic levels.
+    If call frequency increases significantly, consider a short-lived
+    ``functools.lru_cache`` keyed on the DB row ``updated_at`` timestamps.
+    """
     runtime_settings = resolve_runtime_settings(conn)
     overrides = RuntimeSettingsEnvOverrides()
     env_only_overrides = RuntimeEnvOnlyOverrides()
@@ -466,21 +477,26 @@ def resolve_runtime_settings(conn: sqlite3.Connection) -> RuntimeSettings:
     )
 
 
+@dataclass(frozen=True)
+class RuntimeSettingsPayload:
+    github_webhook_debounce_seconds: int
+    max_autofix_per_pr: int
+    max_concurrent_runs: int
+    stale_run_timeout_seconds: int
+    pr_lock_ttl_seconds: int
+    max_retry_attempts: int
+    retry_backoff_base_seconds: int
+    retry_backoff_max_seconds: int
+    bot_logins: tuple[str, ...] | list[str]
+    noise_comment_patterns: tuple[str, ...] | list[str]
+    managed_repo_prefixes: tuple[str, ...] | list[str]
+    autofix_comment_author: str
+
+
 def save_runtime_settings(
     conn: sqlite3.Connection,
+    payload: RuntimeSettingsPayload,
     *,
-    github_webhook_debounce_seconds: int,
-    max_autofix_per_pr: int,
-    max_concurrent_runs: int,
-    stale_run_timeout_seconds: int,
-    pr_lock_ttl_seconds: int,
-    max_retry_attempts: int,
-    retry_backoff_base_seconds: int,
-    retry_backoff_max_seconds: int,
-    bot_logins: tuple[str, ...] | list[str],
-    noise_comment_patterns: tuple[str, ...] | list[str],
-    managed_repo_prefixes: tuple[str, ...] | list[str],
-    autofix_comment_author: str,
     changed_by: str = "system",
     change_source: str = "system",
 ) -> None:
@@ -488,29 +504,39 @@ def save_runtime_settings(
         conn,
         {
             RUNTIME_GITHUB_WEBHOOK_DEBOUNCE_SECONDS_KEY: str(
-                max(1, int(github_webhook_debounce_seconds))
+                max(1, int(payload.github_webhook_debounce_seconds))
             ),
-            RUNTIME_MAX_AUTOFIX_PER_PR_KEY: str(max(0, int(max_autofix_per_pr))),
-            RUNTIME_MAX_CONCURRENT_RUNS_KEY: str(max(1, int(max_concurrent_runs))),
+            RUNTIME_MAX_AUTOFIX_PER_PR_KEY: str(
+                max(0, int(payload.max_autofix_per_pr))
+            ),
+            RUNTIME_MAX_CONCURRENT_RUNS_KEY: str(
+                max(1, int(payload.max_concurrent_runs))
+            ),
             RUNTIME_STALE_RUN_TIMEOUT_SECONDS_KEY: str(
-                max(1, int(stale_run_timeout_seconds))
+                max(1, int(payload.stale_run_timeout_seconds))
             ),
-            RUNTIME_PR_LOCK_TTL_SECONDS_KEY: str(max(1, int(pr_lock_ttl_seconds))),
-            RUNTIME_MAX_RETRY_ATTEMPTS_KEY: str(max(1, int(max_retry_attempts))),
+            RUNTIME_PR_LOCK_TTL_SECONDS_KEY: str(
+                max(1, int(payload.pr_lock_ttl_seconds))
+            ),
+            RUNTIME_MAX_RETRY_ATTEMPTS_KEY: str(
+                max(1, int(payload.max_retry_attempts))
+            ),
             RUNTIME_RETRY_BACKOFF_BASE_SECONDS_KEY: str(
-                max(1, int(retry_backoff_base_seconds))
+                max(1, int(payload.retry_backoff_base_seconds))
             ),
             RUNTIME_RETRY_BACKOFF_MAX_SECONDS_KEY: str(
-                max(1, int(retry_backoff_max_seconds))
+                max(1, int(payload.retry_backoff_max_seconds))
             ),
-            RUNTIME_BOT_LOGINS_KEY: _serialize_list_value(bot_logins),
+            RUNTIME_BOT_LOGINS_KEY: _serialize_list_value(payload.bot_logins),
             RUNTIME_NOISE_COMMENT_PATTERNS_KEY: _serialize_list_value(
-                noise_comment_patterns
+                payload.noise_comment_patterns
             ),
             RUNTIME_MANAGED_REPO_PREFIXES_KEY: _serialize_list_value(
-                managed_repo_prefixes
+                payload.managed_repo_prefixes
             ),
-            RUNTIME_AUTOFIX_COMMENT_AUTHOR_KEY: str(autofix_comment_author).strip(),
+            RUNTIME_AUTOFIX_COMMENT_AUTHOR_KEY: str(
+                payload.autofix_comment_author
+            ).strip(),
         },
         changed_by=changed_by,
         change_source=change_source,
@@ -545,7 +571,15 @@ def save_runtime_setting_values(
             else None
         )
         if old_value != text_value:
-            changed_rows.append((key, old_value, text_value, changed_by, change_source))
+            if spec.sensitive:
+                audit_old_value = _REDACTED_AUDIT_VALUE
+                audit_new_value = _REDACTED_AUDIT_VALUE
+            else:
+                audit_old_value = old_value
+                audit_new_value = text_value
+            changed_rows.append(
+                (key, audit_old_value, audit_new_value, changed_by, change_source)
+            )
 
     conn.executemany(
         """
