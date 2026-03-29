@@ -44,6 +44,40 @@ _STACKTRACE_PATTERNS = [
 _FILE_REFERENCE_PATTERN = re.compile(r"(?:^|\s)([\w./\\-]+\.\w+)(?::(\d+))?(?:$|\s)")
 
 
+def _build_text_parts(
+    title: str, description: str, source_url: str | None
+) -> list[str]:
+    parts = [f"Title: {title}"]
+    if description:
+        parts.append(description)
+    if source_url:
+        parts.append(f"Source: {source_url}")
+    return parts
+
+
+def _build_basic_must_fix_item(
+    *,
+    source: str,
+    bug_input: BugInput,
+    text_parts: list[str],
+    default_severity: str = "P1",
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "source": source,
+        "path": None,
+        "line": None,
+        "text": "\n\n".join(text_parts),
+        "severity": default_severity,
+    }
+    if bug_input.context.files:
+        item["path"] = bug_input.context.files[0]
+    if bug_input.context.error_messages and source == "bug_input_plaintext":
+        item["severity"] = _classify_severity_from_errors(
+            bug_input.context.error_messages
+        )
+    return item
+
+
 def _build_review_shell(
     *,
     provider_kind: str,
@@ -89,10 +123,9 @@ class PlaintextBugProvider:
         self, bug_input: BugInput, *, repo: str, synthetic_pr_number: int
     ) -> dict[str, Any]:
         title = bug_input.title[:_MAX_TITLE_LENGTH]
-        description = bug_input.description[:_MAX_DESCRIPTION_LENGTH]
-        text_parts = [f"Title: {title}"]
-        if description:
-            text_parts.append(description)
+        text_parts = _build_text_parts(
+            title, bug_input.description, bug_input.source_url
+        )
         if bug_input.context.files:
             text_parts.append("Referenced files: " + ", ".join(bug_input.context.files))
         if bug_input.context.error_messages:
@@ -109,24 +142,17 @@ class PlaintextBugProvider:
         if bug_input.context.metadata:
             meta_lines = [f"{k}: {v}" for k, v in bug_input.context.metadata.items()]
             text_parts.append("Metadata:\n" + "\n".join(meta_lines))
-        if bug_input.source_url:
-            text_parts.append(f"Source: {bug_input.source_url}")
 
-        full_text = "\n\n".join(text_parts)
-        item = {
-            "source": "bug_input_plaintext",
-            "path": None,
-            "line": None,
-            "text": full_text,
-            "severity": "P1",
-        }
-        if bug_input.context.files:
-            item["path"] = bug_input.context.files[0]
-        if bug_input.context.error_messages:
-            item["severity"] = _classify_severity_from_errors(
+        item = _build_basic_must_fix_item(
+            source="bug_input_plaintext",
+            bug_input=bug_input,
+            text_parts=text_parts,
+            default_severity=_classify_severity_from_errors(
                 bug_input.context.error_messages
             )
-
+            if bug_input.context.error_messages
+            else "P1",
+        )
         return _build_review_shell(
             provider_kind=self.provider_kind,
             repo=repo,
@@ -147,23 +173,12 @@ class GitHubPRBugProvider:
         self, bug_input: BugInput, *, repo: str, synthetic_pr_number: int
     ) -> dict[str, Any]:
         title = bug_input.title[:_MAX_TITLE_LENGTH]
-        description = bug_input.description[:_MAX_DESCRIPTION_LENGTH]
-        text_parts = [f"Title: {title}"]
-        if description:
-            text_parts.append(description)
-        if bug_input.source_url:
-            text_parts.append(f"Source: {bug_input.source_url}")
-
-        item = {
-            "source": "bug_input_github_pr",
-            "path": None,
-            "line": None,
-            "text": "\n\n".join(text_parts),
-            "severity": "P1",
-        }
-        if bug_input.context.files:
-            item["path"] = bug_input.context.files[0]
-
+        text_parts = _build_text_parts(
+            title, bug_input.description, bug_input.source_url
+        )
+        item = _build_basic_must_fix_item(
+            source="bug_input_github_pr", bug_input=bug_input, text_parts=text_parts
+        )
         return _build_review_shell(
             provider_kind=self.provider_kind,
             repo=repo,
@@ -184,28 +199,17 @@ class GitHubIssueBugProvider:
         self, bug_input: BugInput, *, repo: str, synthetic_pr_number: int
     ) -> dict[str, Any]:
         title = bug_input.title[:_MAX_TITLE_LENGTH]
-        description = bug_input.description[:_MAX_DESCRIPTION_LENGTH]
-        text_parts = [f"Title: {title}"]
-        if description:
-            text_parts.append(description)
-        if bug_input.source_url:
-            text_parts.append(f"Source: {bug_input.source_url}")
+        text_parts = _build_text_parts(
+            title, bug_input.description, bug_input.source_url
+        )
         if bug_input.context.error_messages:
             text_parts.append(
                 "Errors:\n"
                 + "\n".join(f"- {e}" for e in bug_input.context.error_messages)
             )
-
-        item = {
-            "source": "bug_input_github_issue",
-            "path": None,
-            "line": None,
-            "text": "\n\n".join(text_parts),
-            "severity": "P1",
-        }
-        if bug_input.context.files:
-            item["path"] = bug_input.context.files[0]
-
+        item = _build_basic_must_fix_item(
+            source="bug_input_github_issue", bug_input=bug_input, text_parts=text_parts
+        )
         return _build_review_shell(
             provider_kind=self.provider_kind,
             repo=repo,
@@ -330,12 +334,13 @@ class LogStacktraceBugProvider:
             )
 
         ctx = bug_input.context
-        context_trace_files = ctx.files[len(extracted_errors) :]
-        for trace, file in zip(ctx.stack_traces, context_trace_files):
+        offset = len(ctx.error_messages)
+        for i, trace in enumerate(ctx.stack_traces):
+            file_idx = offset + i
             must_fix_items.append(
                 {
                     "source": "bug_input_log_stacktrace",
-                    "path": file,
+                    "path": ctx.files[file_idx] if file_idx < len(ctx.files) else None,
                     "line": None,
                     "text": trace,
                     "severity": "P0",

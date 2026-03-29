@@ -130,7 +130,11 @@ async def submit_bug(payload: BugSubmissionRequest) -> BugSubmissionResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process bug input: {exc}",
+            detail={
+                "ok": False,
+                "message": "Failed to process bug input",
+                "reason": str(exc),
+            },
         ) from exc
 
     try:
@@ -145,12 +149,16 @@ async def submit_bug(payload: BugSubmissionRequest) -> BugSubmissionResponse:
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail={"ok": False, "message": str(exc)},
         ) from exc
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to enqueue bug fix: {exc}",
+            detail={
+                "ok": False,
+                "message": "Failed to enqueue bug fix",
+                "reason": str(exc),
+            },
         ) from exc
 
     return BugSubmissionResponse(

@@ -271,18 +271,14 @@ class TestResolveProvider:
         provider = resolve_provider(bi)
         assert isinstance(provider, StructuredBugProvider)
 
-    def test_falls_back_to_plaintext(self):
+    def test_falls_back_to_plaintext(self, monkeypatch):
         from app.schemas.bug_input import BugProviderKind
 
-        original_providers = list(BUG_INPUT_PROVIDERS)
-        BUG_INPUT_PROVIDERS.clear()
-        try:
-            provider = resolve_provider(
-                BugInput(title="test", provider=BugProviderKind.PLAINTEXT)
-            )
-            assert isinstance(provider, PlaintextBugProvider)
-        finally:
-            BUG_INPUT_PROVIDERS.extend(original_providers)
+        monkeypatch.setattr("app.services.bug_input.BUG_INPUT_PROVIDERS", [])
+        provider = resolve_provider(
+            BugInput(title="test", provider=BugProviderKind.PLAINTEXT)
+        )
+        assert isinstance(provider, PlaintextBugProvider)
 
 
 class TestRegisterProvider:
