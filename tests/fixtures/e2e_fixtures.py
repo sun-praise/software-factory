@@ -15,6 +15,7 @@ from app.services.ai_client import FixPlan
 from app.services.agent_runner import RunnerOps
 from app.services.github_signature import build_signature
 from app.db import init_db
+from app.services.feature_flags import get_agent_feature_flag_env_overrides
 from app.services.patch_applier import ApplyResult
 
 
@@ -27,6 +28,7 @@ def make_in_memory_conn() -> sqlite3.Connection:
 
 def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
     get_settings.cache_clear()
+    get_agent_feature_flag_env_overrides.cache_clear()
     _get_debounce_backend.cache_clear()
     db_path = tmp_path / "software_factory.db"
     import os
