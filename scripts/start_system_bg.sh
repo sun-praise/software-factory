@@ -41,6 +41,15 @@ else
   PYTHON_CMD="python3"
 fi
 
+TOKEN_VARS_FILE="${REPO_ROOT}/config/ai_token_env_vars.txt"
+mapfile -t AI_TOKEN_ENV_VARS < <(grep -v '^[[:space:]]*$' "${TOKEN_VARS_FILE}" | sed 's/#.*//')
+
+strip_ai_tokens() {
+  for var in "${AI_TOKEN_ENV_VARS[@]}"; do
+    unset "${var}" 2>/dev/null || true
+  done
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [start|stop|restart|status|logs]
@@ -61,6 +70,7 @@ Environment overrides:
   WORKSPACE_DIR=/path/repo   Worker runtime root
   WORKER_INTERVAL_SECONDS=2  Worker polling interval
   RUNTIME_DIR=/path/runtime  Directory for pid/log files
+  TOKENS_FILE=/path/tokens   Token file for worker (default: .tokens.local)
 EOF
 }
 
@@ -120,6 +130,7 @@ start_web() {
 
   (
     cd "${REPO_ROOT}"
+    strip_ai_tokens
     start_detached "${WEB_LOG_FILE}" env \
       DB_PATH="${DB_PATH}" \
       HOST="${HOST}" \
@@ -149,6 +160,23 @@ start_worker() {
 
   (
     cd "${REPO_ROOT}"
+    TOKENS_FILE="${TOKENS_FILE:-${REPO_ROOT}/.tokens.local}"
+    if [[ -f "${TOKENS_FILE}" ]]; then
+      local resolved
+      resolved=$(cd "$(dirname "${TOKENS_FILE}")" 2>/dev/null && pwd)/$(basename "${TOKENS_FILE}") || {
+        printf 'start_worker: ERROR: cannot resolve TOKENS_FILE path %s\n' "${TOKENS_FILE}" >&2
+        exit 1
+      }
+      if [[ "${resolved}" != "${REPO_ROOT}/"* && "${resolved}" != "${REPO_ROOT}" ]]; then
+        printf 'start_worker: ERROR: TOKENS_FILE %s is outside repo root %s; refusing to source\n' \
+          "${TOKENS_FILE}" "${REPO_ROOT}" >&2
+        exit 1
+      fi
+      set -a
+      # shellcheck disable=SC1090
+      source "${TOKENS_FILE}"
+      set +a
+    fi
     start_detached "${WORKER_LOG_FILE}" env \
       DB_PATH="${DB_PATH}" \
       "${PYTHON_CMD}" scripts/run_worker.py \

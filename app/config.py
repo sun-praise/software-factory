@@ -1,8 +1,24 @@
+import logging
+import os
 from functools import lru_cache
 from typing import Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_TOKEN_VARS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "config", "ai_token_env_vars.txt"
+)
+
+
+def _load_token_env_vars() -> frozenset[str]:
+    with open(_TOKEN_VARS_FILE) as f:
+        return frozenset(line.strip() for line in f if line.strip())
+
+
+_AI_TOKEN_ENV_VARS = _load_token_env_vars()
 
 
 class Settings(BaseSettings):
@@ -113,3 +129,26 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_web_env() -> list[str]:
+    """Check that the web process does not have AI tokens in its environment.
+
+    Returns a list of offending env var names found.  Raises RuntimeError
+    in non-development environments so the process aborts rather than leak
+    tokens.
+    """
+    found = [v for v in _AI_TOKEN_ENV_VARS if os.environ.get(v)]
+    if not found:
+        return found
+    msg = (
+        "web process has AI tokens in environment: %s — "
+        "strip them before starting the web service to avoid token leaks"
+    )
+    if (
+        os.environ.get("APP_ENV", os.environ.get("app_env", "development"))
+        != "development"
+    ):
+        raise RuntimeError(msg % ", ".join(sorted(found)))
+    logger.warning(msg, ", ".join(sorted(found)))
+    return found
