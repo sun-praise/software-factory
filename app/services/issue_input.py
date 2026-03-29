@@ -1,3 +1,5 @@
+"""Flexible task input parsing with extensible provider architecture."""
+
 from __future__ import annotations
 
 import logging
@@ -53,7 +55,7 @@ class GitHubIssueProvider:
                     "pulls",
                 ):
                     return True
-        except Exception:
+        except ValueError:
             pass
         return False
 
@@ -97,7 +99,7 @@ class PlainTextProvider:
     provider_name: str = "plain_text"
 
     def can_handle(self, raw_input: str) -> bool:
-        return len(raw_input.strip()) > 0
+        return bool(raw_input.strip())
 
     def parse(self, raw_input: str) -> TaskInput:
         stripped = raw_input.strip()
@@ -143,10 +145,7 @@ def parse_task_input(raw_input: str) -> TaskInput:
 
     for provider in _PROVIDER_REGISTRY:
         if provider.can_handle(stripped):
-            try:
-                return provider.parse(stripped)
-            except ValueError:
-                continue
+            return provider.parse(stripped)
 
     return PlainTextProvider().parse(stripped)
 

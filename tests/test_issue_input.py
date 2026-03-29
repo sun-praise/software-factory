@@ -14,6 +14,7 @@ from app.services.issue_input import (
     GitHubIssueProvider,
     PlainTextProvider,
     TaskInput,
+    _PROVIDER_REGISTRY,
     build_normalized_review_from_task_input,
     get_registered_providers,
     parse_task_input,
@@ -171,6 +172,13 @@ class TestParseTaskInputWithProvider:
 
 
 class TestRegisterProvider:
+    def setup_method(self):
+        self._original_registry = list(_PROVIDER_REGISTRY)
+
+    def teardown_method(self):
+        _PROVIDER_REGISTRY.clear()
+        _PROVIDER_REGISTRY.extend(self._original_registry)
+
     def test_register_and_list(self):
         class CustomProvider:
             provider_name = "custom"
