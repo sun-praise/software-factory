@@ -33,6 +33,7 @@ jobs:
         run: ./.github/scripts/install-opencode.sh
 
       - name: Run OpenCode Review
+        continue-on-error: true
         env:
           MODEL: opencode/glm-5
           PROMPT: |
