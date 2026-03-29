@@ -67,6 +67,7 @@ def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
             "last_error_code": "TEXT",
             "last_error_at": "TEXT",
             "updated_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "source_url": "TEXT",
         },
     )
     conn.execute(
@@ -77,6 +78,9 @@ def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_autofix_runs_idempotency_key ON autofix_runs(idempotency_key);"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_autofix_runs_source_url ON autofix_runs(source_url);"
     )
     conn.commit()
 

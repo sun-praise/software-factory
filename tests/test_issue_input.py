@@ -83,6 +83,22 @@ class TestGitHubIssueProvider:
     def test_cannot_handle_empty(self):
         assert not self.provider.can_handle("")
 
+    def test_cannot_handle_subdomain_spoof(self):
+        assert not self.provider.can_handle(
+            "https://github.com.evil.com/owner/repo/issues/1"
+        )
+
+    def test_cannot_handle_userinfo_spoof(self):
+        assert not self.provider.can_handle(
+            "https://github.com@evil.com/owner/repo/issues/1"
+        )
+
+    def test_cannot_handle_trailing_dot(self):
+        assert not self.provider.can_handle("https://github.com./owner/repo/issues/1")
+
+    def test_cannot_handle_missing_path_segments(self):
+        assert not self.provider.can_handle("https://github.com/owner/issues/1")
+
     def test_parse_issue_url(self):
         result = self.provider.parse("https://github.com/acme/widgets/issues/99")
         assert result.provider == "github"

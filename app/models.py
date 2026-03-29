@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS autofix_runs (
     operator_hints TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    finished_at TEXT
+    finished_at TEXT,
+    source_url TEXT
 );
 """.strip(),
 )
@@ -140,6 +141,7 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_pull_requests_lock_owner ON pull_requests(lock_owner);",
     "CREATE INDEX IF NOT EXISTS idx_autofix_runs_status_retry_after ON autofix_runs(status, retry_after);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_autofix_runs_idempotency_key ON autofix_runs(idempotency_key);",
+    "CREATE INDEX IF NOT EXISTS idx_autofix_runs_source_url ON autofix_runs(source_url);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_review_events_event_key ON review_events(event_key);",
     "CREATE INDEX IF NOT EXISTS idx_app_config_audit_log_key_created_at ON app_config_audit_log(key, created_at DESC);",
 ]

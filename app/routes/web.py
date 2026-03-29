@@ -1,6 +1,5 @@
 import csv
 import io
-import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -69,38 +68,27 @@ def _parse_bool_like(value: str | None) -> bool:
     return str(value).strip().lower() in _TRUE_VALUES
 
 
-def _escape_like_pattern(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def _find_existing_run_by_source_url(
     conn: sqlite3.Connection,
     source_url: str,
 ) -> dict[str, Any] | None:
-    escaped_url = _escape_like_pattern(source_url)
-    cursor = conn.execute(
+    row = conn.execute(
         """
-        SELECT id, status, normalized_review_json
+        SELECT id, status
         FROM autofix_runs
         WHERE trigger_source = 'manual_issue'
-          AND normalized_review_json LIKE ? ESCAPE '\\'
+          AND source_url = ?
         ORDER BY id DESC
-        LIMIT 10
+        LIMIT 1
         """,
-        (f"%{escaped_url}%",),
-    )
-    rows = cursor.fetchall()
-    for row in rows:
-        try:
-            review_json = json.loads(row["normalized_review_json"] or "{}")
-        except json.JSONDecodeError:
-            continue
-        if review_json.get("manual_issue_source_url") == source_url:
-            return {
-                "id": row["id"],
-                "status": row["status"],
-            }
-    return None
+        (source_url,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "status": row["status"],
+    }
 
 
 router = APIRouter(tags=["web"])
@@ -920,6 +908,7 @@ def _enqueue_issue_fix(
                 trigger_source="manual_issue",
                 idempotency_key=final_idempotency_key,
                 max_attempts=runtime_settings.max_retry_attempts,
+                source_url=source_url,
             )
             queue_status = "queued" if run_id is not None else "duplicate_task"
 

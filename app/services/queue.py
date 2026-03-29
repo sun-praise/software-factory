@@ -25,6 +25,7 @@ def enqueue_autofix_run(
     idempotency_key: str | None = None,
     max_attempts: int = 3,
     retryable: bool = True,
+    source_url: str | None = None,
 ) -> int | None:
     payload_json = json.dumps(normalized_review_json, ensure_ascii=True, sort_keys=True)
     try:
@@ -40,9 +41,10 @@ def enqueue_autofix_run(
                 normalized_review_json,
                 max_attempts,
                 retryable,
-                updated_at
+                updated_at,
+                source_url
             )
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
             """,
             (
                 repo,
@@ -53,6 +55,7 @@ def enqueue_autofix_run(
                 payload_json,
                 max_attempts,
                 int(retryable),
+                source_url,
             ),
         )
     except sqlite3.IntegrityError:
