@@ -44,6 +44,31 @@ _STACKTRACE_PATTERNS = [
 _FILE_REFERENCE_PATTERN = re.compile(r"(?:^|\s)([\w./\\-]+\.\w+)(?::(\d+))?(?:$|\s)")
 
 
+def _build_review_shell(
+    *,
+    provider_kind: str,
+    repo: str,
+    synthetic_pr_number: int,
+    must_fix: list[dict[str, Any]],
+    title: str,
+    source_url: str | None,
+) -> dict[str, Any]:
+    return {
+        "repo": repo,
+        "pr_number": synthetic_pr_number,
+        "head_sha": None,
+        "must_fix": must_fix,
+        "should_fix": [],
+        "ignore": [],
+        "summary": f"{len(must_fix)} blocking issues, 0 suggestions, 0 ignored",
+        "project_type": "python",
+        "source_kind": "bug_input",
+        "bug_provider": provider_kind,
+        "bug_title": title[:_MAX_TITLE_LENGTH],
+        "bug_source_url": source_url,
+    }
+
+
 @runtime_checkable
 class BugInputProvider(Protocol):
     provider_kind: str
@@ -102,20 +127,14 @@ class PlaintextBugProvider:
                 bug_input.context.error_messages
             )
 
-        return {
-            "repo": repo,
-            "pr_number": synthetic_pr_number,
-            "head_sha": None,
-            "must_fix": [item],
-            "should_fix": [],
-            "ignore": [],
-            "summary": f"1 blocking issues, 0 suggestions, 0 ignored",
-            "project_type": "python",
-            "source_kind": "bug_input",
-            "bug_provider": self.provider_kind,
-            "bug_title": title,
-            "bug_source_url": bug_input.source_url,
-        }
+        return _build_review_shell(
+            provider_kind=self.provider_kind,
+            repo=repo,
+            synthetic_pr_number=synthetic_pr_number,
+            must_fix=[item],
+            title=title,
+            source_url=bug_input.source_url,
+        )
 
 
 class GitHubPRBugProvider:
@@ -145,20 +164,14 @@ class GitHubPRBugProvider:
         if bug_input.context.files:
             item["path"] = bug_input.context.files[0]
 
-        return {
-            "repo": repo,
-            "pr_number": synthetic_pr_number,
-            "head_sha": None,
-            "must_fix": [item],
-            "should_fix": [],
-            "ignore": [],
-            "summary": f"1 blocking issues, 0 suggestions, 0 ignored",
-            "project_type": "python",
-            "source_kind": "bug_input",
-            "bug_provider": self.provider_kind,
-            "bug_title": title,
-            "bug_source_url": bug_input.source_url,
-        }
+        return _build_review_shell(
+            provider_kind=self.provider_kind,
+            repo=repo,
+            synthetic_pr_number=synthetic_pr_number,
+            must_fix=[item],
+            title=title,
+            source_url=bug_input.source_url,
+        )
 
 
 class GitHubIssueBugProvider:
@@ -193,20 +206,14 @@ class GitHubIssueBugProvider:
         if bug_input.context.files:
             item["path"] = bug_input.context.files[0]
 
-        return {
-            "repo": repo,
-            "pr_number": synthetic_pr_number,
-            "head_sha": None,
-            "must_fix": [item],
-            "should_fix": [],
-            "ignore": [],
-            "summary": f"1 blocking issues, 0 suggestions, 0 ignored",
-            "project_type": "python",
-            "source_kind": "bug_input",
-            "bug_provider": self.provider_kind,
-            "bug_title": title,
-            "bug_source_url": bug_input.source_url,
-        }
+        return _build_review_shell(
+            provider_kind=self.provider_kind,
+            repo=repo,
+            synthetic_pr_number=synthetic_pr_number,
+            must_fix=[item],
+            title=title,
+            source_url=bug_input.source_url,
+        )
 
 
 class StructuredBugProvider:
@@ -222,24 +229,25 @@ class StructuredBugProvider:
         ctx = bug_input.context
         must_fix_items = []
         for i, error_msg in enumerate(ctx.error_messages):
-            item: dict[str, Any] = {
-                "source": "bug_input_structured",
-                "path": ctx.files[i] if i < len(ctx.files) else None,
-                "line": None,
-                "text": error_msg,
-                "severity": _classify_severity_from_errors([error_msg]),
-            }
-            must_fix_items.append(item)
-        for i, trace in enumerate(ctx.stack_traces):
-            file_idx = i + len(ctx.error_messages)
-            item = {
-                "source": "bug_input_structured",
-                "path": ctx.files[file_idx] if file_idx < len(ctx.files) else None,
-                "line": None,
-                "text": trace,
-                "severity": "P0",
-            }
-            must_fix_items.append(item)
+            must_fix_items.append(
+                {
+                    "source": "bug_input_structured",
+                    "path": ctx.files[i] if i < len(ctx.files) else None,
+                    "line": None,
+                    "text": error_msg,
+                    "severity": _classify_severity_from_errors([error_msg]),
+                }
+            )
+        for trace, file in zip(ctx.stack_traces, ctx.files[len(ctx.error_messages) :]):
+            must_fix_items.append(
+                {
+                    "source": "bug_input_structured",
+                    "path": file,
+                    "line": None,
+                    "text": trace,
+                    "severity": "P0",
+                }
+            )
 
         if not must_fix_items:
             description = bug_input.description[:_MAX_DESCRIPTION_LENGTH]
@@ -256,21 +264,14 @@ class StructuredBugProvider:
                 }
             )
 
-        summary = f"{len(must_fix_items)} blocking issues, 0 suggestions, 0 ignored"
-        return {
-            "repo": repo,
-            "pr_number": synthetic_pr_number,
-            "head_sha": None,
-            "must_fix": must_fix_items,
-            "should_fix": [],
-            "ignore": [],
-            "summary": summary,
-            "project_type": "python",
-            "source_kind": "bug_input",
-            "bug_provider": self.provider_kind,
-            "bug_title": title,
-            "bug_source_url": bug_input.source_url,
-        }
+        return _build_review_shell(
+            provider_kind=self.provider_kind,
+            repo=repo,
+            synthetic_pr_number=synthetic_pr_number,
+            must_fix=must_fix_items,
+            title=title,
+            source_url=bug_input.source_url,
+        )
 
 
 class LogStacktraceBugProvider:
@@ -329,33 +330,26 @@ class LogStacktraceBugProvider:
             )
 
         ctx = bug_input.context
-        for i, trace in enumerate(ctx.stack_traces):
-            file_idx = i + len(extracted_errors)
+        context_trace_files = ctx.files[len(extracted_errors) :]
+        for trace, file in zip(ctx.stack_traces, context_trace_files):
             must_fix_items.append(
                 {
                     "source": "bug_input_log_stacktrace",
-                    "path": ctx.files[file_idx] if file_idx < len(ctx.files) else None,
+                    "path": file,
                     "line": None,
                     "text": trace,
                     "severity": "P0",
                 }
             )
 
-        summary = f"{len(must_fix_items)} blocking issues, 0 suggestions, 0 ignored"
-        return {
-            "repo": repo,
-            "pr_number": synthetic_pr_number,
-            "head_sha": None,
-            "must_fix": must_fix_items,
-            "should_fix": [],
-            "ignore": [],
-            "summary": summary,
-            "project_type": "python",
-            "source_kind": "bug_input",
-            "bug_provider": self.provider_kind,
-            "bug_title": title,
-            "bug_source_url": bug_input.source_url,
-        }
+        return _build_review_shell(
+            provider_kind=self.provider_kind,
+            repo=repo,
+            synthetic_pr_number=synthetic_pr_number,
+            must_fix=must_fix_items,
+            title=title,
+            source_url=bug_input.source_url,
+        )
 
 
 BUG_INPUT_PROVIDERS: list[BugInputProvider] = [

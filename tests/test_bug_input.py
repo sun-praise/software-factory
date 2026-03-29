@@ -181,6 +181,21 @@ class TestStructuredBugProvider:
         assert len(result["must_fix"]) == 1
         assert "Fallback test" in result["must_fix"][0]["text"]
 
+    def test_more_stack_traces_than_files(self):
+        provider = StructuredBugProvider()
+        ctx = BugContext(
+            files=["a.py", "b.py"],
+            error_messages=["Error in a"],
+            stack_traces=["Trace 1", "Trace 2", "Trace 3"],
+        )
+        bi = BugInput(title="Mismatch", context=ctx)
+        result = provider.to_normalized_review(
+            bi, repo="acme/web", synthetic_pr_number=1
+        )
+        assert len(result["must_fix"]) == 2
+        assert result["must_fix"][0]["path"] == "a.py"
+        assert result["must_fix"][1]["path"] == "b.py"
+
 
 class TestLogStacktraceBugProvider:
     def test_supports_log_stacktrace(self):
