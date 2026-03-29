@@ -2802,7 +2802,7 @@ def _strip_git_alternates(workspace_dir: str) -> None:
         pass
     except PermissionError:
         logger.warning(
-            "permission denied removing git alternates from workspace: %s",
+            "failed to remove git alternates from workspace: %s: permission denied",
             workspace_dir,
         )
     except OSError as e:
@@ -3085,6 +3085,8 @@ def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
     paths = [
         line.strip() for line in result.stdout.strip().splitlines() if line.strip()
     ]
+    if not paths:
+        return []
     return paths[:CHANGED_FILE_PATHS_LIMIT]
 
 
