@@ -362,3 +362,76 @@ def test_build_autofix_prompt_behind_without_rebase_guidance() -> None:
     assert "Consider updating the PR branch" in prompt
     assert "can be rebased onto the base branch" not in prompt
     assert "- Can Be Rebased: False" in prompt
+
+
+def test_build_autofix_prompt_includes_changed_file_paths() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Feature",
+            "changed_file_paths": [
+                "app/main.py",
+                "app/services/agent.py",
+                "tests/test_agent.py",
+            ],
+        },
+    )
+
+    assert "Changed files in this PR:" in prompt
+    assert "  - app/main.py" in prompt
+    assert "  - app/services/agent.py" in prompt
+    assert "  - tests/test_agent.py" in prompt
+
+
+def test_build_autofix_prompt_truncates_changed_file_paths() -> None:
+    from app.services.agent_prompt import CHANGED_FILE_PATHS_LIMIT
+
+    paths = [f"dir/file_{i}.py" for i in range(CHANGED_FILE_PATHS_LIMIT + 10)]
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Big PR",
+            "changed_file_paths": paths,
+        },
+    )
+
+    assert "Changed files in this PR:" in prompt
+    assert f"  - {paths[0]}" in prompt
+    assert f"  - {paths[-1]}" not in prompt
+    assert "truncated" in prompt
+
+
+def test_build_autofix_prompt_omits_changed_file_paths_when_empty() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={},
+        pr_metadata={
+            "title": "Feature",
+            "changed_file_paths": [],
+        },
+    )
+
+    assert "Changed files in this PR:" not in prompt
+
+
+def test_build_autofix_prompt_omits_changed_file_paths_for_issue_runs() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={"source_kind": "issue"},
+        pr_metadata={
+            "title": "Do not show",
+            "changed_file_paths": ["app/main.py"],
+        },
+    )
+
+    assert "Changed files in this PR:" not in prompt

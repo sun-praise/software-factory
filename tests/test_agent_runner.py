@@ -641,18 +641,31 @@ def test_collect_pull_request_metadata_returns_empty_on_timeout(
     )
 
 
+def _make_fake_gh_run(view_stdout: str, diff_stdout: str = ""):
+    def fake_run(*args, **kwargs):
+        cmd = list(args[0]) if args else []
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=diff_stdout, stderr=""
+            )
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=view_stdout, stderr=""
+        )
+
+    return fake_run
+
+
 def test_collect_pull_request_metadata_includes_merge_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Fix bug", "body": "desc", "baseRefName": "main", "headRefName": "feature", "headRefOid": "abc123", "changedFiles": 3, "additions": 10, "deletions": 5, "mergeStateStatus": "CONFLICTING", "canBeRebased": true, "mergeable": false}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Fix bug", "body": "desc", "baseRefName": "main", "headRefName": "feature", "headRefOid": "abc123", "changedFiles": 3, "additions": 10, "deletions": 5, "mergeStateStatus": "CONFLICTING", "canBeRebased": true, "mergeable": false}',
+            diff_stdout="app/main.py\napp/utils.py",
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -665,20 +678,19 @@ def test_collect_pull_request_metadata_includes_merge_state(
     assert result["is_behind"] is False
     assert result["can_be_rebased"] is True
     assert result["mergeable"] is False
+    assert result["changed_file_paths"] == ["app/main.py", "app/utils.py"]
 
 
 def test_collect_pull_request_metadata_detects_behind_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Feature", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BEHIND", "canBeRebased": true, "mergeable": true}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Feature", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BEHIND", "canBeRebased": true, "mergeable": true}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -688,20 +700,19 @@ def test_collect_pull_request_metadata_detects_behind_state(
     assert result["is_merge_conflict"] is False
     assert result["is_behind"] is True
     assert result["can_be_rebased"] is True
+    assert result["changed_file_paths"] == []
 
 
 def test_collect_pull_request_metadata_detects_clean_mergeable_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Clean PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "MERGEABLE", "canBeRebased": true, "mergeable": true}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Clean PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "MERGEABLE", "canBeRebased": true, "mergeable": true}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -716,15 +727,13 @@ def test_collect_pull_request_metadata_detects_clean_mergeable_state(
 def test_collect_pull_request_metadata_detects_dirty_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Dirty PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "DIRTY", "canBeRebased": true, "mergeable": false}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Dirty PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "DIRTY", "canBeRebased": true, "mergeable": false}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -738,15 +747,13 @@ def test_collect_pull_request_metadata_detects_dirty_state(
 def test_collect_pull_request_metadata_detects_blocked_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return agent_runner.subprocess.CompletedProcess(
-            args=["gh", "pr", "view", "7"],
-            returncode=0,
-            stdout='{"title": "Blocked PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BLOCKED", "canBeRebased": true, "mergeable": false}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_runner.subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout='{"title": "Blocked PR", "baseRefName": "main", "headRefName": "feature", "mergeStateStatus": "BLOCKED", "canBeRebased": true, "mergeable": false}',
+        ),
+    )
 
     result = agent_runner._collect_pull_request_metadata(
         repo="acme/widgets", pr_number=7
@@ -785,8 +792,13 @@ def test_collect_pull_request_metadata_retries_without_can_be_rebased(
 
     def fake_run(*args, **kwargs):
         command = list(args[0])
+        cmd_str = " ".join(command)
         calls.append(command)
-        if len(calls) == 1:
+        if "diff" in command:
+            return agent_runner.subprocess.CompletedProcess(
+                args=command, returncode=0, stdout="file1.py", stderr=""
+            )
+        if len(calls) <= 2 and "view" in cmd_str and "canBeRebased" in cmd_str:
             return agent_runner.subprocess.CompletedProcess(
                 args=command,
                 returncode=1,
@@ -814,9 +826,11 @@ def test_collect_pull_request_metadata_retries_without_can_be_rebased(
     assert result["merge_state_status"] == "BEHIND"
     assert result["is_behind"] is True
     assert result["can_be_rebased"] is None
-    assert len(calls) == 2
-    assert "canBeRebased" in calls[0][-1]
-    assert "canBeRebased" not in calls[1][-1]
+    assert result["changed_file_paths"] == ["file1.py"]
+    view_calls = [c for c in calls if "view" in " ".join(c)]
+    assert len(view_calls) == 2
+    assert "canBeRebased" in " ".join(view_calls[0])
+    assert "canBeRebased" not in " ".join(view_calls[1])
 
 
 def test_collect_pull_request_metadata_returns_empty_on_invalid_json(
@@ -3741,11 +3755,11 @@ def test_collect_pull_request_metadata_logs_unknown_state(
 ) -> None:
     import json
 
-    def fake_run(*args, **kwargs):
-        result = subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps(
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout=json.dumps(
                 {
                     "title": "Test PR",
                     "body": "",
@@ -3760,11 +3774,8 @@ def test_collect_pull_request_metadata_logs_unknown_state(
                     "mergeable": True,
                 }
             ),
-            stderr="",
-        )
-        return result
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        ),
+    )
 
     import logging
 
@@ -3784,11 +3795,11 @@ def test_collect_pull_request_metadata_logs_unstable_state(
 ) -> None:
     import json
 
-    def fake_run(*args, **kwargs):
-        result = subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps(
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _make_fake_gh_run(
+            view_stdout=json.dumps(
                 {
                     "title": "Test PR",
                     "body": "",
@@ -3803,11 +3814,8 @@ def test_collect_pull_request_metadata_logs_unstable_state(
                     "mergeable": True,
                 }
             ),
-            stderr="",
-        )
-        return result
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        ),
+    )
 
     import logging
 
@@ -3820,3 +3828,82 @@ def test_collect_pull_request_metadata_logs_unstable_state(
     assert metadata["is_merge_conflict"] is False
     assert metadata["is_behind"] is False
     assert any("pr_merge_state_unknown" in record.message for record in caplog.records)
+
+
+def test_strip_git_alternates_removes_file_when_present(tmp_path: Path) -> None:
+    git_dir = tmp_path / ".git" / "objects" / "info"
+    git_dir.mkdir(parents=True)
+    alternates = git_dir / "alternates"
+    alternates.write_text("/some/cache/path")
+
+    agent_runner._strip_git_alternates(str(tmp_path))
+
+    assert not alternates.exists()
+
+
+def test_strip_git_alternates_noop_when_missing(tmp_path: Path) -> None:
+    agent_runner._strip_git_alternates(str(tmp_path))
+
+
+def test_collect_changed_file_paths_returns_paths_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="app/main.py\napp/utils.py\ntests/test_main.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_changed_file_paths(repo="acme/widgets", pr_number=7)
+
+    assert result == ["app/main.py", "app/utils.py", "tests/test_main.py"]
+
+
+def test_collect_changed_file_paths_returns_empty_on_gh_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_changed_file_paths(repo="acme/widgets", pr_number=7)
+
+    assert result == []
+
+
+def test_collect_changed_file_paths_returns_empty_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0], returncode=1, stdout="", stderr="error"
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_changed_file_paths(repo="acme/widgets", pr_number=7)
+
+    assert result == []
+
+
+def test_collect_changed_file_paths_truncates_to_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = "\n".join(f"file_{i}.py" for i in range(60))
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout=paths, stderr=""
+        )
+
+    monkeypatch.setattr(agent_runner.subprocess, "run", fake_run)
+
+    result = agent_runner._collect_changed_file_paths(repo="acme/widgets", pr_number=7)
+
+    assert len(result) == agent_runner.CHANGED_FILE_PATHS_LIMIT
+    assert result[0] == "file_0.py"

@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, cast
 
 from app.config import get_settings
 from app.services.agent_prompt import (
+    CHANGED_FILE_PATHS_LIMIT,
     build_autofix_prompt,
     collect_check_commands,
     summarize_check_results,
@@ -2788,7 +2789,37 @@ def _create_run_workspace_clone(
         _raise_workspace_git_error(
             "git clone", clone_result, cleanup_dir=run_workspace_dir
         )
+    _strip_git_alternates(run_workspace_dir)
     return run_workspace_dir
+
+
+_ALTERNATES_PATH: str = ".git/objects/info/alternates"
+
+
+def _strip_git_alternates(workspace_dir: str) -> None:
+    """Remove git alternates to prevent agent from accessing files outside the workspace.
+
+    Git alternates can reference objects in other repositories, which could
+    leak sensitive information or allow unauthorized file access.
+    """
+    alternates_file = Path(workspace_dir) / _ALTERNATES_PATH
+    try:
+        alternates_file.unlink()
+        logger.debug("removed git alternates from workspace: %s", workspace_dir)
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        logger.warning(
+            "failed to remove git alternates from workspace: %s: permission denied",
+            workspace_dir,
+        )
+    except OSError as e:
+        logger.warning(
+            "failed to remove git alternates from workspace: %s: %s",
+            workspace_dir,
+            e,
+            exc_info=True,
+        )
 
 
 def _checkout_run_workspace_target(
@@ -3032,7 +3063,39 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
         "is_merge_conflict": is_merge_conflict,
         "is_behind": is_behind,
         "is_blocked": is_blocked,
+        "changed_file_paths": _collect_changed_file_paths(
+            repo=repo, pr_number=pr_number
+        ),
     }
+
+
+def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "diff",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--name-only",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PR_FETCH_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    paths = [
+        line.strip() for line in result.stdout.strip().splitlines() if line.strip()
+    ]
+    if not paths:
+        return []
+    return paths[:CHANGED_FILE_PATHS_LIMIT]
 
 
 def _pr_requires_mergeability_gate(metadata: Mapping[str, Any] | None) -> bool:

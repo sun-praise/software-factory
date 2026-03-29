@@ -7,6 +7,7 @@ from app.services.run_hints import OPERATOR_HINTS_PROMPT_PREVIEW_LIMIT
 
 PR_BODY_PREVIEW_LIMIT = 600
 REPO_INSTRUCTIONS_PREVIEW_LIMIT = 4_000
+CHANGED_FILE_PATHS_LIMIT = 50
 
 
 def build_autofix_prompt(
@@ -277,6 +278,24 @@ def _append_pr_metadata(lines: list[str], metadata: Mapping[str, Any]) -> None:
         if len(compact_body) > PR_BODY_PREVIEW_LIMIT:
             compact_body = f"{compact_body[:PR_BODY_PREVIEW_LIMIT].rstrip()}..."
         lines.append(f"- PR Body: {compact_body}")
+    _append_changed_file_paths(lines, metadata)
+
+
+def _append_changed_file_paths(lines: list[str], metadata: Mapping[str, Any]) -> None:
+    raw_paths = metadata.get("changed_file_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        return
+    paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    if not paths:
+        return
+    lines.extend(
+        ["", "Changed files in this PR:"]
+        + [f"  - {p}" for p in paths[:CHANGED_FILE_PATHS_LIMIT]]
+    )
+    if len(paths) > CHANGED_FILE_PATHS_LIMIT:
+        lines.append(
+            f"  ... and {len(paths) - CHANGED_FILE_PATHS_LIMIT} more (truncated)"
+        )
 
 
 def _format_ci_summary(ci_status: str, ci_checks: list[Mapping[str, Any]]) -> str:
