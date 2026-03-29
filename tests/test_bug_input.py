@@ -196,6 +196,20 @@ class TestStructuredBugProvider:
         assert result["must_fix"][0]["path"] == "a.py"
         assert result["must_fix"][1]["path"] == "b.py"
 
+    def test_fewer_files_than_error_messages(self):
+        provider = StructuredBugProvider()
+        ctx = BugContext(
+            files=["a.py"],
+            error_messages=["Error in a", "Error in b"],
+        )
+        bi = BugInput(title="Mismatch", context=ctx)
+        result = provider.to_normalized_review(
+            bi, repo="acme/web", synthetic_pr_number=1
+        )
+        assert len(result["must_fix"]) == 2
+        assert result["must_fix"][0]["path"] == "a.py"
+        assert result["must_fix"][1]["path"] is None
+
 
 class TestLogStacktraceBugProvider:
     def test_supports_log_stacktrace(self):
@@ -229,6 +243,37 @@ class TestLogStacktraceBugProvider:
             bi, repo="acme/web", synthetic_pr_number=1
         )
         assert len(result["must_fix"]) >= 1
+
+    def test_context_stack_traces_zipped_with_files(self):
+        provider = LogStacktraceBugProvider()
+        ctx = BugContext(
+            files=["src/db.py", "src/cache.py"],
+            stack_traces=["Trace in db", "Trace in cache"],
+            error_messages=[],
+        )
+        bi = BugInput(title="Stack trace bug", context=ctx)
+        result = provider.to_normalized_review(
+            bi, repo="acme/web", synthetic_pr_number=1
+        )
+        trace_items = [item for item in result["must_fix"] if item["severity"] == "P0"]
+        assert len(trace_items) == 2
+        assert trace_items[0]["path"] == "src/db.py"
+        assert trace_items[1]["path"] == "src/cache.py"
+
+    def test_context_stack_traces_with_fewer_files(self):
+        provider = LogStacktraceBugProvider()
+        ctx = BugContext(
+            files=["src/db.py"],
+            stack_traces=["Trace in db", "Trace in cache"],
+            error_messages=[],
+        )
+        bi = BugInput(title="Stack trace mismatch", context=ctx)
+        result = provider.to_normalized_review(
+            bi, repo="acme/web", synthetic_pr_number=1
+        )
+        trace_items = [item for item in result["must_fix"] if item["severity"] == "P0"]
+        assert len(trace_items) == 1
+        assert trace_items[0]["path"] == "src/db.py"
 
 
 class TestGitHubProviders:

@@ -334,13 +334,11 @@ class LogStacktraceBugProvider:
             )
 
         ctx = bug_input.context
-        offset = len(ctx.error_messages)
-        for i, trace in enumerate(ctx.stack_traces):
-            file_idx = offset + i
+        for trace, file in zip(ctx.stack_traces, ctx.files):
             must_fix_items.append(
                 {
                     "source": "bug_input_log_stacktrace",
-                    "path": ctx.files[file_idx] if file_idx < len(ctx.files) else None,
+                    "path": file,
                     "line": None,
                     "text": trace,
                     "severity": "P0",

@@ -50,9 +50,10 @@ class BugSubmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     def to_bug_input(self) -> BugInput:
-        data = self.model_dump(exclude={"dry_run"})
-        data["context"] = data["context"] or BugContext()
-        return BugInput(**data)
+        return BugInput(
+            **self.model_dump(exclude={"dry_run", "context"}),
+            context=self.context or BugContext(),
+        )
 
 
 class BugSubmissionResponse(BaseModel):
