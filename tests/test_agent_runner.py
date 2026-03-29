@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -1815,26 +1817,117 @@ def test_run_once_records_comment_failure_in_db(
 
 def test_default_executor_passes_timeout(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
+    communicate_result = [("", "")]
 
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured.update(kwargs)
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = list(command)
+            captured.update(kwargs)
+            self.pid = 12345
+            self.returncode = 0
 
-        class _Result:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
+        def communicate(self, timeout=None):
+            captured["timeout"] = timeout
+            return communicate_result[0]
 
-        return _Result()
+        def poll(self):
+            return 0
 
-    import subprocess
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     result = _default_executor("pytest -q", str(tmp_path))
 
     assert captured["timeout"] == CHECK_COMMAND_TIMEOUT_SECONDS
     assert captured["cwd"] == str(tmp_path)
     assert result.returncode == 0
+
+
+def test_default_executor_handles_timeout(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    killed_pids: list[int] = []
+    killed_signals: list[int] = []
+
+    def fake_killpg(pid, sig):
+        killed_pids.append(pid)
+        killed_signals.append(sig)
+        if sig == signal.SIGTERM:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = list(command)
+            captured.update(kwargs)
+            self.pid = 99999
+            self.returncode = None
+            self._terminated = False
+
+        def communicate(self, timeout=None):
+            if not self._terminated:
+                self._terminated = True
+                raise subprocess.TimeoutExpired(
+                    self.pid, timeout, output="partial stdout", stderr="partial stderr"
+                )
+            return ("", "")
+
+        def poll(self):
+            if self._terminated:
+                return -1
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = _default_executor("pytest -q", str(tmp_path))
+
+    assert result.returncode == -1
+    assert "timed out" in result.stderr.lower()
+    assert str(CHECK_COMMAND_TIMEOUT_SECONDS) in result.stderr
+    assert signal.SIGTERM in killed_signals
+
+
+def test_default_executor_timeout_escalates_to_sigkill(
+    monkeypatch, tmp_path: Path
+) -> None:
+    killed_pids: list[int] = []
+    killed_signals: list[int] = []
+    monotonic_calls = [0]
+
+    def fake_killpg(pid, sig):
+        killed_pids.append(pid)
+        killed_signals.append(sig)
+
+    def fake_monotonic():
+        monotonic_calls[0] += 1
+        return monotonic_calls[0]
+
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            self.pid = 77777
+            self.returncode = None
+            self._terminated = False
+            self._communicate_count = 0
+
+        def communicate(self, timeout=None):
+            self._communicate_count += 1
+            if self._communicate_count == 1:
+                raise subprocess.TimeoutExpired(
+                    self.pid, timeout, output="partial stdout", stderr="partial stderr"
+                )
+            return ("", "")
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = _default_executor("pytest -q", str(tmp_path))
+
+    assert result.returncode == -1
+    assert "timed out" in result.stderr.lower()
+    assert signal.SIGTERM in killed_signals
+    assert signal.SIGKILL in killed_signals
 
 
 def test_run_once_fails_for_unknown_project_type(tmp_path: Path) -> None:
@@ -1871,25 +1964,25 @@ def test_default_executor_prefers_workspace_venv_python(
     venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
     venv_python.chmod(0o755)
 
-    def fake_run(command, **kwargs):
-        captured["command"] = list(command)
-        captured.update(kwargs)
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = list(command)
+            captured.update(kwargs)
+            self.pid = 12345
+            self.returncode = 0
 
-        class _Result:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
+        def communicate(self, timeout=None):
+            return ("ok", "")
 
-        return _Result()
-
-    import subprocess
+        def poll(self):
+            return 0
 
     monkeypatch.setattr(
         shutil,
         "which",
         lambda value: None if value in {"python", "python3"} else f"/usr/bin/{value}",
     )
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
 
     result = _default_executor("python -m ruff check .", str(tmp_path))
 
