@@ -3468,15 +3468,60 @@ def _default_executor(
             if fallback_python:
                 argv[0] = fallback_python
 
-    return subprocess.run(
+    process: subprocess.Popen[str] = subprocess.Popen(
         argv,
         cwd=workspace_dir,
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=CHECK_COMMAND_TIMEOUT_SECONDS,
         env=env,
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=CHECK_COMMAND_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _terminate_check_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except Exception:
+            stdout, stderr = "", ""
+        timeout_msg = f"command timed out after {CHECK_COMMAND_TIMEOUT_SECONDS}s"
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=-1,
+            stdout=stdout or "",
+            stderr=f"{timeout_msg}\n{stderr or ''}".strip(),
+        )
+    return subprocess.CompletedProcess(
+        args=argv,
+        returncode=process.returncode or 0,
+        stdout=stdout or "",
+        stderr=stderr or "",
+    )
+
+
+def _terminate_check_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.pid is None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        return
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return
+        time.sleep(0.1)
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        pass
 
 
 def _bootstrap_workspace_runtime(
