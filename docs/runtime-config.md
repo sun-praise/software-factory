@@ -36,6 +36,24 @@ These values are visible in:
 
 Writes are audit-trailed in `app_config_audit_log`.
 
+## Operator-Only Interfaces
+
+`/settings` (both the HTML page and the `POST` handler) and `GET /api/settings/runtime` are **operator-only** interfaces. They expose and mutate internal runtime configuration and must not be accessible to end-users or untrusted clients.
+
+### Deployment Boundary
+
+In production, access to these endpoints is enforced at the reverse-proxy layer:
+
+- `sf.sun-praise.com/settings` and `sf.sun-praise.com/api/settings/runtime` are protected behind **nginx basic auth**.
+- No application-level authentication middleware exists for these routes; the nginx layer is the sole gatekeeper.
+- If nginx basic auth is removed or misconfigured, these endpoints become publicly writable.
+
+### Operational Guidance
+
+- When deploying behind a new reverse proxy, replicate the basic-auth location blocks from the production nginx config for both `/settings` and `/api/settings/runtime`.
+- Audit log entries (`app_config_audit_log`) record `changed_by` and `change_source` — cross-reference these when investigating unexpected configuration changes.
+- Future sensitive settings (e.g. if secret values are ever added to `app_feature_flags`) must be marked `sensitive: True` in their `RuntimeSettingSpec`. Sensitive values are excluded from the inspect API responses and redacted in audit log entries (see **Audit Log Sensitive Value Redaction** below).
+
 ## Env-Only Settings
 
 These settings must stay outside SQLite because they are bootstrap, deployment-specific, or secret:
@@ -67,3 +85,31 @@ Secrets are intentionally omitted from the runtime inspect API.
 - if the UI and worker behave differently, check `DB_PATH` first
 - if a saved DB value does not take effect, check whether the inspect API reports `source: env`
 - if a runtime value changed unexpectedly, inspect `app_config_audit_log`
+
+## Audit Log Sensitive Value Redaction
+
+When a `RuntimeSettingSpec` is marked `sensitive: True`, the `save_runtime_setting_values()` function redacts both `old_value` and `new_value` in the audit log row. The stored audit row will contain the literal string `***REDACTED***` instead of the plaintext value. The actual value is still written to `app_feature_flags` as normal — only the audit trail is masked.
+
+Currently no runtime settings are marked sensitive. This mechanism exists as a defence-in-depth measure for future settings that may carry secrets (e.g. webhook tokens stored in the DB).
+
+## Audit Log Retention
+
+`app_config_audit_log` is an append-only table with no automatic cleanup. Retention strategy:
+
+| Aspect | Policy |
+|---|---|
+| Default retention | Unlimited (no TTL) |
+| Recommended operational ceiling | 90 days |
+| Cleanup method | Manual `DELETE FROM app_config_audit_log WHERE created_at < datetime('now', '-90 days')` |
+| Archive before purge | Optional: `INSERT INTO app_config_audit_log_archive SELECT * FROM app_config_audit_log WHERE created_at < …` then delete |
+
+In production, add a periodic cron job or scheduled task to enforce the 90-day retention window if audit volume grows beyond operational needs.
+
+## SQLite Concurrency Constraints
+
+The application uses a single SQLite file shared between the `web` and `worker` processes. SQLite handles concurrent writes via file-level locking:
+
+- **Write contention**: SQLite returns `SQLITE_BUSY` when a writer cannot acquire the lock. The default busy-timeout is 5 seconds (`PRAGMA busy_timeout = 5000`).
+- **Read during write**: WAL mode is not enabled; readers may see `SQLITE_BUSY` if a write transaction is in progress.
+- **Mitigation**: Keep write transactions short. The `save_runtime_setting_values()` function performs a single `executemany` + `commit` and should complete well within the busy-timeout window.
+- **Practical constraint**: The current workload (operator-initiated settings saves, webhook processing) generates very low write concurrency. If concurrent write throughput increases (e.g. high-frequency webhook bursts), consider enabling WAL mode or migrating to a client-server database.

@@ -24,6 +24,7 @@ from app.services.feature_flags import (
     save_agent_feature_flags,
 )
 from app.services.runtime_settings import (
+    RuntimeSettingsPayload,
     build_runtime_settings_context,
     describe_runtime_settings,
     get_runtime_form_int_field_specs,
@@ -1197,20 +1198,28 @@ async def save_settings(request: Request) -> RedirectResponse:
     with connect_db() as conn:
         save_runtime_settings(
             conn,
-            github_webhook_debounce_seconds=runtime_int_values[
-                "github_webhook_debounce_seconds"
-            ],
-            max_autofix_per_pr=runtime_int_values["max_autofix_per_pr"],
-            max_concurrent_runs=runtime_int_values["max_concurrent_runs"],
-            stale_run_timeout_seconds=runtime_int_values["stale_run_timeout_seconds"],
-            pr_lock_ttl_seconds=runtime_int_values["pr_lock_ttl_seconds"],
-            max_retry_attempts=runtime_int_values["max_retry_attempts"],
-            retry_backoff_base_seconds=runtime_int_values["retry_backoff_base_seconds"],
-            retry_backoff_max_seconds=runtime_int_values["retry_backoff_max_seconds"],
-            bot_logins=runtime_bot_logins,
-            noise_comment_patterns=runtime_noise_comment_patterns,
-            managed_repo_prefixes=runtime_managed_repo_prefixes,
-            autofix_comment_author=runtime_autofix_comment_author,
+            RuntimeSettingsPayload(
+                github_webhook_debounce_seconds=runtime_int_values[
+                    "github_webhook_debounce_seconds"
+                ],
+                max_autofix_per_pr=runtime_int_values["max_autofix_per_pr"],
+                max_concurrent_runs=runtime_int_values["max_concurrent_runs"],
+                stale_run_timeout_seconds=runtime_int_values[
+                    "stale_run_timeout_seconds"
+                ],
+                pr_lock_ttl_seconds=runtime_int_values["pr_lock_ttl_seconds"],
+                max_retry_attempts=runtime_int_values["max_retry_attempts"],
+                retry_backoff_base_seconds=runtime_int_values[
+                    "retry_backoff_base_seconds"
+                ],
+                retry_backoff_max_seconds=runtime_int_values[
+                    "retry_backoff_max_seconds"
+                ],
+                bot_logins=runtime_bot_logins,
+                noise_comment_patterns=runtime_noise_comment_patterns,
+                managed_repo_prefixes=runtime_managed_repo_prefixes,
+                autofix_comment_author=runtime_autofix_comment_author,
+            ),
             changed_by="settings_ui",
             change_source="web.settings",
         )

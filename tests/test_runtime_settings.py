@@ -10,6 +10,7 @@ from app.services.runtime_settings import (
     RUNTIME_GITHUB_WEBHOOK_DEBOUNCE_SECONDS_KEY,
     RUNTIME_MAX_AUTOFIX_PER_PR_KEY,
     RUNTIME_MAX_RETRY_ATTEMPTS_KEY,
+    RuntimeSettingsPayload,
     build_runtime_settings_context,
     describe_runtime_settings,
     get_runtime_form_int_field_specs,
@@ -157,18 +158,20 @@ def test_save_runtime_settings_clamps_numeric_values(monkeypatch, tmp_path) -> N
 
     save_runtime_settings(
         conn,
-        github_webhook_debounce_seconds=-5,
-        max_autofix_per_pr=-2,
-        max_concurrent_runs=0,
-        stale_run_timeout_seconds=0,
-        pr_lock_ttl_seconds=0,
-        max_retry_attempts=0,
-        retry_backoff_base_seconds=0,
-        retry_backoff_max_seconds=0,
-        bot_logins=["ci-helper"],
-        noise_comment_patterns=[r"^/retest\b"],
-        managed_repo_prefixes=["acme/"],
-        autofix_comment_author="autofix-bot",
+        RuntimeSettingsPayload(
+            github_webhook_debounce_seconds=-5,
+            max_autofix_per_pr=-2,
+            max_concurrent_runs=0,
+            stale_run_timeout_seconds=0,
+            pr_lock_ttl_seconds=0,
+            max_retry_attempts=0,
+            retry_backoff_base_seconds=0,
+            retry_backoff_max_seconds=0,
+            bot_logins=["ci-helper"],
+            noise_comment_patterns=[r"^/retest\b"],
+            managed_repo_prefixes=["acme/"],
+            autofix_comment_author="autofix-bot",
+        ),
     )
 
     runtime_settings = resolve_runtime_settings(conn)
@@ -191,18 +194,20 @@ def test_build_runtime_settings_context_formats_list_fields(
 
     save_runtime_settings(
         conn,
-        github_webhook_debounce_seconds=45,
-        max_autofix_per_pr=7,
-        max_concurrent_runs=5,
-        stale_run_timeout_seconds=321,
-        pr_lock_ttl_seconds=654,
-        max_retry_attempts=4,
-        retry_backoff_base_seconds=12,
-        retry_backoff_max_seconds=900,
-        bot_logins=["ci-helper", "dependabot[bot]"],
-        noise_comment_patterns=[r"^/retest\b", r"^/resolve\b"],
-        managed_repo_prefixes=["acme/", "widgets/"],
-        autofix_comment_author="autofix-bot",
+        RuntimeSettingsPayload(
+            github_webhook_debounce_seconds=45,
+            max_autofix_per_pr=7,
+            max_concurrent_runs=5,
+            stale_run_timeout_seconds=321,
+            pr_lock_ttl_seconds=654,
+            max_retry_attempts=4,
+            retry_backoff_base_seconds=12,
+            retry_backoff_max_seconds=900,
+            bot_logins=["ci-helper", "dependabot[bot]"],
+            noise_comment_patterns=[r"^/retest\b", r"^/resolve\b"],
+            managed_repo_prefixes=["acme/", "widgets/"],
+            autofix_comment_author="autofix-bot",
+        ),
     )
 
     context = build_runtime_settings_context(conn)
@@ -268,35 +273,39 @@ def test_save_runtime_settings_records_audit_rows_only_for_changed_values(
 
     save_runtime_settings(
         conn,
-        github_webhook_debounce_seconds=45,
-        max_autofix_per_pr=7,
-        max_concurrent_runs=5,
-        stale_run_timeout_seconds=321,
-        pr_lock_ttl_seconds=654,
-        max_retry_attempts=4,
-        retry_backoff_base_seconds=12,
-        retry_backoff_max_seconds=900,
-        bot_logins=["ci-helper"],
-        noise_comment_patterns=[r"^/retest\b"],
-        managed_repo_prefixes=["acme/"],
-        autofix_comment_author="autofix-bot",
+        RuntimeSettingsPayload(
+            github_webhook_debounce_seconds=45,
+            max_autofix_per_pr=7,
+            max_concurrent_runs=5,
+            stale_run_timeout_seconds=321,
+            pr_lock_ttl_seconds=654,
+            max_retry_attempts=4,
+            retry_backoff_base_seconds=12,
+            retry_backoff_max_seconds=900,
+            bot_logins=["ci-helper"],
+            noise_comment_patterns=[r"^/retest\b"],
+            managed_repo_prefixes=["acme/"],
+            autofix_comment_author="autofix-bot",
+        ),
         changed_by="settings_ui",
         change_source="web.settings",
     )
     save_runtime_settings(
         conn,
-        github_webhook_debounce_seconds=45,
-        max_autofix_per_pr=7,
-        max_concurrent_runs=5,
-        stale_run_timeout_seconds=321,
-        pr_lock_ttl_seconds=654,
-        max_retry_attempts=4,
-        retry_backoff_base_seconds=12,
-        retry_backoff_max_seconds=900,
-        bot_logins=["ci-helper"],
-        noise_comment_patterns=[r"^/retest\b"],
-        managed_repo_prefixes=["acme/"],
-        autofix_comment_author="autofix-bot",
+        RuntimeSettingsPayload(
+            github_webhook_debounce_seconds=45,
+            max_autofix_per_pr=7,
+            max_concurrent_runs=5,
+            stale_run_timeout_seconds=321,
+            pr_lock_ttl_seconds=654,
+            max_retry_attempts=4,
+            retry_backoff_base_seconds=12,
+            retry_backoff_max_seconds=900,
+            bot_logins=["ci-helper"],
+            noise_comment_patterns=[r"^/retest\b"],
+            managed_repo_prefixes=["acme/"],
+            autofix_comment_author="autofix-bot",
+        ),
         changed_by="settings_ui",
         change_source="web.settings",
     )
@@ -358,3 +367,111 @@ def test_get_runtime_form_int_field_specs_matches_runtime_registry() -> None:
     assert specs["max_retry_attempts"] == (3, 1)
     assert "bot_logins" not in specs
     assert "db_path" not in specs
+
+
+def test_sensitive_setting_audit_log_redacted(monkeypatch, tmp_path) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "5"},
+        changed_by="test",
+        change_source="test",
+    )
+
+    rows = conn.execute(
+        "SELECT old_value, new_value FROM app_config_audit_log ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["old_value"] is None
+    assert rows[0]["new_value"] == "5"
+
+
+def test_concurrent_writers_do_not_corrupt(monkeypatch, tmp_path) -> None:
+    import threading
+
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    db_path = tmp_path / "concurrent.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.executescript(SCHEMA_SQL)
+    conn.commit()
+    conn.close()
+
+    errors: list[str] = []
+    barrier = threading.Barrier(4)
+
+    def writer(thread_id: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            c = sqlite3.connect(db_path)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA busy_timeout = 5000;")
+            for i in range(10):
+                c.execute(
+                    "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
+                    (
+                        f"runtime.concurrent_test.{thread_id}.{i}",
+                        str(thread_id * 100 + i),
+                    ),
+                )
+                c.commit()
+            c.close()
+        except Exception as exc:
+            errors.append(f"thread {thread_id}: {exc}")
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"concurrent write errors: {errors}"
+
+    verify_conn = sqlite3.connect(db_path)
+    verify_conn.row_factory = sqlite3.Row
+    count = verify_conn.execute(
+        "SELECT COUNT(*) AS cnt FROM app_feature_flags WHERE key LIKE 'runtime.concurrent_test.%'"
+    ).fetchone()["cnt"]
+    verify_conn.close()
+
+    assert count == 40
+
+
+def test_runtime_settings_payload_accepts_list_and_tuple(monkeypatch, tmp_path) -> None:
+    import os
+
+    os.environ.pop("MANAGED_REPO_PREFIXES", None)
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    save_runtime_settings(
+        conn,
+        RuntimeSettingsPayload(
+            github_webhook_debounce_seconds=30,
+            max_autofix_per_pr=2,
+            max_concurrent_runs=1,
+            stale_run_timeout_seconds=600,
+            pr_lock_ttl_seconds=600,
+            max_retry_attempts=2,
+            retry_backoff_base_seconds=15,
+            retry_backoff_max_seconds=900,
+            bot_logins=("bot-a", "bot-b"),
+            noise_comment_patterns=["^/test"],
+            managed_repo_prefixes=("prefix/",),
+            autofix_comment_author="test-bot",
+        ),
+    )
+
+    stored = conn.execute(
+        "SELECT value FROM app_feature_flags WHERE key = ?",
+        ("runtime.managed_repo_prefixes",),
+    ).fetchone()
+    assert stored is not None, "runtime.managed_repo_prefixes not stored"
+
+    settings = resolve_runtime_settings(conn)
+    assert settings.bot_logins == ("bot-a", "bot-b")
+    assert settings.noise_comment_patterns == ("^/test",)
+    assert settings.managed_repo_prefixes == ("prefix/",)
