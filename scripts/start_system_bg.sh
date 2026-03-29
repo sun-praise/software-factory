@@ -41,6 +41,29 @@ else
   PYTHON_CMD="python3"
 fi
 
+AI_TOKEN_ENV_VARS=(
+  ANTHROPIC_API_KEY
+  ANTHROPIC_AUTH_TOKEN
+  ANTHROPIC_BASE_URL
+  ANTHROPIC_MODEL
+  ANTHROPIC_SMALL_FAST_MODEL
+  OPENAI_API_KEY
+  OPENAI_BASE_URL
+  OPENAI_MODEL
+  ZHIPU_API_KEY
+  ZHIPU_AUTH_TOKEN
+  API_TIMEOUT_MS
+  DEEPSEEK_API_KEY
+  ENABLE_TOOL_SEARCH
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+)
+
+strip_ai_tokens() {
+  for var in "${AI_TOKEN_ENV_VARS[@]}"; do
+    unset "${var}" 2>/dev/null || true
+  done
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [start|stop|restart|status|logs]
@@ -61,6 +84,7 @@ Environment overrides:
   WORKSPACE_DIR=/path/repo   Worker runtime root
   WORKER_INTERVAL_SECONDS=2  Worker polling interval
   RUNTIME_DIR=/path/runtime  Directory for pid/log files
+  TOKENS_FILE=/path/tokens   Token file for worker (default: .tokens.local)
 EOF
 }
 
@@ -120,6 +144,7 @@ start_web() {
 
   (
     cd "${REPO_ROOT}"
+    strip_ai_tokens
     start_detached "${WEB_LOG_FILE}" env \
       DB_PATH="${DB_PATH}" \
       HOST="${HOST}" \
@@ -149,6 +174,13 @@ start_worker() {
 
   (
     cd "${REPO_ROOT}"
+    TOKENS_FILE="${TOKENS_FILE:-${REPO_ROOT}/.tokens.local}"
+    if [[ -f "${TOKENS_FILE}" ]]; then
+      set -a
+      # shellcheck disable=SC1090
+      source "${TOKENS_FILE}"
+      set +a
+    fi
     start_detached "${WORKER_LOG_FILE}" env \
       DB_PATH="${DB_PATH}" \
       "${PYTHON_CMD}" scripts/run_worker.py \

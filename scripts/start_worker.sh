@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
+
+TOKENS_FILE="${TOKENS_FILE:-${REPO_ROOT}/.tokens.local}"
+
+if [[ -f "${TOKENS_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${TOKENS_FILE}"
+  set +a
+  echo "[start_worker] loaded tokens from ${TOKENS_FILE}" >&2
+else
+  echo "[start_worker] no tokens file at ${TOKENS_FILE}; using current env" >&2
+fi
+
+DB_PATH="${DB_PATH:-${REPO_ROOT}/data/software_factory.db}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-${REPO_ROOT}}"
+
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PYTHON_CMD="${PYTHON_BIN}"
+elif [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+  PYTHON_CMD="${REPO_ROOT}/.venv/bin/python"
+else
+  PYTHON_CMD="python3"
+fi
+
+exec "${PYTHON_CMD}" "${REPO_ROOT}/scripts/run_worker.py" --loop --workspace-dir "${WORKSPACE_DIR}"

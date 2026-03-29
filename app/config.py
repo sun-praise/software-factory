@@ -1,8 +1,22 @@
+import logging
+import os
 from functools import lru_cache
 from typing import Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_AI_TOKEN_ENV_VARS = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "ZHIPU_API_KEY",
+        "DEEPSEEK_API_KEY",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -113,3 +127,19 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_web_env() -> list[str]:
+    """Check that the web process does not have AI tokens in its environment.
+
+    Returns a list of offending env var names found.  Call this at web startup
+    and log / abort if the list is non-empty.
+    """
+    found = [v for v in _AI_TOKEN_ENV_VARS if os.environ.get(v)]
+    if found:
+        logger.warning(
+            "web process has AI tokens in environment: %s — "
+            "strip them before starting the web service to avoid token leaks",
+            ", ".join(sorted(found)),
+        )
+    return found

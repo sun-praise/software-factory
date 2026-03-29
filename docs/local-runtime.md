@@ -2,6 +2,24 @@
 
 See also: `docs/runtime-config.md` for the DB-vs-env ownership rules and the dev/prod rollout guidance for mutable runtime settings.
 
+## Token safety: environment isolation
+
+**The `web` service must never receive AI tokens.** Only the `worker` needs them.
+
+AI-token env vars include: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ZHIPU_API_KEY`, and any other provider keys.
+
+If `web` inherits these from the shell (e.g. via `.env` or an interactive shell), it creates a security surface and can cause confusion when debugging configuration issues.
+
+Use the dedicated startup scripts which enforce this isolation:
+
+```bash
+./scripts/start_web.sh           # strips all AI tokens before starting uvicorn
+./scripts/start_worker.sh        # loads tokens from a controlled source
+./scripts/start_system_bg.sh     # orchestrates both with correct isolation
+```
+
+Or use `scripts/start_system_bg.sh` to manage both processes together.
+
 ## Single source of truth for runtime state
 
 When running the local `web` service and the local `worker`, both processes must use the same database file.
@@ -26,24 +44,37 @@ Example:
 export DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db
 ```
 
-Start `web`:
+Start `web` (recommended — uses the isolation script):
 
 ```bash
-env DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db \
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+./scripts/start_web.sh
 ```
 
-Start `worker`:
+Start `web` (manual, ensure no AI tokens leak):
+
+```bash
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u OPENAI_API_KEY -u ZHIPU_API_KEY \
+  DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db \
+  python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+```
+
+Start `worker` (recommended — uses the isolation script):
+
+```bash
+./scripts/start_worker.sh
+```
+
+Start `worker` with DeepSeek backend:
+
+```bash
+./scripts/run_worker_deepseek.sh
+```
+
+Start `worker` (manual):
 
 ```bash
 env DB_PATH=/home/svtter/work/project/software-factory-homepage/data/software_factory.db \
-ANTHROPIC_API_KEY="$DEEPSEEK_API_KEY" \
-ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY" \
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
-ANTHROPIC_MODEL=deepseek-chat \
-ANTHROPIC_SMALL_FAST_MODEL=deepseek-chat \
-ENABLE_TOOL_SEARCH=false \
-python3 scripts/run_worker.py --loop --workspace-dir /home/svtter/work/project/software-factory-aider
+  python3 scripts/run_worker.py --loop --workspace-dir /home/svtter/work/project/software-factory-aider
 ```
 
 ## Quick verification
