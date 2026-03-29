@@ -302,13 +302,11 @@ def run_once(
     branch = branch or _safe_text(pr_metadata.get("head_ref"))
     initial_operator_hints = get_run_operator_hints(conn, run_id)
     initial_execution_hints = parse_execution_hints(initial_operator_hints)
-    payload_project_root = _safe_text(payload.get("project_root")) or None
-    effective_initial_project_root = (
-        initial_execution_hints.project_root or payload_project_root
-    )
-    if effective_initial_project_root:
+    payload_root = _safe_text(payload.get("project_root")) or None
+    effective_root = initial_execution_hints.project_root or payload_root
+    if effective_root:
         initial_execution_hints = ExecutionHints(
-            project_root=effective_initial_project_root,
+            project_root=effective_root,
             check_commands=initial_execution_hints.check_commands,
             skip_baseline_checks=initial_execution_hints.skip_baseline_checks,
         )

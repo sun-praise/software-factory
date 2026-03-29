@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db import init_db
 from app.main import app
 from app.routes import web
+from app.schemas.issues import IssueSubmissionRequest
 
 
 def _setup_db(tmp_path):
@@ -669,3 +670,50 @@ def test_submit_issue_batch_csv_propagates_project_root(tmp_path, monkeypatch) -
     data = response.json()
     assert data["ok"] is True
     assert data["summary"]["created"] == 2
+
+
+def test_submit_issue_api_rejects_absolute_project_root() -> None:
+    with pytest.raises(Exception, match="relative path"):
+        IssueSubmissionRequest(
+            url="https://github.com/acme/widgets/issues/42",
+            project_root="/etc/passwd",
+        )
+
+
+def test_submit_issue_api_rejects_path_traversal_project_root() -> None:
+    with pytest.raises(Exception, match="relative path"):
+        IssueSubmissionRequest(
+            url="https://github.com/acme/widgets/issues/42",
+            project_root="../secret",
+        )
+
+
+def test_submit_issue_api_rejects_drive_letter_project_root() -> None:
+    with pytest.raises(Exception, match="relative path"):
+        IssueSubmissionRequest(
+            url="https://github.com/acme/widgets/issues/42",
+            project_root="C:\\secret",
+        )
+
+
+def test_submit_issue_api_accepts_valid_project_root() -> None:
+    req = IssueSubmissionRequest(
+        url="https://github.com/acme/widgets/issues/42",
+        project_root="latex-agent",
+    )
+    assert req.project_root == "latex-agent"
+
+
+def test_submit_issue_api_accepts_none_project_root() -> None:
+    req = IssueSubmissionRequest(
+        url="https://github.com/acme/widgets/issues/42",
+    )
+    assert req.project_root is None
+
+
+def test_submit_issue_api_accepts_whitespace_only_project_root_as_none() -> None:
+    req = IssueSubmissionRequest(
+        url="https://github.com/acme/widgets/issues/42",
+        project_root="   ",
+    )
+    assert req.project_root is None

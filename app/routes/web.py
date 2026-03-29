@@ -1290,8 +1290,8 @@ async def submit_issue(request: Request) -> HTMLResponse:
     form = await request.form()
     request_data = {
         "url": str(form.get("url", "")).strip(),
-        "description": str(form.get("description", "")).strip() or None,
-        "project_root": str(form.get("project_root", "")).strip() or None,
+        "description": str(form.get("description", "")).strip(),
+        "project_root": str(form.get("project_root", "")).strip(),
         "dry_run": form.get("dry_run") == "true",
     }
 
