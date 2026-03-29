@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from typing import Any
 
@@ -21,6 +22,7 @@ from app.services.github_events import build_review_batch_id, build_task_idempot
 from app.services.policy import (
     ensure_pull_request_row,
     get_remaining_autofix_quota,
+    reset_autofix_count_on_sha_change,
 )
 from app.services.queue import enqueue_autofix_run
 from app.services.runtime_settings import resolve_runtime_settings
@@ -33,10 +35,8 @@ _SYNTHETIC_PR_OFFSET = 9_000_000
 
 
 def _synthetic_pr_number(repo: str, title: str) -> int:
-    import hashlib
-
     raw = f"bug:{repo}:{title}"
-    h = int(hashlib.sha256(raw.encode()).hexdigest()[:8], 16)
+    h = int(hashlib.sha256(raw.encode()).hexdigest()[:16], 16)
     return _SYNTHETIC_PR_OFFSET + (h % 999_999) + 1
 
 
@@ -78,8 +78,6 @@ def _enqueue_bug_fix(
     with connect_db() as conn:
         runtime_settings = resolve_runtime_settings(conn)
         if head_sha:
-            from app.services.policy import reset_autofix_count_on_sha_change
-
             reset_autofix_count_on_sha_change(conn, repo, pr_number, head_sha)
         ensure_pull_request_row(conn, repo, pr_number, branch=None, head_sha=head_sha)
         remaining_quota = get_remaining_autofix_quota(
@@ -152,11 +150,7 @@ async def submit_bug(payload: BugSubmissionRequest) -> BugSubmissionResponse:
     except sqlite3.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "ok": False,
-                "message": "Failed to enqueue bug fix",
-                "error": str(exc),
-            },
+            detail=f"Failed to enqueue bug fix: {exc}",
         ) from exc
 
     return BugSubmissionResponse(
