@@ -2785,7 +2785,7 @@ def _create_run_workspace_clone(
     return run_workspace_dir
 
 
-_ALTERNATES_PATH = ".git/objects/info/alternates"
+_ALTERNATES_PATH: str = ".git/objects/info/alternates"
 
 
 def _strip_git_alternates(workspace_dir: str) -> None:
@@ -2795,10 +2795,16 @@ def _strip_git_alternates(workspace_dir: str) -> None:
         logger.debug("removed git alternates from workspace: %s", workspace_dir)
     except FileNotFoundError:
         pass
-    except OSError:
+    except PermissionError:
         logger.warning(
-            "failed to remove git alternates from workspace: %s",
+            "permission denied removing git alternates from workspace: %s",
             workspace_dir,
+        )
+    except OSError as e:
+        logger.warning(
+            "failed to remove git alternates from workspace %s: %s",
+            workspace_dir,
+            e,
             exc_info=True,
         )
 
@@ -3050,9 +3056,6 @@ def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, An
     }
 
 
-CHANGED_FILES_PATH_LIMIT = CHANGED_FILE_PATHS_LIMIT
-
-
 def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
     try:
         result = subprocess.run(
@@ -3077,7 +3080,7 @@ def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
     paths = [
         line.strip() for line in result.stdout.strip().splitlines() if line.strip()
     ]
-    return paths[:CHANGED_FILES_PATH_LIMIT]
+    return paths[:CHANGED_FILE_PATHS_LIMIT]
 
 
 def _pr_requires_mergeability_gate(metadata: Mapping[str, Any] | None) -> bool:

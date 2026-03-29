@@ -3734,5 +3734,5 @@ def test_collect_changed_file_paths_truncates_to_limit(
 
     result = agent_runner._collect_changed_file_paths(repo="acme/widgets", pr_number=7)
 
-    assert len(result) == agent_runner.CHANGED_FILES_PATH_LIMIT
+    assert len(result) == agent_runner.CHANGED_FILE_PATHS_LIMIT
     assert result[0] == "file_0.py"
