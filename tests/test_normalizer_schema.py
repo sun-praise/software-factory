@@ -50,6 +50,10 @@ def test_normalized_review_valid_object() -> None:
                 "line": 10,
                 "severity": "P1",
                 "text": "Please handle timeout.",
+                "semantic_type": "non_blocking_suggestion",
+                "confidence": 1.0,
+                "needs_human_review": False,
+                "group_id": None,
             }
         ],
         "should_fix": [],
@@ -66,6 +70,8 @@ def test_normalized_review_valid_object() -> None:
             }
         ],
         "summary": "Needs one critical fix.",
+        "needs_human_review_count": 0,
+        "semantic_groups": [],
     }
 
 

@@ -1,0 +1,101 @@
+[
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Consider using a different variable name here for clarity",
+        "path": "app/services/processor.py",
+        "line": 42
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Why did you choose this approach over the factory pattern?",
+        "path": "app/services/processor.py",
+        "line": 15
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Looks good to me!",
+        "path": "app/models/user.py",
+        "line": 8
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "This depends on the performance requirements for the production workload",
+        "path": "app/core/engine.py",
+        "line": 100
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Hmm",
+        "path": "app/utils/helpers.py",
+        "line": 5
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review",
+    "payload": {
+      "review": {
+        "state": "changes_requested",
+        "body": "Please fix the error handling and null checks throughout this module"
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "This needs null check here, otherwise it will crash",
+        "path": "app/core/engine.py",
+        "line": 55
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Security issue: user input is not sanitized before being used in the SQL query",
+        "path": "app/api/users.py",
+        "line": 33
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Nit: extra space on this line",
+        "path": "app/services/processor.py",
+        "line": 60
+      }
+    }
+  },
+  {
+    "event_type": "pull_request_review_comment",
+    "payload": {
+      "comment": {
+        "body": "Consider using an enum here instead of magic strings, but I understand if you prefer the current approach for simplicity",
+        "path": "app/core/engine.py",
+        "line": 20
+      }
+    }
+  }
+]
