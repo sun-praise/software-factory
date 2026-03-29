@@ -1,9 +1,9 @@
 import csv
 import io
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
-from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -440,7 +440,7 @@ def _github_get_json(url: str, *, not_found_message: str) -> dict[str, Any]:
 
     try:
         payload = response.json()
-    except JSONDecodeError as exc:
+    except json.JSONDecodeError as exc:
         raise ValueError("GitHub API returned invalid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Unexpected response from GitHub API.")
@@ -468,7 +468,7 @@ def _github_get_list(url: str, *, not_found_message: str) -> list[dict[str, Any]
 
     try:
         payload = response.json()
-    except JSONDecodeError as exc:
+    except json.JSONDecodeError as exc:
         raise ValueError("GitHub API returned invalid JSON.") from exc
     if not isinstance(payload, list):
         raise ValueError("Unexpected response from GitHub API.")
