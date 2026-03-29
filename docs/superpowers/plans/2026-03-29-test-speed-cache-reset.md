@@ -22,7 +22,7 @@
 - Modify: `tests/test_web_settings.py`
 - Test: `tests/test_web_settings.py`
 
-- [ ] **Step 1: Write the failing regression test**
+- [x] **Step 1: Write the failing regression test**
 
 ```python
 def test_setup_db_then_e2e_env_sees_fresh_agent_commands(tmp_path: Path) -> None:
@@ -37,12 +37,12 @@ def test_setup_db_then_e2e_env_sees_fresh_agent_commands(tmp_path: Path) -> None
     assert overrides.claude_agent_command == "true"
 ```
 
-- [ ] **Step 2: Run the targeted regression test and watch it fail**
+- [x] **Step 2: Run the targeted regression test and watch it fail**
 
 Run: `pytest tests/test_web_settings.py::test_setup_db_then_e2e_env_sees_fresh_agent_commands -q`
 Expected: FAIL because the cached env overrides still show the stale commands from the earlier setup.
 
-- [ ] **Step 3: Implement the minimal test-fixture fix**
+- [x] **Step 3: Implement the minimal test-fixture fix**
 
 ```python
 def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
@@ -52,12 +52,12 @@ def setup_e2e_env(tmp_path: Path, secret: str = "test-secret") -> Path:
     ...
 ```
 
-- [ ] **Step 4: Run the targeted regression test again**
+- [x] **Step 4: Run the targeted regression test again**
 
 Run: `pytest tests/test_web_settings.py::test_setup_db_then_e2e_env_sees_fresh_agent_commands -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add tests/fixtures/e2e_fixtures.py tests/test_web_settings.py
@@ -69,17 +69,17 @@ git commit -m "fix: clear cached feature flag env overrides in tests"
 **Files:**
 - Verify only
 
-- [ ] **Step 1: Run the previously interacting tests together**
+- [x] **Step 1: Run the previously interacting tests together**
 
 Run: `pytest tests/test_web_settings.py tests/test_e2e.py::TestE2ERetryPath::test_failure_schedules_retry -q`
 Expected: no cache-pollution slowdown; the E2E retry-path test completes in low seconds instead of many minutes.
 
-- [ ] **Step 2: Run duration profiling for confirmation**
+- [x] **Step 2: Run duration profiling for confirmation**
 
 Run: `pytest tests/test_web_settings.py tests/test_e2e.py --durations=10 -q`
 Expected: `TestE2ERetryPath::test_failure_schedules_retry` no longer dominates runtime abnormally.
 
-- [ ] **Step 3: Capture the current full-suite status without claiming unrelated fixes**
+- [x] **Step 3: Capture the current full-suite status without claiming unrelated fixes**
 
 Run: `pytest -q`
 Expected: report current suite status honestly. Existing unrelated failures may remain, but the pathological slow path should be removed.

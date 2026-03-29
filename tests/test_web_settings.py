@@ -12,51 +12,14 @@ from app.services.feature_flags import (
     resolve_agent_feature_flags,
 )
 from app.services.runtime_settings import resolve_runtime_settings
+from tests.fixtures.e2e_fixtures import reset_test_env_and_caches
 
 
 def _setup_db(tmp_path: Path) -> Path:
-    get_settings.cache_clear()
-    get_agent_feature_flag_env_overrides.cache_clear()
+    reset_test_env_and_caches()
     db_path = tmp_path / "software_factory.db"
     import os
 
-    runtime_env_vars = (
-        "GITHUB_WEBHOOK_DEBOUNCE_SECONDS",
-        "MAX_AUTOFIX_PER_PR",
-        "MAX_CONCURRENT_RUNS",
-        "STALE_RUN_TIMEOUT_SECONDS",
-        "PR_LOCK_TTL_SECONDS",
-        "MAX_RETRY_ATTEMPTS",
-        "RETRY_BACKOFF_BASE_SECONDS",
-        "RETRY_BACKOFF_MAX_SECONDS",
-        "BOT_LOGINS",
-        "NOISE_COMMENT_PATTERNS",
-        "MANAGED_REPO_PREFIXES",
-        "AUTOFIX_COMMENT_AUTHOR",
-        "AGENT_SDKS",
-        "CLAUDE_AGENT_SDKS",
-        "OPENHANDS_COMMAND",
-        "OPENHANDS_COMMAND_TIMEOUT_SECONDS",
-        "OPENHANDS_WORKTREE_BASE_DIR",
-        "CLAUDE_AGENT_COMMAND",
-        "CLAUDE_AGENT_PROVIDER",
-        "CLAUDE_AGENT_BASE_URL",
-        "CLAUDE_AGENT_MODEL",
-        "CLAUDE_AGENT_RUNTIME",
-        "CLAUDE_AGENT_CONTAINER_IMAGE",
-        "CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS",
-        "CLAUDE_AGENT_WORKTREE_BASE_DIR",
-        "CLAUDE_AGENT_SDK_COMMAND",
-        "CLAUDE_AGENT_SDK_PROVIDER",
-        "CLAUDE_AGENT_SDK_BASE_URL",
-        "CLAUDE_AGENT_SDK_MODEL",
-        "CLAUDE_AGENT_SDK_RUNTIME",
-        "CLAUDE_AGENT_SDK_CONTAINER_IMAGE",
-        "CLAUDE_AGENT_SDK_COMMAND_TIMEOUT_SECONDS",
-        "CLAUDE_AGENT_SDK_WORKTREE_BASE_DIR",
-    )
-    for key in runtime_env_vars:
-        os.environ.pop(key, None)
     os.environ["DB_PATH"] = str(db_path)
     init_db()
     return db_path
@@ -87,11 +50,14 @@ def test_settings_page_loads_defaults(tmp_path: Path) -> None:
 
 def test_setup_db_then_e2e_env_sees_fresh_agent_commands(tmp_path: Path) -> None:
     from tests.fixtures.e2e_fixtures import setup_e2e_env
+    import os
 
     _setup_db(tmp_path / "web")
-    stale_overrides = get_agent_feature_flag_env_overrides()
-    assert stale_overrides.openhands_command is None
-    assert stale_overrides.claude_agent_command is None
+    cached_before_switch = get_agent_feature_flag_env_overrides()
+    assert cached_before_switch.openhands_command is None
+    assert cached_before_switch.claude_agent_command is None
+
+    os.environ["CLAUDE_AGENT_COMMAND"] = "stale-claude"
 
     setup_e2e_env(tmp_path / "e2e")
 
