@@ -231,7 +231,7 @@ def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
         review_json = json.loads(row["normalized_review_json"] or "{}")
     except (json.JSONDecodeError, TypeError):
         return {"trigger_source": "manual_issue", "issue_number": "", "issue_url": ""}
-    issue_number = _coerce_positive_int(review_json.get("issue_number"))
+    issue_number = coerce_positive_int(review_json.get("issue_number"))
     source_url = _string_or_empty(review_json.get("manual_issue_source_url"))
     return {
         "trigger_source": "manual_issue",
