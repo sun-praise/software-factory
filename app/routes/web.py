@@ -34,6 +34,13 @@ from app.services.runtime_settings import (
 )
 from app.schemas.issues import (
     IssueSubmissionRequest,
+    TaskSubmissionRequest,
+)
+from app.services.issue_input import (
+    TaskInput,
+    build_normalized_review_from_task_input,
+    parse_task_input,
+    parse_task_input_with_provider,
 )
 from app.services.policy import (
     ensure_pull_request_row,
@@ -1648,3 +1655,240 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
         },
         "results": results,
     }
+
+
+def _enqueue_task_from_input(
+    *,
+    task_input: TaskInput,
+    repo: str | None,
+    description: str | None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    normalized_review = build_normalized_review_from_task_input(
+        task_input=task_input,
+        repo=repo,
+        description=description,
+        pr_number=None,
+        head_sha=None,
+    )
+    head_sha = None
+    effective_repo = normalized_review["repo"]
+    effective_pr_number = normalized_review["pr_number"]
+
+    review_batch_id = build_review_batch_id(normalized_review)
+    normalized_review["review_batch_id"] = review_batch_id
+    idempotency_key = build_task_idempotency_key(
+        repo=effective_repo,
+        pr_number=effective_pr_number,
+        head_sha=head_sha,
+        review_batch_id=review_batch_id,
+    )
+
+    if dry_run:
+        return {
+            "ok": True,
+            "message": "Task validation successful (dry run - no run created).",
+            "repo": effective_repo,
+            "pr_number": effective_pr_number,
+            "queue_status": "validated",
+            "queued_run_id": None,
+            "idempotency_key": idempotency_key,
+            "remaining_quota": None,
+            "head_sha": head_sha,
+            "provider": task_input.provider,
+            "task_title": task_input.title,
+            "existing_run_id": None,
+            "existing_run_status": None,
+        }
+
+    run_id: int | None = None
+    queue_status = "not_queued"
+    remaining_quota: int | None = None
+
+    with connect_db() as conn:
+        runtime_settings = resolve_runtime_settings(conn)
+        if effective_pr_number > 0:
+            ensure_pull_request_row(
+                conn,
+                effective_repo,
+                effective_pr_number,
+                branch=None,
+                head_sha=head_sha,
+            )
+            remaining_quota = get_remaining_autofix_quota(
+                conn,
+                effective_repo,
+                effective_pr_number,
+                max_autofix_per_pr=runtime_settings.max_autofix_per_pr,
+            )
+            if remaining_quota == 0:
+                queue_status = "autofix_limit_reached"
+        else:
+            remaining_quota = runtime_settings.max_autofix_per_pr
+
+        if queue_status != "autofix_limit_reached":
+            run_id = enqueue_autofix_run(
+                conn=conn,
+                repo=effective_repo,
+                pr_number=effective_pr_number,
+                head_sha=head_sha,
+                normalized_review_json=normalized_review,
+                trigger_source=f"task_input:{task_input.provider}",
+                idempotency_key=idempotency_key,
+                max_attempts=runtime_settings.max_retry_attempts,
+            )
+            queue_status = "queued" if run_id is not None else "duplicate_task"
+
+    return {
+        "ok": True,
+        "message": "Task submission accepted.",
+        "repo": effective_repo,
+        "pr_number": effective_pr_number,
+        "queue_status": queue_status,
+        "queued_run_id": run_id,
+        "idempotency_key": idempotency_key,
+        "remaining_quota": remaining_quota,
+        "head_sha": head_sha,
+        "provider": task_input.provider,
+        "task_title": task_input.title,
+        "existing_run_id": None,
+        "existing_run_status": None,
+    }
+
+
+@router.get("/tasks", response_class=HTMLResponse)
+async def task_entry_page(request: Request) -> HTMLResponse:
+    templates: Jinja2Templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request=request,
+        name="task_submit.html",
+        context={
+            "request": request,
+            "title": "Submit Task",
+            "message": None,
+            "result": None,
+            "form": {},
+        },
+    )
+
+
+@router.post("/tasks", response_class=HTMLResponse)
+async def submit_task(request: Request) -> HTMLResponse:
+    templates: Jinja2Templates = request.app.state.templates
+    form = await request.form()
+    request_data = {
+        "input": str(form.get("input", "")).strip(),
+        "provider": str(form.get("provider", "")).strip() or None,
+        "repo": str(form.get("repo", "")).strip() or None,
+        "description": str(form.get("description", "")).strip() or None,
+        "dry_run": form.get("dry_run") == "true",
+    }
+
+    try:
+        payload = TaskSubmissionRequest.model_validate(request_data)
+    except (TypeError, ValueError, ValidationError):
+        return templates.TemplateResponse(
+            request=request,
+            name="task_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Task",
+                "message": "Invalid input. Please check required fields.",
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+
+    try:
+        if payload.provider:
+            task_input = parse_task_input_with_provider(payload.input, payload.provider)
+        else:
+            task_input = parse_task_input(payload.input)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="task_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Task",
+                "message": str(exc),
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+
+    try:
+        result = _enqueue_task_from_input(
+            task_input=task_input,
+            repo=payload.repo,
+            description=payload.description,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="task_submit.html",
+            context={
+                "request": request,
+                "title": "Submit Task",
+                "message": str(exc),
+                "result": None,
+                "form": request_data,
+            },
+            status_code=400,
+        )
+    except sqlite3.Error:
+        result = {
+            "ok": False,
+            "message": "Failed to enqueue task",
+        }
+
+    return templates.TemplateResponse(
+        request=request,
+        name="task_submit.html",
+        context={
+            "request": request,
+            "title": "Submit Task",
+            "message": "Validated" if payload.dry_run else "Submitted",
+            "result": result,
+            "form": request_data,
+        },
+    )
+
+
+@router.post("/api/tasks")
+async def api_submit_task(payload: TaskSubmissionRequest) -> dict[str, Any]:
+    try:
+        if payload.provider:
+            task_input = parse_task_input_with_provider(payload.input, payload.provider)
+        else:
+            task_input = parse_task_input(payload.input)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    try:
+        return _enqueue_task_from_input(
+            task_input=task_input,
+            repo=payload.repo,
+            description=payload.description,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "ok": False,
+                "message": "Failed to enqueue task",
+                "error": str(exc),
+            },
+        ) from exc

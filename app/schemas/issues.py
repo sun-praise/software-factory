@@ -30,3 +30,13 @@ class IssueSubmissionResponse(BaseModel):
     head_sha: str | None = None
     existing_run_id: int | None = None
     existing_run_status: str | None = None
+
+
+class TaskSubmissionRequest(BaseModel):
+    input: NonEmptyStr
+    provider: str | None = None
+    repo: str | None = None
+    description: str | None = None
+    dry_run: bool = False
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

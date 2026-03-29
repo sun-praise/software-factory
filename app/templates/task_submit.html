@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="container">
+      <p>
+        <a href="/">Back to runs</a> ·
+        <a href="/issues">GitHub issues</a> ·
+        <a href="/settings">Settings</a>
+      </p>
+
+      <header>
+        <h1>{{ title }}</h1>
+        <p class="muted">Submit a task via GitHub URL, plain text description, or any supported issue source.</p>
+      </header>
+
+      {% if message %}
+      <p class="status ok">{{ message }}</p>
+      {% endif %}
+
+      {% if result %}
+      <section class="status-block">
+        <h2>Submit result</h2>
+        <pre class="log">{{ result | tojson(indent=2) }}</pre>
+        {% if result.queued_run_id %}
+        <p class="tiny">
+          <a href="/runs/{{ result.queued_run_id }}">Open live run page</a>
+        </p>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      <form method="post" action="/tasks" class="issue-form">
+        <label for="input">Task input</label>
+        <textarea id="input" name="input" required rows="5" placeholder="GitHub URL, plain text task description, or content from external issue system">{{ form.input | default('') }}</textarea>
+
+        <label for="provider">Provider (optional)</label>
+        <input type="text" id="provider" name="provider" value="{{ form.provider | default('') }}" placeholder="Auto-detected if blank (github, plain_text, ...)">
+
+        <label for="repo">Repository (optional)</label>
+        <input type="text" id="repo" name="repo" value="{{ form.repo | default('') }}" placeholder="owner/repo (auto-detected from GitHub URLs)">
+
+        <label for="description">Additional notes (optional)</label>
+        <textarea id="description" name="description" rows="3" placeholder="Extra context for the agent">{{ form.description | default('') }}</textarea>
+
+        <div class="actions">
+          <button type="submit">Enqueue task</button>
+          <button type="submit" name="dry_run" value="true">Dry run</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>

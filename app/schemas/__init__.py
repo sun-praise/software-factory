@@ -8,7 +8,11 @@ from app.schemas.hooks import (
     UserPromptSubmitEvent,
 )
 from app.schemas.normalizer import IssueItem, NormalizedReview
-from app.schemas.issues import IssueSubmissionRequest, IssueSubmissionResponse
+from app.schemas.issues import (
+    IssueSubmissionRequest,
+    IssueSubmissionResponse,
+    TaskSubmissionRequest,
+)
 
 __all__ = [
     "BaseHookEvent",
@@ -20,4 +24,5 @@ __all__ = [
     "NormalizedReview",
     "IssueSubmissionRequest",
     "IssueSubmissionResponse",
+    "TaskSubmissionRequest",
 ]

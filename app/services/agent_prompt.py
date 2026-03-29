@@ -36,7 +36,9 @@ def build_autofix_prompt(
         head_sha=head_sha,
         normalized_review=normalized_review,
     )
-    if not _is_issue_sourced_run(normalized_review):
+    if not _is_issue_sourced_run(normalized_review) and not _is_task_input_run(
+        normalized_review
+    ):
         _append_pr_merge_state_context(lines, metadata)
         _append_pr_metadata(lines, metadata)
     _append_repo_instructions(lines, repo_instructions)
@@ -89,6 +91,26 @@ def _build_run_context_lines(
         lines.append(f"- Head SHA: {head_sha}")
         return lines
 
+    if _is_task_input_run(normalized_review):
+        task_provider = _safe_text(
+            normalized_review.get("task_input_provider"), "unknown"
+        )
+        task_title = _safe_text(normalized_review.get("task_title"), "")
+        task_source_url = _safe_text(normalized_review.get("task_input_source_url"), "")
+        lines = [
+            "You are an autofix agent working on a task submission.",
+            "",
+            "Context:",
+            f"- Repository: {repo}",
+            f"- Task Provider: {task_provider}",
+        ]
+        if task_title:
+            lines.append(f"- Task: {task_title}")
+        if task_source_url:
+            lines.append(f"- Source URL: {task_source_url}")
+        lines.append(f"- Head SHA: {head_sha}")
+        return lines
+
     return [
         "You are an autofix agent working on a pull request.",
         "",
@@ -101,6 +123,10 @@ def _build_run_context_lines(
 
 def _is_issue_sourced_run(normalized_review: Mapping[str, Any]) -> bool:
     return _safe_text(normalized_review.get("source_kind"), "").lower() == "issue"
+
+
+def _is_task_input_run(normalized_review: Mapping[str, Any]) -> bool:
+    return bool(_safe_text(normalized_review.get("task_input_provider"), ""))
 
 
 def collect_check_commands(project_type: str | None = None) -> list[str]:
