@@ -302,6 +302,142 @@ def test_github_forge_provider_metadata_returns_none_on_non_mapping_payload(
     assert metadata is None
 
 
+def test_github_task_source_provider_parses_text_submission() -> None:
+    provider = github_provider.GitHubTaskSourceProvider()
+
+    parsed = provider.parse_task_submission(
+        submission={
+            "repo": "acme/widgets",
+            "title": "Fix startup crash",
+            "text": "The app crashes on startup.",
+        }
+    )
+
+    assert parsed["repo"] == "acme/widgets"
+    assert parsed["owner"] == "acme"
+    assert parsed["repo_name"] == "widgets"
+    assert parsed["source_kind"] == "text"
+    assert parsed["task_title"] == "Fix startup crash"
+    assert parsed["task_text"] == "The app crashes on startup."
+    assert isinstance(parsed["pr_number"], int)
+    assert parsed["pr_number"] > 0
+
+
+def test_github_task_source_provider_parses_pull_url_without_api_call() -> None:
+    provider = github_provider.GitHubTaskSourceProvider()
+
+    parsed = provider.parse_task_submission(
+        submission={"url": "https://github.com/acme/widgets/pull/42"}
+    )
+
+    assert parsed == {
+        "repo": "acme/widgets",
+        "owner": "acme",
+        "repo_name": "widgets",
+        "pr_number": 42,
+        "resolved_pr_number": 42,
+        "issue_number": None,
+        "source_ref": "https://github.com/acme/widgets/pull/42",
+        "source_fragment": "",
+        "source_kind": "pull",
+        "task_title": None,
+        "task_text": None,
+    }
+
+
+def test_github_task_source_provider_parses_issue_url_without_resolution_side_effects() -> (
+    None
+):
+    provider = github_provider.GitHubTaskSourceProvider()
+
+    parsed = provider.parse_task_submission(
+        submission={"url": "https://github.com/acme/widgets/issues/99"}
+    )
+
+    assert parsed["repo"] == "acme/widgets"
+    assert parsed["pr_number"] == 99
+    assert parsed["resolved_pr_number"] is None
+    assert parsed["issue_number"] == 99
+    assert parsed["source_kind"] == "issue"
+
+
+def test_github_webhook_provider_delegates_to_service_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_verify_github_signature(*, body, secret, signature_header):
+        calls["verify"] = {
+            "body": body,
+            "secret": secret,
+            "signature_header": signature_header,
+        }
+        return {"status": "verified"}
+
+    def fake_extract_review_event(*, event_type, payload):
+        calls["event"] = {
+            "event_type": event_type,
+            "payload": payload,
+        }
+        return {"repo": "acme/widgets", "pr_number": 42}
+
+    def fake_extract_event_body(event_type, payload):
+        calls["body"] = {
+            "event_type": event_type,
+            "payload": payload,
+        }
+        return "Please fix"
+
+    monkeypatch.setattr(
+        github_provider,
+        "verify_github_signature",
+        fake_verify_github_signature,
+    )
+    monkeypatch.setattr(
+        github_provider,
+        "extract_review_event",
+        fake_extract_review_event,
+    )
+    monkeypatch.setattr(
+        github_provider,
+        "extract_event_body",
+        fake_extract_event_body,
+    )
+
+    provider = github_provider.GitHubWebhookProvider()
+    verify_result = provider.verify_signature(
+        body=b"{}",
+        secret="top-secret",
+        signature_header="sha256=abc",
+    )
+    event_result = provider.extract_review_event(
+        event_type="pull_request_review",
+        payload={"review": {"id": 1}},
+    )
+    body_result = provider.extract_event_body(
+        event_type="pull_request_review",
+        payload={"review": {"body": "Please fix"}},
+    )
+
+    assert provider.signature_header == "X-Hub-Signature-256"
+    assert verify_result == {"status": "verified"}
+    assert event_result == {"repo": "acme/widgets", "pr_number": 42}
+    assert body_result == "Please fix"
+    assert calls["verify"] == {
+        "body": b"{}",
+        "secret": "top-secret",
+        "signature_header": "sha256=abc",
+    }
+    assert calls["event"] == {
+        "event_type": "pull_request_review",
+        "payload": {"review": {"id": 1}},
+    }
+    assert calls["body"] == {
+        "event_type": "pull_request_review",
+        "payload": {"review": {"body": "Please fix"}},
+    }
+
+
 def test_github_git_remote_provider_builds_expected_urls() -> None:
     provider = github_provider.GitHubGitRemoteProvider()
 

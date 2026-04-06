@@ -8,13 +8,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.config import get_settings
 from app.db import connect_db
+from app.providers import get_webhook_provider
 from app.services.debounce import InMemoryDebounceBackend
 from app.services.filter import get_filter_reason
 from app.services.github_events import (
     build_review_batch_id,
     build_task_idempotency_key,
-    extract_event_body,
-    extract_review_event,
     insert_review_event,
 )
 from app.services.policy import (
@@ -24,11 +23,7 @@ from app.services.policy import (
 )
 from app.services.normalizer import normalize_review_events
 from app.services.queue import enqueue_autofix_run
-from app.services.github_signature import (
-    GITHUB_SIGNATURE_HEADER,
-    SignatureStatus,
-    verify_github_signature,
-)
+from app.services.github_signature import SignatureStatus
 from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
 
 
@@ -85,10 +80,11 @@ def _get_filter_reason_for_event(
 @router.post("/webhook")
 async def github_webhook(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
-    signature_result = verify_github_signature(
+    provider = get_webhook_provider()
+    signature_result = provider.verify_signature(
         body=raw_body,
         secret=get_settings().github_webhook_secret,
-        signature_header=request.headers.get(GITHUB_SIGNATURE_HEADER),
+        signature_header=request.headers.get(provider.signature_header),
     )
     if signature_result.status == SignatureStatus.FAILED:
         raise HTTPException(
@@ -102,7 +98,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
 
     payload = await _read_payload(request)
     event_type = request.headers.get("x-github-event", "unknown").strip().lower()
-    event = extract_review_event(event_type=event_type, payload=payload)
+    event = provider.extract_review_event(event_type=event_type, payload=payload)
     if event is None:
         return {
             "ok": True,
@@ -122,7 +118,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     remaining_quota: int | None = None
     runtime_settings: RuntimeSettings | None = None
     should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
-    event_body = extract_event_body(event_type, payload)
+    event_body = provider.extract_event_body(event_type=event_type, payload=payload)
     try:
         with connect_db() as conn:
             runtime_settings = resolve_runtime_settings(conn)

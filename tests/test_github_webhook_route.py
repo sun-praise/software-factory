@@ -8,8 +8,14 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import app
+from app.routes import github as github_route
 from app.routes.github import _get_debounce_backend
-from app.services.github_signature import build_signature
+from app.services.github_events import GitHubReviewEvent
+from app.services.github_signature import (
+    SignatureStatus,
+    SignatureVerificationResult,
+    build_signature,
+)
 
 
 def _set_env(tmp_path: Path, secret: str) -> None:
@@ -49,6 +55,89 @@ def test_webhook_rejects_invalid_signature(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 401
+
+
+def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> None:
+    _set_env(tmp_path, secret="top-secret")
+    calls: dict[str, object] = {}
+
+    class _FakeWebhookProvider:
+        @property
+        def signature_header(self) -> str:
+            return "X-Custom-Signature"
+
+        def verify_signature(
+            self,
+            *,
+            body: bytes,
+            secret: str,
+            signature_header: str | None,
+        ) -> SignatureVerificationResult:
+            calls["verify"] = {
+                "body": body,
+                "secret": secret,
+                "signature_header": signature_header,
+            }
+            return SignatureVerificationResult(status=SignatureStatus.VERIFIED)
+
+        def extract_review_event(self, *, event_type: str, payload: dict[str, object]):
+            calls["event"] = {"event_type": event_type, "payload": payload}
+            return GitHubReviewEvent(
+                repo="acme/widgets",
+                pr_number=42,
+                event_type=event_type,
+                event_id="1001",
+                event_key="gh:pull_request_review:acme/widgets:42:1001",
+                actor="reviewer",
+                head_sha="abc123",
+                raw_payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            )
+
+        def extract_event_body(self, *, event_type: str, payload: dict[str, object]):
+            calls["body"] = {"event_type": event_type, "payload": payload}
+            return "Please fix"
+
+    monkeypatch.setattr(
+        github_route,
+        "get_webhook_provider",
+        lambda: _FakeWebhookProvider(),
+    )
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "pull_request": {"number": 42, "head": {"sha": "abc123"}},
+        "review": {"id": 1001, "body": "Please fix"},
+        "sender": {"login": "reviewer"},
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request_review",
+                "X-Custom-Signature": "sha256=abc",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["queue_status"] == "queued"
+    assert isinstance(response.json()["queued_run_id"], int)
+    assert calls["verify"] == {
+        "body": body,
+        "secret": "top-secret",
+        "signature_header": "sha256=abc",
+    }
+    assert calls["event"] == {
+        "event_type": "pull_request_review",
+        "payload": payload,
+    }
+    assert calls["body"] == {
+        "event_type": "pull_request_review",
+        "payload": payload,
+    }
 
 
 def test_webhook_inserts_and_deduplicates_review_event(tmp_path: Path) -> None:
