@@ -141,6 +141,24 @@ def test_build_autofix_prompt_uses_issue_context_for_manual_issue_runs() -> None
     assert "PR Title:" not in prompt
 
 
+def test_build_autofix_prompt_uses_generic_task_context_for_text_runs() -> None:
+    prompt = build_autofix_prompt(
+        repo="acme/widgets",
+        pr_number=24,
+        head_sha="abc123def",
+        normalized_review={
+            "source_kind": "text",
+            "task_title": "Fix startup crash",
+            "task_text": "The app crashes on startup when config is empty.",
+        },
+    )
+
+    assert "manually submitted software task" in prompt
+    assert "- Task: Fix startup crash" in prompt
+    assert "- Source: manual text input" in prompt
+    assert "Pull Request:" not in prompt
+
+
 def test_build_autofix_prompt_truncates_operator_hints() -> None:
     prompt = build_autofix_prompt(
         repo="acme/widgets",

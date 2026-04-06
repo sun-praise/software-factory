@@ -47,6 +47,11 @@ from app.services.queue import (
     request_run_cancel,
 )
 from app.services.run_hints import RUN_HINT_EDITABLE_STATUSES
+from app.services.task_source import (
+    TEXT_SOURCE_KIND,
+    build_manual_text_task_number,
+    coerce_positive_int,
+)
 
 
 _ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested", "retry_scheduled"}
@@ -100,16 +105,18 @@ router = APIRouter(tags=["web"])
 
 
 @dataclass(frozen=True)
-class ParsedIssueTarget:
+class ParsedTaskTarget:
     repo: str
     owner: str
     repo_name: str
     pr_number: int
     resolved_pr_number: int | None
     issue_number: int | None
-    source_url: str
+    source_ref: str
     source_fragment: str
-    url_kind: str
+    source_kind: str
+    task_title: str | None = None
+    task_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -224,7 +231,7 @@ def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
         review_json = json.loads(row["normalized_review_json"] or "{}")
     except (json.JSONDecodeError, TypeError):
         return {"trigger_source": "manual_issue", "issue_number": "", "issue_url": ""}
-    issue_number = _coerce_positive_int(review_json.get("issue_number"))
+    issue_number = coerce_positive_int(review_json.get("issue_number"))
     source_url = _string_or_empty(review_json.get("manual_issue_source_url"))
     return {
         "trigger_source": "manual_issue",
@@ -234,9 +241,11 @@ def _extract_issue_metadata(row: sqlite3.Row) -> dict[str, str]:
 
 
 def _resolve_run_pr_number(row: sqlite3.Row) -> str:
-    opened_pr_number = _coerce_positive_int(row["opened_pr_number"])
+    opened_pr_number = coerce_positive_int(row["opened_pr_number"])
     if opened_pr_number is not None:
         return str(opened_pr_number)
+    if _string_or_empty(row["trigger_source"]) == "manual_task":
+        return "-"
     return str(row["pr_number"]) if row["pr_number"] is not None else "-"
 
 
@@ -245,10 +254,10 @@ def _resolve_run_pr_url(row: sqlite3.Row) -> str:
     if opened_pr_url:
         return opened_pr_url
     repo = _string_or_empty(row["repo"])
-    pr_number = _coerce_positive_int(row["pr_number"])
+    pr_number = coerce_positive_int(row["pr_number"])
     if not repo or pr_number is None:
         return ""
-    if _string_or_empty(row["trigger_source"]) == "manual_issue":
+    if _string_or_empty(row["trigger_source"]) in {"manual_issue", "manual_task"}:
         return ""
     return f"https://github.com/{repo}/pull/{pr_number}"
 
@@ -331,7 +340,7 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     }
 
 
-def _parse_issue_url(url: str) -> ParsedIssueTarget:
+def _parse_issue_url(url: str) -> ParsedTaskTarget:
     normalized_url = url.strip()
     parsed = urlparse(normalized_url)
     if parsed.scheme != "https" or (parsed.hostname or "").lower() != "github.com":
@@ -356,16 +365,16 @@ def _parse_issue_url(url: str) -> ParsedIssueTarget:
         if pr_number <= 0:
             raise ValueError("PR number in URL must be a positive integer.")
 
-        return ParsedIssueTarget(
+        return ParsedTaskTarget(
             repo=repo,
             owner=owner,
             repo_name=repo_name,
             pr_number=pr_number,
             resolved_pr_number=pr_number,
             issue_number=None,
-            source_url=normalized_url,
+            source_ref=normalized_url,
             source_fragment=fragment,
-            url_kind="pull",
+            source_kind="pull",
         )
 
     if section != "issues":
@@ -387,16 +396,53 @@ def _parse_issue_url(url: str) -> ParsedIssueTarget:
         repo_name=repo_name,
         issue_number=issue_number,
     )
-    return ParsedIssueTarget(
+    return ParsedTaskTarget(
         repo=repo,
         owner=owner,
         repo_name=repo_name,
         pr_number=resolved_pr_number or issue_number,
         resolved_pr_number=resolved_pr_number,
         issue_number=issue_number,
-        source_url=normalized_url,
+        source_ref=normalized_url,
         source_fragment=fragment,
-        url_kind="issue",
+        source_kind="issue",
+    )
+
+
+def _parse_repo(repo: str) -> tuple[str, str, str]:
+    normalized_repo = repo.strip()
+    repo_parts = [part for part in normalized_repo.split("/") if part]
+    if len(repo_parts) != 2:
+        raise ValueError("Repository must be in the form <owner>/<repo>.")
+    owner, repo_name = repo_parts
+    return normalized_repo, owner, repo_name
+
+
+def _parse_task_submission(payload: IssueSubmissionRequest) -> ParsedTaskTarget:
+    if payload.url:
+        return _parse_issue_url(payload.url)
+
+    repo, owner, repo_name = _parse_repo(payload.repo or "")
+    task_text = _string_or_empty(payload.text)
+    if not task_text:
+        raise ValueError("Task text is required for non-GitHub submissions.")
+    task_title = _string_or_empty(payload.title) or None
+    return ParsedTaskTarget(
+        repo=repo,
+        owner=owner,
+        repo_name=repo_name,
+        pr_number=build_manual_text_task_number(
+            repo=repo,
+            text=task_text,
+            title=task_title,
+        ),
+        resolved_pr_number=None,
+        issue_number=None,
+        source_ref="",
+        source_fragment="",
+        source_kind=TEXT_SOURCE_KIND,
+        task_title=task_title,
+        task_text=task_text,
     )
 
 
@@ -493,16 +539,6 @@ def _parse_fragment_numeric_id(fragment: str, prefixes: tuple[str, ...]) -> int 
     return None
 
 
-def _coerce_positive_int(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        parsed_value = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    return parsed_value if parsed_value > 0 else None
-
-
 def _string_or_empty(value: Any) -> str:
     if value is None:
         return ""
@@ -529,7 +565,7 @@ def _format_manual_issue_context(
     return "\n".join(part for part in parts if part)
 
 
-def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
+def _fetch_issue_body_context(target: ParsedTaskTarget) -> ManualIssueContext:
     issue_number = target.issue_number or target.pr_number
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/issues/{issue_number}",
@@ -548,12 +584,12 @@ def _fetch_issue_body_context(target: ParsedIssueTarget) -> ManualIssueContext:
             title=title,
             body=context_body,
         ),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
     )
 
 
 def _fetch_issue_comment_context(
-    target: ParsedIssueTarget, comment_id: int
+    target: ParsedTaskTarget, comment_id: int
 ) -> ManualIssueContext:
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/issues/comments/{comment_id}",
@@ -569,12 +605,12 @@ def _fetch_issue_comment_context(
             label="GitHub issue comment",
             body=body,
         ),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
     )
 
 
 def _fetch_review_comment_context(
-    target: ParsedIssueTarget, comment_id: int
+    target: ParsedTaskTarget, comment_id: int
 ) -> ManualIssueContext:
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/pulls/comments/{comment_id}",
@@ -586,7 +622,7 @@ def _fetch_review_comment_context(
             "GitHub review comment is empty. Add a description to the manual issue."
         )
     path = _string_or_empty(payload.get("path")) or None
-    line = _coerce_positive_int(payload.get("line")) or _coerce_positive_int(
+    line = coerce_positive_int(payload.get("line")) or coerce_positive_int(
         payload.get("original_line")
     )
     return ManualIssueContext(
@@ -598,12 +634,12 @@ def _fetch_review_comment_context(
         ),
         path=path,
         line=line,
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
     )
 
 
 def _fetch_review_context(
-    target: ParsedIssueTarget, review_id: int
+    target: ParsedTaskTarget, review_id: int
 ) -> ManualIssueContext:
     payload = _github_get_json(
         f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews/{review_id}",
@@ -620,19 +656,19 @@ def _fetch_review_context(
         label = f"{label} ({state.lower()})"
     return ManualIssueContext(
         text=_format_manual_issue_context(label=label, body=body),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_url,
+        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
     )
 
 
 def _resolve_manual_issue_context(
-    target: ParsedIssueTarget,
+    target: ParsedTaskTarget,
     *,
     description_present: bool,
 ) -> ManualIssueContext | None:
     fragment = target.source_fragment.strip().lower()
 
     try:
-        if target.url_kind == "issue":
+        if target.source_kind == "issue":
             comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
             if comment_id is not None:
                 return _fetch_issue_comment_context(target, comment_id)
@@ -663,7 +699,7 @@ def _resolve_manual_issue_context(
 
 
 def _fetch_pull_request_feedback_review(
-    target: ParsedIssueTarget,
+    target: ParsedTaskTarget,
     *,
     project_root: str | None = None,
 ) -> dict[str, Any]:
@@ -689,7 +725,7 @@ def _fetch_pull_request_feedback_review(
         {
             "event_type": "issue_comment",
             "payload": {
-                "issue": {"pull_request": {"url": target.source_url}},
+                "issue": {"pull_request": {"url": target.source_ref}},
                 "comment": comment,
             },
         }
@@ -708,9 +744,9 @@ def _fetch_pull_request_feedback_review(
     )
     normalized["project_type"] = "python"
     normalized["project_root"] = project_root
-    normalized["source_kind"] = target.url_kind
+    normalized["source_kind"] = target.source_kind
     normalized["resolved_pr_number"] = target.resolved_pr_number
-    normalized["manual_issue_source_url"] = target.source_url
+    normalized["manual_issue_source_url"] = target.source_ref
     normalized["issue_number"] = target.issue_number
     return normalized
 
@@ -743,18 +779,18 @@ def _resolve_pr_number_from_issue(
 
 def _build_issue_normalized_review(
     *,
-    target: ParsedIssueTarget,
+    target: ParsedTaskTarget,
     description: str | None,
     resolved_context: ManualIssueContext | None,
     project_root: str | None = None,
 ) -> dict[str, Any]:
-    issue_parts = [f"Manual issue submission: {target.source_url}"]
+    issue_parts = [f"Manual issue submission: {target.source_ref}"]
     if target.issue_number is not None:
         issue_parts.append(f"Original issue number: {target.issue_number}")
     if description:
         issue_parts.append(f"Operator note:\n{description}")
     if resolved_context is not None:
-        context_source = resolved_context.source_url or target.source_url
+        context_source = resolved_context.source_url or target.source_ref
         issue_parts.append(f"GitHub context source: {context_source}")
         issue_parts.append(f"GitHub context:\n{resolved_context.text}")
 
@@ -767,7 +803,7 @@ def _build_issue_normalized_review(
         "line": resolved_context.line if resolved_context is not None else None,
         "text": issue_text,
         "severity": "P1",
-        "source_url": target.source_url,
+        "source_url": target.source_ref,
         "context_resolved": context_resolved,
     }
 
@@ -784,16 +820,55 @@ def _build_issue_normalized_review(
         "summary": f"{len(must_fix)} blocking issues, {len(should_fix)} suggestions, 0 ignored",
         "project_type": "python",
         "project_root": project_root,
-        "source_kind": target.url_kind,
+        "source_kind": target.source_kind,
         "resolved_pr_number": target.resolved_pr_number,
         "issue_number": target.issue_number,
-        "manual_issue_source_url": target.source_url,
+        "manual_issue_source_url": target.source_ref,
     }
 
 
-def _enqueue_issue_fix(
+def _build_text_normalized_review(
     *,
-    target: ParsedIssueTarget,
+    target: ParsedTaskTarget,
+    description: str | None,
+) -> dict[str, Any]:
+    task_parts = []
+    if target.task_title:
+        task_parts.append(f"Title: {target.task_title}")
+    task_parts.append(target.task_text or "")
+    if description:
+        task_parts.append(f"Operator note:\n{description}")
+    task_text = "\n\n".join(part for part in task_parts if part)
+    must_fix = [
+        {
+            "source": "manual_text",
+            "path": None,
+            "line": None,
+            "text": f"Manual task input\n\n{task_text}",
+            "severity": "P1",
+            "context_resolved": True,
+        }
+    ]
+    return {
+        "repo": target.repo,
+        "pr_number": target.pr_number,
+        "head_sha": None,
+        "must_fix": must_fix,
+        "should_fix": [],
+        "ignore": [],
+        "summary": "1 blocking issues, 0 suggestions, 0 ignored",
+        "project_type": "python",
+        "source_kind": target.source_kind,
+        "resolved_pr_number": None,
+        "issue_number": None,
+        "task_title": target.task_title,
+        "task_text": target.task_text,
+    }
+
+
+def _enqueue_task_fix(
+    *,
+    target: ParsedTaskTarget,
     description: str | None,
     resolved_context: ManualIssueContext | None,
     dry_run: bool = False,
@@ -806,7 +881,11 @@ def _enqueue_issue_fix(
     idempotency_key = None
     queue_status = "not_queued"
 
-    if target.url_kind == "pull" and not target.source_fragment and description is None:
+    if (
+        target.source_kind == "pull"
+        and not target.source_fragment
+        and description is None
+    ):
         normalized_review = _fetch_pull_request_feedback_review(
             target, project_root=project_root
         )
@@ -816,6 +895,11 @@ def _enqueue_issue_fix(
             raise ValueError(
                 "No actionable pull request comments were found. Provide a specific comment link or a manual issue description."
             )
+    elif target.source_kind == TEXT_SOURCE_KIND:
+        normalized_review = _build_text_normalized_review(
+            target=target,
+            description=description,
+        )
     else:
         if resolved_context is None and description is None:
             raise ValueError(
@@ -827,10 +911,12 @@ def _enqueue_issue_fix(
             resolved_context=resolved_context,
             project_root=project_root,
         )
-    normalized_review.setdefault("source_kind", target.url_kind)
+    normalized_review.setdefault("source_kind", target.source_kind)
     normalized_review.setdefault("resolved_pr_number", target.resolved_pr_number)
     normalized_review.setdefault("issue_number", target.issue_number)
-    normalized_review.setdefault("manual_issue_source_url", target.source_url)
+    normalized_review.setdefault("manual_issue_source_url", target.source_ref)
+    normalized_review.setdefault("task_title", target.task_title)
+    normalized_review.setdefault("task_text", target.task_text)
     head_sha = None
 
     review_batch_id = build_review_batch_id(normalized_review)
@@ -845,10 +931,12 @@ def _enqueue_issue_fix(
     if dry_run:
         return {
             "ok": True,
-            "message": "Issue validation successful (dry run - no run created).",
+            "message": "Task validation successful (dry run - no run created).",
             "repo": target.repo,
             "pr_number": target.pr_number,
             "issue_number": target.issue_number,
+            "source_kind": target.source_kind,
+            "source_ref": target.source_ref or None,
             "queue_status": "validated",
             "queued_run_id": None,
             "idempotency_key": idempotency_key,
@@ -864,7 +952,7 @@ def _enqueue_issue_fix(
 
     with connect_db() as conn:
         runtime_settings = resolve_runtime_settings(conn)
-        if source_url and target.url_kind == "issue":
+        if source_url and target.source_kind == "issue":
             existing_run = _find_existing_run_by_source_url(conn, source_url)
             if existing_run is not None:
                 existing_run_id = existing_run["id"]
@@ -881,6 +969,8 @@ def _enqueue_issue_fix(
                             "repo": target.repo,
                             "pr_number": target.pr_number,
                             "issue_number": target.issue_number,
+                            "source_kind": target.source_kind,
+                            "source_ref": target.source_ref or None,
                             "queue_status": "reused_active_run",
                             "queued_run_id": existing_run_id,
                             "idempotency_key": idempotency_key,
@@ -921,7 +1011,11 @@ def _enqueue_issue_fix(
                 pr_number=target.pr_number,
                 head_sha=head_sha,
                 normalized_review_json=normalized_review,
-                trigger_source="manual_issue",
+                trigger_source=(
+                    "manual_task"
+                    if target.source_kind == TEXT_SOURCE_KIND
+                    else "manual_issue"
+                ),
                 idempotency_key=final_idempotency_key,
                 max_attempts=runtime_settings.max_retry_attempts,
             )
@@ -929,10 +1023,12 @@ def _enqueue_issue_fix(
 
     return {
         "ok": True,
-        "message": "Issue submission accepted.",
+        "message": "Task submission accepted.",
         "repo": target.repo,
         "pr_number": target.pr_number,
         "issue_number": target.issue_number,
+        "source_kind": target.source_kind,
+        "source_ref": target.source_ref or None,
         "queue_status": queue_status,
         "queued_run_id": run_id,
         "idempotency_key": idempotency_key,
@@ -1349,7 +1445,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
         )
 
     try:
-        target = _parse_issue_url(payload.url)
+        target = _parse_task_submission(payload)
     except ValueError as exc:
         return templates.TemplateResponse(
             request=request,
@@ -1366,27 +1462,29 @@ async def submit_issue(request: Request) -> HTMLResponse:
 
     description = _string_or_empty(payload.description) or None
     project_root = payload.project_root
-    try:
-        resolved_context = _resolve_manual_issue_context(
-            target,
-            description_present=description is not None,
-        )
-    except ValueError as exc:
-        return templates.TemplateResponse(
-            request=request,
-            name="issue_submit.html",
-            context={
-                "request": request,
-                "title": "Submit Manual Issue",
-                "message": str(exc),
-                "result": None,
-                "form": request_data,
-            },
-            status_code=400,
-        )
+    resolved_context = None
+    if target.source_kind != TEXT_SOURCE_KIND:
+        try:
+            resolved_context = _resolve_manual_issue_context(
+                target,
+                description_present=description is not None,
+            )
+        except ValueError as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="issue_submit.html",
+                context={
+                    "request": request,
+                    "title": "Submit Manual Issue",
+                    "message": str(exc),
+                    "result": None,
+                    "form": request_data,
+                },
+                status_code=400,
+            )
 
     try:
-        result = _enqueue_issue_fix(
+        result = _enqueue_task_fix(
             target=target,
             description=description,
             resolved_context=resolved_context,
@@ -1428,7 +1526,7 @@ async def submit_issue(request: Request) -> HTMLResponse:
 @router.post("/api/issues")
 async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
     try:
-        target = _parse_issue_url(payload.url)
+        target = _parse_task_submission(payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1437,19 +1535,21 @@ async def api_submit_issue(payload: IssueSubmissionRequest) -> dict[str, Any]:
 
     description = _string_or_empty(payload.description) or None
     project_root = payload.project_root
-    try:
-        resolved_context = _resolve_manual_issue_context(
-            target,
-            description_present=description is not None,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+    resolved_context = None
+    if target.source_kind != TEXT_SOURCE_KIND:
+        try:
+            resolved_context = _resolve_manual_issue_context(
+                target,
+                description_present=description is not None,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
     try:
-        return _enqueue_issue_fix(
+        return _enqueue_task_fix(
             target=target,
             description=description,
             resolved_context=resolved_context,
@@ -1603,7 +1703,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
             continue
 
         try:
-            result = _enqueue_issue_fix(
+            result = _enqueue_task_fix(
                 target=target,
                 description=description,
                 resolved_context=resolved_context,

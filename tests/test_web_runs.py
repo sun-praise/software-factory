@@ -39,6 +39,25 @@ def test_manual_issue_run_detail_omits_fake_pull_request_link(tmp_path: Path) ->
     assert 'id="run-source-link">' in response.text
 
 
+def test_manual_text_run_detail_omits_fake_pull_request_link(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO autofix_runs (repo, pr_number, trigger_source, status, normalized_review_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("acme/widgets", 314159, "manual_task", "success", "{}"),
+        )
+        conn.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/runs/1")
+
+    assert response.status_code == 200
+    assert "https://github.com/acme/widgets/pull/314159" not in response.text
+
+
 def test_manual_issue_run_prefers_opened_pull_request_link(tmp_path: Path) -> None:
     db_path = _setup_db(tmp_path)
     with sqlite3.connect(db_path) as conn:

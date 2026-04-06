@@ -37,7 +37,7 @@ def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -65,6 +65,41 @@ def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
     normalized = json.loads(str(row["normalized_review_json"]))
     assert normalized["source_kind"] == "issue"
     assert normalized["resolved_pr_number"] is None
+
+
+def test_submit_issue_api_accepts_direct_text_input(tmp_path) -> None:
+    db_path = _setup_db(tmp_path)
+
+    payload = {
+        "repo": "acme/widgets",
+        "title": "Fix startup crash",
+        "text": "The app crashes on startup when config is empty.",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/api/issues", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["queue_status"] == "queued"
+    assert data["source_kind"] == "text"
+    assert data["source_ref"] is None
+    assert data["issue_number"] is None
+    assert isinstance(data["pr_number"], int)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT trigger_source, normalized_review_json FROM autofix_runs WHERE id = ?",
+            (data["queued_run_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert str(row["trigger_source"]) == "manual_task"
+    normalized = json.loads(str(row["normalized_review_json"]))
+    assert normalized["source_kind"] == "text"
+    assert normalized["task_title"] == "Fix startup crash"
+    assert normalized["task_text"] == "The app crashes on startup when config is empty."
 
 
 def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
@@ -95,7 +130,7 @@ def test_submit_issue_api_queues_pull_request_feedback_from_pr_url(
             "project_type": "python",
             "project_root": project_root,
             "issue_number": None,
-            "manual_issue_source_url": target.source_url,
+            "manual_issue_source_url": target.source_ref,
         },
     )
 
@@ -148,7 +183,7 @@ def test_submit_issue_api_duplicates_are_deduplicated(tmp_path) -> None:
             "project_type": "python",
             "project_root": project_root,
             "issue_number": None,
-            "manual_issue_source_url": target.source_url,
+            "manual_issue_source_url": target.source_ref,
         },
     )
 
@@ -193,7 +228,7 @@ def test_submit_issue_api_respects_autofix_limit(tmp_path) -> None:
             "project_type": "python",
             "project_root": project_root,
             "issue_number": None,
-            "manual_issue_source_url": target.source_url,
+            "manual_issue_source_url": target.source_ref,
         },
     )
 
@@ -244,7 +279,7 @@ def test_submit_issue_api_accepts_issue_links(tmp_path, monkeypatch) -> None:
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -286,7 +321,7 @@ def test_submit_issue_api_uses_issue_pr_number_for_pull_request_issues(
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nPlease fix it.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -332,7 +367,7 @@ def test_submit_issue_api_rejects_pull_request_url_without_actionable_feedback(
             "project_type": "python",
             "project_root": project_root,
             "issue_number": None,
-            "manual_issue_source_url": target.source_url,
+            "manual_issue_source_url": target.source_ref,
         },
     )
 
@@ -403,7 +438,7 @@ def test_submit_issue_api_dry_run_validates_without_creating_run(
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Test\nBody: Test.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -436,7 +471,7 @@ def test_submit_issue_api_reuses_existing_active_run_same_source_url(
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Test\nBody: Test.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -480,7 +515,7 @@ def test_submit_issue_api_creates_new_run_after_previous_stops(
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Test\nBody: Test.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -520,7 +555,7 @@ def test_submit_issue_batch_csv_endpoint(tmp_path, monkeypatch) -> None:
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Test\nBody: Test.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -567,7 +602,7 @@ def test_submit_issue_api_propagates_project_root(tmp_path, monkeypatch) -> None
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -611,7 +646,7 @@ def test_submit_issue_api_omits_project_root_when_not_provided(
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Broken issue\nPlease fix it.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 
@@ -650,7 +685,7 @@ def test_submit_issue_batch_csv_propagates_project_root(tmp_path, monkeypatch) -
         "_resolve_manual_issue_context",
         lambda target, description_present: web.ManualIssueContext(
             text="GitHub issue context\nTitle: Test\nBody: Test.",
-            source_url=target.source_url,
+            source_url=target.source_ref,
         ),
     )
 

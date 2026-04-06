@@ -91,6 +91,36 @@ def _enqueue_manual_issue_and_claim(conn: sqlite3.Connection) -> dict:
     return run
 
 
+def _enqueue_manual_text_and_claim(conn: sqlite3.Connection) -> dict:
+    enqueue_autofix_run(
+        conn=conn,
+        repo="acme/widgets",
+        pr_number=314159,
+        head_sha=None,
+        normalized_review_json={
+            "summary": "1 blocking issue",
+            "project_type": "python",
+            "branch": "autofix/run-1-task",
+            "source_kind": "text",
+            "task_title": "Fix startup crash",
+            "task_text": "The app crashes on startup when config is empty.",
+            "must_fix": [
+                {
+                    "source": "manual_text",
+                    "path": None,
+                    "line": None,
+                    "text": "Manual task input\n\nTitle: Fix startup crash\n\nThe app crashes on startup when config is empty.",
+                }
+            ],
+            "should_fix": [],
+        },
+        trigger_source="manual_task",
+    )
+    run = claim_next_queued_run(conn)
+    assert run is not None
+    return run
+
+
 @pytest.fixture(autouse=True)
 def _stub_pr_metadata_for_run_once_tests(
     request: pytest.FixtureRequest,
@@ -336,7 +366,7 @@ def test_run_once_manual_issue_creates_pull_request_after_push(
     assert row["opened_pr_url"] == "https://github.com/acme/widgets/pull/99"
     assert row["error_summary"] is None
     logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
-    assert "issue_pr: created pr=#99" in logs_text
+    assert "task_pr: created pr=#99" in logs_text
 
 
 def test_run_once_manual_issue_pr_creation_failure_is_non_fatal(
@@ -383,7 +413,7 @@ def test_run_once_manual_issue_pr_creation_failure_is_non_fatal(
     )
 
     assert result["status"] == "success"
-    assert "issue_pr_create_failed: gh unavailable" in str(result["error_summary"])
+    assert "task_pr_create_failed: gh unavailable" in str(result["error_summary"])
     row = conn.execute(
         "SELECT opened_pr_number, opened_pr_url, error_summary FROM autofix_runs WHERE id = ?",
         (run["id"],),
@@ -391,7 +421,7 @@ def test_run_once_manual_issue_pr_creation_failure_is_non_fatal(
     assert row is not None
     assert row["opened_pr_number"] is None
     assert row["opened_pr_url"] is None
-    assert "issue_pr_create_failed: gh unavailable" in str(row["error_summary"])
+    assert "task_pr_create_failed: gh unavailable" in str(row["error_summary"])
 
 
 def test_run_once_manual_issue_retries_pull_request_metadata_lookup(
@@ -462,8 +492,64 @@ def test_run_once_manual_issue_retries_pull_request_metadata_lookup(
     assert row["opened_pr_url"] == "https://github.com/acme/widgets/pull/99"
     assert row["error_summary"] is None
     logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
-    assert "issue_pr: retrying metadata lookup" in logs_text
-    assert "issue_pr: reused pr=#99" in logs_text
+    assert "task_pr: retrying metadata lookup" in logs_text
+    assert "task_pr: reused pr=#99" in logs_text
+
+
+def test_run_once_manual_text_creates_pull_request_after_push(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _make_conn()
+    run = _enqueue_manual_text_and_claim(conn)
+
+    ops = RunnerOps(
+        checkout_branch=lambda *_: (True, "checked out"),
+        ensure_head_sha=lambda *_: True,
+        commit_and_push=lambda **_: {
+            "success": True,
+            "commit_sha": "deadbeef",
+            "error": None,
+            "error_stage": None,
+            "remote": "origin",
+            "branch": "autofix/run-1-task",
+            "pushed_ref": "origin/autofix/run-1-task",
+        },
+        ensure_pull_request=lambda **_: {
+            "success": True,
+            "pr_number": 101,
+            "pr_url": "https://github.com/acme/widgets/pull/101",
+            "base_branch": "main",
+            "error": None,
+            "existing": False,
+        },
+        post_pr_comment=lambda *_: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (True, None, None, "openhands"),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *_: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=ops,
+    )
+
+    assert result["status"] == "success"
+    row = conn.execute(
+        "SELECT opened_pr_number, opened_pr_url, error_summary FROM autofix_runs WHERE id = ?",
+        (run["id"],),
+    ).fetchone()
+    assert row is not None
+    assert row["opened_pr_number"] == 101
+    assert row["opened_pr_url"] == "https://github.com/acme/widgets/pull/101"
+    assert row["error_summary"] is None
+    logs_text = Path(result["logs_path"]).read_text(encoding="utf-8")
+    assert "task_pr: created pr=#101" in logs_text
 
 
 def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
@@ -608,11 +694,11 @@ def test_run_once_defaults_legacy_manual_issue_runs_to_issue_source_kind(
     )
 
     assert result["status"] == "success"
-    assert cast(list[int], captured["metadata_pr_numbers"])[0] == 0
+    assert cast(list[int], captured["metadata_pr_numbers"]) == []
     assert captured["prepare_pr_number"] == 0
     assert captured["prepare_source_kind"] == "issue"
     assert captured["prepare_issue_number"] == 42
-    assert captured["commit_message"] == "fix: apply autofix updates for issue #42"
+    assert captured["commit_message"] == "fix: issue #42"
 
 
 def test_collect_pull_request_metadata_returns_empty_when_gh_missing(
@@ -1004,7 +1090,7 @@ def test_prepare_run_workspace_creates_branch_for_plain_issue_runs(
             (kwargs.get("resolved_branch"), kwargs.get("resolved_head_sha"))
         )
 
-    def fake_checkout_manual_issue_branch(**kwargs) -> None:
+    def fake_checkout_manual_task_branch(**kwargs) -> None:
         issue_branch_calls.append(str(kwargs["branch_name"]))
 
     monkeypatch.setattr(
@@ -1014,8 +1100,8 @@ def test_prepare_run_workspace_creates_branch_for_plain_issue_runs(
     )
     monkeypatch.setattr(
         agent_runner,
-        "_checkout_manual_issue_branch",
-        fake_checkout_manual_issue_branch,
+        "_checkout_manual_task_branch",
+        fake_checkout_manual_task_branch,
     )
 
     workspace_dir, agent_workspace, resolved_branch, resolved_head_sha = (
@@ -1037,6 +1123,69 @@ def test_prepare_run_workspace_creates_branch_for_plain_issue_runs(
     assert resolved_head_sha is None
     assert checkout_calls == [(None, None)]
     assert issue_branch_calls == ["autofix/run-123-issue-42"]
+
+
+def test_prepare_run_workspace_creates_branch_for_text_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cloned_workspace = tmp_path / "run-workspace"
+    cloned_workspace.mkdir()
+    checkout_calls: list[tuple[str | None, str | None]] = []
+    issue_branch_calls: list[str] = []
+
+    monkeypatch.setattr(agent_runner, "_ensure_repo_cache", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agent_runner,
+        "_create_run_workspace_clone",
+        lambda **kwargs: str(cloned_workspace),
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_fetch_pull_request_head",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("_fetch_pull_request_head should not be called")
+        ),
+    )
+
+    def fake_checkout_run_workspace_target(**kwargs) -> None:
+        checkout_calls.append(
+            (kwargs.get("resolved_branch"), kwargs.get("resolved_head_sha"))
+        )
+
+    def fake_checkout_manual_task_branch(**kwargs) -> None:
+        issue_branch_calls.append(str(kwargs["branch_name"]))
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_run_workspace_target",
+        fake_checkout_run_workspace_target,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_manual_task_branch",
+        fake_checkout_manual_task_branch,
+    )
+
+    workspace_dir, agent_workspace, resolved_branch, resolved_head_sha = (
+        agent_runner._prepare_run_workspace(
+            runtime_root=str(tmp_path),
+            repo="acme/widgets",
+            pr_number=0,
+            run_id=123,
+            branch=None,
+            head_sha=None,
+            source_kind="text",
+            issue_number=None,
+        )
+    )
+
+    assert workspace_dir == str(cloned_workspace)
+    assert agent_workspace == str(cloned_workspace)
+    assert resolved_branch == "autofix/run-123-task"
+    assert resolved_head_sha is None
+    assert checkout_calls == [(None, None)]
+    assert issue_branch_calls == ["autofix/run-123-task"]
 
 
 def test_run_once_returns_failed_checks_to_agent_and_retries(
