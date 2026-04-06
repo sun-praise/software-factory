@@ -268,6 +268,52 @@ def test_runner_ops_defaults_route_pr_operations_through_provider(
     assert calls["comment"]["pr_number"] == 55
 
 
+def test_runner_ops_normalizes_mapping_upsert_result_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeForgeProvider:
+        name = "custom"
+
+        def ensure_pull_request(self, **kwargs) -> dict[str, Any]:
+            return {
+                "ok": 1,
+                "number": "77",
+                "url": "https://code.example/acme/widgets/pull/77",
+                "message": "",
+                "already_exists": 1,
+            }
+
+        def post_pull_request_comment(self, **kwargs) -> tuple[bool, str]:
+            return True, "ok"
+
+        def get_pull_request_metadata(self, **kwargs) -> dict[str, Any]:
+            return {}
+
+        def collect_changed_file_paths(self, **kwargs) -> list[str]:
+            return []
+
+    monkeypatch.setattr(
+        agent_runner, "get_forge_provider", lambda: _FakeForgeProvider()
+    )
+
+    ops = RunnerOps()
+    result = ops.ensure_pull_request(
+        repo_dir="/repo",
+        repo="acme/widgets",
+        head_branch="feature/m5",
+        title="Fix bug",
+        body="details",
+    )
+
+    assert result == {
+        "success": True,
+        "pr_number": 77,
+        "pr_url": "https://code.example/acme/widgets/pull/77",
+        "error": None,
+        "existing": True,
+    }
+
+
 def test_run_once_failure_marks_failed_and_records_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

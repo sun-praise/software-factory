@@ -183,15 +183,7 @@ def _ensure_pull_request_via_provider(
         title=title,
         body=body,
     )
-    if isinstance(result, Mapping):
-        return dict(result)
-    return {
-        "success": bool(getattr(result, "success", False)),
-        "pr_number": _coerce_positive_int(getattr(result, "pr_number", None)),
-        "pr_url": _safe_text(getattr(result, "pr_url", None)),
-        "error": _safe_text(getattr(result, "error", None)),
-        "existing": bool(getattr(result, "existing", False)),
-    }
+    return _normalize_pull_request_upsert_result(result)
 
 
 def _post_pr_comment_via_provider(
@@ -207,6 +199,41 @@ def _post_pr_comment_via_provider(
         pr_number=pr_number,
         body=body,
     )
+
+
+def _normalize_pull_request_upsert_result(result: Any) -> dict[str, Any]:
+    raw_pr_number = _lookup_value(result, "pr_number", "number")
+    raw_success = _lookup_value(result, "success", "ok")
+    raw_pr_url = _lookup_value(result, "pr_url", "url", "pull_request_url")
+    raw_error = _lookup_value(result, "error", "message")
+    raw_existing = _lookup_value(result, "existing", "already_exists")
+
+    pr_number = _coerce_positive_int(raw_pr_number)
+    if raw_success is None:
+        success = pr_number is not None
+    else:
+        success = bool(raw_success)
+
+    return {
+        "success": success,
+        "pr_number": pr_number,
+        "pr_url": _safe_text(raw_pr_url),
+        "error": _safe_text(raw_error),
+        "existing": bool(raw_existing),
+    }
+
+
+def _lookup_value(source: Any, *keys: str) -> Any:
+    if isinstance(source, Mapping):
+        for key in keys:
+            if key in source:
+                return source[key]
+        return None
+
+    for key in keys:
+        if hasattr(source, key):
+            return getattr(source, key)
+    return None
 
 
 @dataclass(frozen=True)
@@ -2972,163 +2999,130 @@ def _fetch_pull_request_head(
     ) or None
 
 
-def _run_gh_pr_view(
-    *, repo: str, pr_number: int, json_fields: str
-) -> subprocess.CompletedProcess[str] | None:
-    try:
-        return subprocess.run(
-            [
-                "gh",
-                "pr",
-                "view",
-                str(pr_number),
-                "--repo",
-                repo,
-                "--json",
-                json_fields,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=PR_FETCH_TIMEOUT_SECONDS,
-        )
-    except FileNotFoundError:
-        logger.warning(
-            "failed to fetch PR metadata via gh: repo=%s pr=%s error=gh not installed",
-            repo,
-            pr_number,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "failed to fetch PR metadata via gh: repo=%s pr=%s error=timeout",
-            repo,
-            pr_number,
-        )
-    return None
-
-
-def _gh_result_error_details(result: subprocess.CompletedProcess[str]) -> str:
-    return result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-
-
 def _collect_pull_request_metadata(*, repo: str, pr_number: int) -> dict[str, Any]:
     if pr_number <= 0:
         return {}
-    primary_fields = (
-        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
-        "additions,deletions,mergeStateStatus,canBeRebased,mergeable"
+    provider = get_forge_provider()
+    payload = provider.get_pull_request_metadata(
+        repo_dir=".",
+        repo=repo,
+        pr_number=pr_number,
     )
-    fallback_fields = (
-        "title,body,baseRefName,headRefName,headRefOid,changedFiles,"
-        "additions,deletions,mergeStateStatus,mergeable"
-    )
-    result = _run_gh_pr_view(repo=repo, pr_number=pr_number, json_fields=primary_fields)
-    if result is None:
+    if payload is None:
         return {}
-    if result.returncode != 0:
-        details = _gh_result_error_details(result)
-        if 'Unknown JSON field: "canBeRebased"' in details:
-            logger.warning(
-                "gh missing canBeRebased field; retrying metadata fetch without it: repo=%s pr=%s",
-                repo,
-                pr_number,
-            )
-            result = _run_gh_pr_view(
-                repo=repo, pr_number=pr_number, json_fields=fallback_fields
-            )
-            if result is None:
-                return {}
-            if result.returncode == 0:
-                details = ""
-            else:
-                details = _gh_result_error_details(result)
-        if details:
-            logger.warning(
-                "failed to fetch PR metadata via gh: repo=%s pr=%s error=%s",
-                repo,
-                pr_number,
-                details,
-            )
-            return {}
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "invalid PR metadata payload from gh: repo=%s pr=%s error=%s",
-            repo,
-            pr_number,
-            exc,
-        )
+
+    metadata = _normalize_pull_request_metadata(payload)
+    if not metadata:
         return {}
-    if not isinstance(payload, Mapping):
-        logger.warning(
-            "unexpected PR metadata payload type from gh: repo=%s pr=%s payload=%r",
-            repo,
-            pr_number,
-            payload,
+
+    changed_file_paths, has_changed_file_paths = _extract_changed_file_paths(payload)
+    if has_changed_file_paths:
+        metadata["changed_file_paths"] = changed_file_paths
+    else:
+        metadata["changed_file_paths"] = _collect_changed_file_paths(
+            repo=repo,
+            pr_number=pr_number,
         )
-        return {}
-    merge_state_status = _safe_text(payload.get("mergeStateStatus"))
-    can_be_rebased = payload.get("canBeRebased")
-    mergeable = payload.get("mergeable")
-    is_merge_conflict = merge_state_status in {"CONFLICTING", "DIRTY"}
-    is_behind = merge_state_status == "BEHIND"
-    is_blocked = merge_state_status == "BLOCKED"
-    is_unknown_state = merge_state_status in {"UNKNOWN", "UNSTABLE"}
-    if is_unknown_state:
-        logger.warning(
-            "pr_merge_state_unknown: repo=%s pr=%s merge_state_status=%s",
-            repo,
-            pr_number,
-            merge_state_status,
-        )
-    return {
-        "title": _safe_text(payload.get("title")),
-        "body": _safe_text(payload.get("body")),
-        "base_ref": _safe_text(payload.get("baseRefName")),
-        "head_ref": _safe_text(payload.get("headRefName")),
-        "head_sha": _safe_text(payload.get("headRefOid")),
-        "changed_files": payload.get("changedFiles"),
-        "additions": payload.get("additions"),
-        "deletions": payload.get("deletions"),
-        "merge_state_status": merge_state_status,
-        "can_be_rebased": can_be_rebased,
-        "mergeable": mergeable,
-        "is_merge_conflict": is_merge_conflict,
-        "is_behind": is_behind,
-        "is_blocked": is_blocked,
-        "changed_file_paths": _collect_changed_file_paths(
-            repo=repo, pr_number=pr_number
-        ),
-    }
+    return metadata
 
 
 def _collect_changed_file_paths(*, repo: str, pr_number: int) -> list[str]:
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "diff",
-                str(pr_number),
-                "--repo",
-                repo,
-                "--name-only",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=PR_FETCH_TIMEOUT_SECONDS,
+    if pr_number <= 0:
+        return []
+    provider = get_forge_provider()
+    return _normalize_changed_file_paths(
+        provider.collect_changed_file_paths(
+            repo_dir=".",
+            repo=repo,
+            pr_number=pr_number,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    )
+
+
+def _normalize_pull_request_metadata(payload: Any) -> dict[str, Any]:
+    merge_state_status = _safe_text(
+        _lookup_value(payload, "merge_state_status", "mergeStateStatus")
+    )
+    mergeable = _lookup_value(payload, "mergeable")
+
+    is_merge_conflict = _lookup_value(payload, "is_merge_conflict")
+    if is_merge_conflict is None:
+        is_merge_conflict = merge_state_status in {"CONFLICTING", "DIRTY"}
+
+    is_behind = _lookup_value(payload, "is_behind")
+    if is_behind is None:
+        is_behind = merge_state_status == "BEHIND"
+
+    is_blocked = _lookup_value(payload, "is_blocked")
+    if is_blocked is None:
+        is_blocked = merge_state_status == "BLOCKED"
+
+    metadata = {
+        "title": _safe_text(_lookup_value(payload, "title")),
+        "body": _safe_text(_lookup_value(payload, "body")),
+        "base_ref": _safe_text(
+            _lookup_value(payload, "base_ref", "base_ref_name", "baseRefName")
+        ),
+        "head_ref": _safe_text(
+            _lookup_value(payload, "head_ref", "head_ref_name", "headRefName")
+        ),
+        "head_sha": _safe_text(
+            _lookup_value(payload, "head_sha", "head_ref_oid", "headRefOid")
+        ),
+        "changed_files": _lookup_value(payload, "changed_files", "changedFiles"),
+        "additions": _lookup_value(payload, "additions"),
+        "deletions": _lookup_value(payload, "deletions"),
+        "merge_state_status": merge_state_status,
+        "can_be_rebased": _lookup_value(payload, "can_be_rebased", "canBeRebased"),
+        "mergeable": mergeable,
+        "is_merge_conflict": bool(is_merge_conflict),
+        "is_behind": bool(is_behind),
+        "is_blocked": bool(is_blocked),
+    }
+
+    has_primary_value = any(
+        metadata[key] is not None
+        for key in (
+            "title",
+            "body",
+            "base_ref",
+            "head_ref",
+            "head_sha",
+            "changed_files",
+            "additions",
+            "deletions",
+            "merge_state_status",
+            "can_be_rebased",
+            "mergeable",
+        )
+    )
+    has_merge_flags = any(
+        _lookup_value(payload, key) is not None
+        for key in ("is_merge_conflict", "is_behind", "is_blocked")
+    )
+    if not has_primary_value and not has_merge_flags:
+        return {}
+    return metadata
+
+
+def _extract_changed_file_paths(payload: Any) -> tuple[list[str], bool]:
+    marker = object()
+    raw_paths = _lookup_value(payload, "changed_file_paths", "changedFilePaths")
+    if raw_paths is None and isinstance(payload, Mapping):
+        raw_paths = payload.get("changed_file_paths", marker)
+    if raw_paths is marker or raw_paths is None:
+        return [], False
+    return _normalize_changed_file_paths(raw_paths), True
+
+
+def _normalize_changed_file_paths(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
         return []
-    if result.returncode != 0:
-        return []
-    paths = [
-        line.strip() for line in result.stdout.strip().splitlines() if line.strip()
-    ]
-    if not paths:
-        return []
+    paths: list[str] = []
+    for entry in value:
+        path = _safe_text(entry)
+        if path:
+            paths.append(path)
     return paths[:CHANGED_FILE_PATHS_LIMIT]
 
 
