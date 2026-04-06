@@ -24,6 +24,88 @@ def _setup_db(tmp_path):
     return db_path
 
 
+def test_parse_task_submission_delegates_to_task_source_provider(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class _FakeTaskSourceProvider:
+        def parse_task_submission(self, *, submission):
+            calls["submission"] = dict(submission)
+            return {
+                "repo": "acme/widgets",
+                "owner": "acme",
+                "repo_name": "widgets",
+                "pr_number": 42,
+                "resolved_pr_number": 42,
+                "issue_number": None,
+                "source_ref": "https://github.com/acme/widgets/pull/42",
+                "source_fragment": "",
+                "source_kind": "pull",
+                "task_title": None,
+                "task_text": None,
+            }
+
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
+
+    payload = IssueSubmissionRequest(url="https://github.com/acme/widgets/pull/42")
+    target = web._parse_task_submission(payload)
+
+    assert target.repo == "acme/widgets"
+    assert target.pr_number == 42
+    assert target.resolved_pr_number == 42
+    assert target.source_kind == "pull"
+    assert calls["submission"] == {
+        "url": "https://github.com/acme/widgets/pull/42",
+        "repo": None,
+        "title": None,
+        "text": None,
+        "description": None,
+        "project_root": None,
+        "dry_run": False,
+    }
+
+
+def test_parse_task_submission_uses_resolve_helper_for_issue(monkeypatch) -> None:
+    class _FakeTaskSourceProvider:
+        def parse_task_submission(self, *, submission):
+            return {
+                "repo": "acme/widgets",
+                "owner": "acme",
+                "repo_name": "widgets",
+                "pr_number": 99,
+                "resolved_pr_number": None,
+                "issue_number": 99,
+                "source_ref": "https://github.com/acme/widgets/issues/99",
+                "source_fragment": "",
+                "source_kind": "issue",
+                "task_title": None,
+                "task_text": None,
+            }
+
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
+    monkeypatch.setattr(
+        web,
+        "_resolve_pr_number_from_issue",
+        lambda *, owner, repo_name, issue_number: 88,
+    )
+
+    payload = IssueSubmissionRequest(url="https://github.com/acme/widgets/issues/99")
+    target = web._parse_task_submission(payload)
+
+    assert target.repo == "acme/widgets"
+    assert target.issue_number == 99
+    assert target.pr_number == 88
+    assert target.resolved_pr_number == 88
+    assert target.source_kind == "issue"
+
+
 def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
     db_path = _setup_db(tmp_path)
 

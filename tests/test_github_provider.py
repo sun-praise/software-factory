@@ -345,23 +345,18 @@ def test_github_task_source_provider_parses_pull_url_without_api_call() -> None:
     }
 
 
-def test_github_task_source_provider_parses_issue_url_with_pr_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_github_task_source_provider_parses_issue_url_without_resolution_side_effects() -> (
+    None
+):
     provider = github_provider.GitHubTaskSourceProvider()
-    monkeypatch.setattr(
-        provider,
-        "resolve_pull_request_number_from_issue",
-        lambda *, repo, issue_number: 88,
-    )
 
     parsed = provider.parse_task_submission(
         submission={"url": "https://github.com/acme/widgets/issues/99"}
     )
 
     assert parsed["repo"] == "acme/widgets"
-    assert parsed["pr_number"] == 88
-    assert parsed["resolved_pr_number"] == 88
+    assert parsed["pr_number"] == 99
+    assert parsed["resolved_pr_number"] is None
     assert parsed["issue_number"] == 99
     assert parsed["source_kind"] == "issue"
 

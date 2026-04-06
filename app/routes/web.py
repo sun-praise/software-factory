@@ -6,8 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Mapping
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
@@ -341,107 +340,92 @@ def _load_run_detail(run_id_value: int) -> dict[str, str]:
     }
 
 
-def _parse_issue_url(url: str) -> ParsedTaskTarget:
-    normalized_url = url.strip()
-    parsed = urlparse(normalized_url)
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "github.com":
-        raise ValueError("Only https GitHub links on github.com are supported.")
+def _parse_task_submission(payload: IssueSubmissionRequest) -> ParsedTaskTarget:
+    provider = get_task_source_provider()
+    parsed_submission = provider.parse_task_submission(
+        submission=payload.model_dump(mode="python")
+    )
+    if not isinstance(parsed_submission, Mapping):
+        raise ValueError("Unexpected response from task-source provider.")
 
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if len(path_parts) < 4:
-        raise ValueError(
-            "Expected a GitHub URL in the form https://github.com/<owner>/<repo>/pull/<number> "
-            "or https://github.com/<owner>/<repo>/issues/<number>."
-        )
+    parsed = dict(parsed_submission)
+    repo = _string_or_empty(parsed.get("repo"))
+    owner = _string_or_empty(parsed.get("owner"))
+    repo_name = _string_or_empty(parsed.get("repo_name"))
 
-    owner, repo_name, section, number_part = path_parts[:4]
-    repo = f"{owner}/{repo_name}"
-    fragment = parsed.fragment.strip()
-    if section in {"pull", "pulls"}:
-        try:
-            pr_number = int(number_part)
-        except ValueError as exc:
-            raise ValueError("PR number in URL must be a positive integer.") from exc
+    if not repo and owner and repo_name:
+        repo = f"{owner}/{repo_name}"
+    if not repo:
+        raise ValueError("Repository must be in the form <owner>/<repo>.")
 
-        if pr_number <= 0:
-            raise ValueError("PR number in URL must be a positive integer.")
+    if not owner or not repo_name:
+        repo_parts = [part for part in repo.split("/") if part]
+        if len(repo_parts) != 2:
+            raise ValueError("Repository must be in the form <owner>/<repo>.")
+        owner, repo_name = repo_parts
+        repo = f"{owner}/{repo_name}"
 
-        return ParsedTaskTarget(
-            repo=repo,
+    source_kind = _string_or_empty(parsed.get("source_kind")).lower()
+    if not source_kind:
+        raise ValueError("Task source kind is required.")
+
+    issue_number = coerce_positive_int(parsed.get("issue_number"))
+    resolved_pr_number = coerce_positive_int(parsed.get("resolved_pr_number"))
+    pr_number = coerce_positive_int(parsed.get("pr_number"))
+    source_ref = _string_or_empty(parsed.get("source_ref"))
+    source_fragment = _string_or_empty(parsed.get("source_fragment"))
+    task_title = _string_or_empty(parsed.get("task_title")) or None
+    task_text = _string_or_empty(parsed.get("task_text")) or None
+
+    if (
+        source_kind == "issue"
+        and issue_number is not None
+        and resolved_pr_number is None
+    ):
+        resolved_pr_number = _resolve_pr_number_from_issue(
             owner=owner,
             repo_name=repo_name,
-            pr_number=pr_number,
-            resolved_pr_number=pr_number,
-            issue_number=None,
-            source_ref=normalized_url,
-            source_fragment=fragment,
-            source_kind="pull",
+            issue_number=issue_number,
         )
 
-    if section != "issues":
-        raise ValueError(
-            "Only pull request or issue links are supported. Example: "
-            "https://github.com/<owner>/<repo>/pull/<number> or "
-            "https://github.com/<owner>/<repo>/issues/<number>."
-        )
+    if source_kind == "pull":
+        if pr_number is None:
+            raise ValueError("PR number in URL must be a positive integer.")
+        if resolved_pr_number is None:
+            resolved_pr_number = pr_number
+    elif source_kind == "issue":
+        if issue_number is None:
+            issue_number = pr_number
+        if issue_number is None:
+            raise ValueError("Issue number in URL must be a positive integer.")
+        pr_number = resolved_pr_number or issue_number
+    elif source_kind == TEXT_SOURCE_KIND:
+        if not task_text:
+            raise ValueError("Task text is required for non-GitHub submissions.")
+        if pr_number is None:
+            pr_number = build_manual_text_task_number(
+                repo=repo,
+                text=task_text,
+                title=task_title,
+            )
+        resolved_pr_number = None
+        issue_number = None
+        source_ref = ""
+        source_fragment = ""
 
-    try:
-        issue_number = int(number_part)
-    except ValueError as exc:
-        raise ValueError("Issue number in URL must be a positive integer.") from exc
-    if issue_number <= 0:
-        raise ValueError("Issue number in URL must be a positive integer.")
+    if pr_number is None:
+        raise ValueError("Could not resolve a task identifier from submission.")
 
-    resolved_pr_number = _resolve_pr_number_from_issue(
-        owner=owner,
-        repo_name=repo_name,
-        issue_number=issue_number,
-    )
     return ParsedTaskTarget(
         repo=repo,
         owner=owner,
         repo_name=repo_name,
-        pr_number=resolved_pr_number or issue_number,
+        pr_number=pr_number,
         resolved_pr_number=resolved_pr_number,
         issue_number=issue_number,
-        source_ref=normalized_url,
-        source_fragment=fragment,
-        source_kind="issue",
-    )
-
-
-def _parse_repo(repo: str) -> tuple[str, str, str]:
-    normalized_repo = repo.strip()
-    repo_parts = [part for part in normalized_repo.split("/") if part]
-    if len(repo_parts) != 2:
-        raise ValueError("Repository must be in the form <owner>/<repo>.")
-    owner, repo_name = repo_parts
-    return normalized_repo, owner, repo_name
-
-
-def _parse_task_submission(payload: IssueSubmissionRequest) -> ParsedTaskTarget:
-    if payload.url:
-        return _parse_issue_url(payload.url)
-
-    repo, owner, repo_name = _parse_repo(payload.repo or "")
-    task_text = _string_or_empty(payload.text)
-    if not task_text:
-        raise ValueError("Task text is required for non-GitHub submissions.")
-    task_title = _string_or_empty(payload.title) or None
-    return ParsedTaskTarget(
-        repo=repo,
-        owner=owner,
-        repo_name=repo_name,
-        pr_number=build_manual_text_task_number(
-            repo=repo,
-            text=task_text,
-            title=task_title,
-        ),
-        resolved_pr_number=None,
-        issue_number=None,
-        source_ref="",
-        source_fragment="",
-        source_kind=TEXT_SOURCE_KIND,
+        source_ref=source_ref,
+        source_fragment=source_fragment,
+        source_kind=source_kind,
         task_title=task_title,
         task_text=task_text,
     )
@@ -1629,7 +1613,7 @@ async def api_submit_issues_batch(request: Request) -> dict[str, Any]:
             continue
 
         try:
-            target = _parse_issue_url(payload.url)
+            target = _parse_task_submission(payload)
         except ValueError as exc:
             results.append(
                 {

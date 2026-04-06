@@ -410,16 +410,12 @@ class GitHubTaskSourceProvider:
             number_part,
             error_message="Issue number in URL must be a positive integer.",
         )
-        resolved_pr_number = self.resolve_pull_request_number_from_issue(
-            repo=repo,
-            issue_number=issue_number,
-        )
         return {
             "repo": repo,
             "owner": owner,
             "repo_name": repo_name,
-            "pr_number": resolved_pr_number or issue_number,
-            "resolved_pr_number": resolved_pr_number,
+            "pr_number": issue_number,
+            "resolved_pr_number": None,
             "issue_number": issue_number,
             "source_ref": normalized_url,
             "source_fragment": fragment,
