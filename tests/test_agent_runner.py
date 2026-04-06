@@ -215,6 +215,59 @@ def test_run_once_success_writes_logs_and_marks_success(
     assert pr_row["autofix_count"] == 1
 
 
+def test_runner_ops_defaults_route_pr_operations_through_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    class _FakeForgeProvider:
+        name = "github"
+
+        def ensure_pull_request(self, **kwargs) -> dict[str, Any]:
+            calls["ensure"] = dict(kwargs)
+            return {
+                "success": True,
+                "pr_number": 55,
+                "pr_url": "https://code.example/acme/widgets/pull/55",
+                "error": None,
+                "existing": False,
+            }
+
+        def post_pull_request_comment(self, **kwargs) -> tuple[bool, str]:
+            calls["comment"] = dict(kwargs)
+            return True, "ok"
+
+        def get_pull_request_metadata(self, **kwargs) -> dict[str, Any]:
+            return {}
+
+        def collect_changed_file_paths(self, **kwargs) -> list[str]:
+            return []
+
+    monkeypatch.setattr(
+        agent_runner, "get_forge_provider", lambda: _FakeForgeProvider()
+    )
+
+    ops = RunnerOps()
+    pr_result = ops.ensure_pull_request(
+        repo_dir="/repo",
+        repo="acme/widgets",
+        head_branch="feature/m5",
+        title="Fix bug",
+        body="details",
+    )
+    posted, message = ops.post_pr_comment("/repo", "acme/widgets", 55, "done")
+
+    assert pr_result["success"] is True
+    assert pr_result["pr_number"] == 55
+    assert pr_result["pr_url"] == "https://code.example/acme/widgets/pull/55"
+    assert posted is True
+    assert message == "ok"
+    assert calls["ensure"]["repo"] == "acme/widgets"
+    assert calls["ensure"]["head_branch"] == "feature/m5"
+    assert calls["ensure"]["base_branch"] is None
+    assert calls["comment"]["pr_number"] == 55
+
+
 def test_run_once_failure_marks_failed_and_records_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1060,6 +1113,64 @@ def test_prepare_run_workspace_skips_pr_refetch_when_branch_and_head_known(
     assert resolved_branch == "feature/test"
     assert resolved_head_sha == "abc123"
     assert checkout_calls == [("feature/test", "abc123")]
+
+
+def test_prepare_run_workspace_uses_git_remote_provider_clone_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cloned_workspace = tmp_path / "run-workspace"
+    cloned_workspace.mkdir()
+    remote_urls: list[str] = []
+
+    class _FakeRemoteProvider:
+        def build_clone_url(self, repo: str) -> str:
+            return f"https://code.example/{repo}.git"
+
+    monkeypatch.setattr(
+        agent_runner,
+        "get_git_remote_provider",
+        lambda: _FakeRemoteProvider(),
+    )
+
+    def fake_ensure_repo_cache(**kwargs) -> None:
+        remote_urls.append(str(kwargs["remote_url"]))
+
+    def fake_create_run_workspace_clone(**kwargs) -> str:
+        remote_urls.append(str(kwargs["remote_url"]))
+        return str(cloned_workspace)
+
+    monkeypatch.setattr(agent_runner, "_ensure_repo_cache", fake_ensure_repo_cache)
+    monkeypatch.setattr(
+        agent_runner,
+        "_create_run_workspace_clone",
+        fake_create_run_workspace_clone,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_checkout_run_workspace_target",
+        lambda **kwargs: None,
+    )
+
+    workspace_dir, agent_workspace, resolved_branch, resolved_head_sha = (
+        agent_runner._prepare_run_workspace(
+            runtime_root=str(tmp_path),
+            repo="acme/widgets",
+            pr_number=0,
+            run_id=123,
+            branch=None,
+            head_sha=None,
+        )
+    )
+
+    assert workspace_dir == str(cloned_workspace)
+    assert agent_workspace == str(cloned_workspace)
+    assert resolved_branch is None
+    assert resolved_head_sha is None
+    assert remote_urls == [
+        "https://code.example/acme/widgets.git",
+        "https://code.example/acme/widgets.git",
+    ]
 
 
 def test_prepare_run_workspace_creates_branch_for_plain_issue_runs(

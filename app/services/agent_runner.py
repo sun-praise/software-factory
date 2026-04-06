@@ -19,6 +19,7 @@ import time
 from typing import Any, Callable, Mapping, cast
 
 from app.config import get_settings
+from app.providers import get_forge_provider, get_git_remote_provider
 from app.services.agent_prompt import (
     CHANGED_FILE_PATHS_LIMIT,
     build_autofix_prompt,
@@ -30,8 +31,6 @@ from app.services.git_ops import (
     checkout_branch,
     commit_and_push,
     ensure_head_sha,
-    ensure_pull_request,
-    post_pr_comment,
     rebase_onto_base,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
@@ -166,13 +165,61 @@ def _noop(*_args: Any, **_kwargs: Any) -> Any:
     return None
 
 
+def _ensure_pull_request_via_provider(
+    *,
+    repo_dir: str,
+    repo: str,
+    head_branch: str,
+    title: str,
+    body: str,
+    base_branch: str | None = None,
+) -> dict[str, Any]:
+    provider = get_forge_provider()
+    result = provider.ensure_pull_request(
+        repo_dir=repo_dir,
+        repo=repo,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        title=title,
+        body=body,
+    )
+    if isinstance(result, Mapping):
+        return dict(result)
+    return {
+        "success": bool(getattr(result, "success", False)),
+        "pr_number": _coerce_positive_int(getattr(result, "pr_number", None)),
+        "pr_url": _safe_text(getattr(result, "pr_url", None)),
+        "error": _safe_text(getattr(result, "error", None)),
+        "existing": bool(getattr(result, "existing", False)),
+    }
+
+
+def _post_pr_comment_via_provider(
+    repo_dir: str,
+    repo: str,
+    pr_number: int,
+    body: str,
+) -> tuple[bool, str]:
+    provider = get_forge_provider()
+    return provider.post_pull_request_comment(
+        repo_dir=repo_dir,
+        repo=repo,
+        pr_number=pr_number,
+        body=body,
+    )
+
+
 @dataclass(frozen=True)
 class RunnerOps:
     checkout_branch: Callable[[str, str], tuple[bool, str]] = checkout_branch
     ensure_head_sha: Callable[[str, str], bool] = ensure_head_sha
     commit_and_push: Callable[..., dict[str, Any]] = commit_and_push
-    ensure_pull_request: Callable[..., dict[str, Any]] = ensure_pull_request
-    post_pr_comment: Callable[[str, str, int, str], tuple[bool, str]] = post_pr_comment
+    ensure_pull_request: Callable[..., dict[str, Any]] = (
+        _ensure_pull_request_via_provider
+    )
+    post_pr_comment: Callable[[str, str, int, str], tuple[bool, str]] = (
+        _post_pr_comment_via_provider
+    )
     generate_fix: Callable[..., Any] = _noop
     apply_fix_plan: Callable[..., Any] = _noop
     build_autofix_prompt: Callable[..., str] = build_autofix_prompt
@@ -2620,7 +2667,8 @@ def _prepare_run_workspace(
     cache_root.mkdir(parents=True, exist_ok=True)
     run_workspace_root.mkdir(parents=True, exist_ok=True)
 
-    remote_url = f"https://github.com/{repo}.git"
+    remote_provider = get_git_remote_provider()
+    remote_url = remote_provider.build_clone_url(repo)
     cache_repo_dir = cache_root / f"{repo.replace('/', '__')}.git"
     _ensure_repo_cache(
         cache_root=cache_root, cache_repo_dir=cache_repo_dir, remote_url=remote_url

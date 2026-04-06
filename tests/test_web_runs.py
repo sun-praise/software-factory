@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.db import init_db
 from app.main import app
+from app.routes import web as web_routes
 
 
 def _setup_db(tmp_path: Path) -> Path:
@@ -96,3 +97,35 @@ def test_manual_issue_run_prefers_opened_pull_request_link(tmp_path: Path) -> No
     assert "https://github.com/acme/widgets/pull/99" in index_response.text
     assert "#99" in detail_response.text
     assert "#99" in index_response.text
+
+
+def test_run_detail_uses_git_remote_provider_for_pull_request_link(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FakeRemoteProvider:
+        def build_pull_request_url(self, *, repo: str, pr_number: int) -> str:
+            return f"https://code.example/{repo}/merge/{pr_number}"
+
+    monkeypatch.setattr(
+        web_routes,
+        "get_git_remote_provider",
+        lambda: _FakeRemoteProvider(),
+    )
+
+    db_path = _setup_db(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO autofix_runs (repo, pr_number, trigger_source, status, normalized_review_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("acme/widgets", 42, "github_webhook", "success", "{}"),
+        )
+        conn.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/runs/1")
+
+    assert response.status_code == 200
+    assert "https://code.example/acme/widgets/merge/42" in response.text
