@@ -356,78 +356,13 @@ def _normalize_provider_name(value: str | None) -> str | None:
     return normalized or None
 
 
-class _GitHubTaskSourceProviderStub:
-    name = DEFAULT_PROVIDER_NAME
-
-    def parse_task_submission(
-        self, *, submission: Mapping[str, Any]
-    ) -> Mapping[str, Any]:
-        raise NotImplementedError(
-            "GitHub task-source provider is not wired yet; phase 3 will attach web route parsing"
-        )
-
-    def fetch_pull_request_feedback_review(
-        self,
-        *,
-        repo: str,
-        pr_number: int,
-    ) -> Mapping[str, Any]:
-        raise NotImplementedError(
-            "GitHub task-source provider is not wired yet; phase 3 will attach API fetch logic"
-        )
-
-    def resolve_pull_request_number_from_issue(
-        self,
-        *,
-        repo: str,
-        issue_number: int,
-    ) -> int | None:
-        raise NotImplementedError(
-            "GitHub task-source provider is not wired yet; phase 3 will attach issue->PR resolution"
-        )
-
-
-class _GitHubWebhookProviderStub:
-    name = DEFAULT_PROVIDER_NAME
-
-    @property
-    def signature_header(self) -> str:
-        return "X-Hub-Signature-256"
-
-    def verify_signature(
-        self,
-        *,
-        body: bytes,
-        secret: str,
-        signature_header: str | None,
-    ) -> Any:
-        raise NotImplementedError(
-            "GitHub webhook provider is not wired yet; phase 4 will attach signature verification"
-        )
-
-    def extract_review_event(
-        self,
-        *,
-        event_type: str,
-        payload: Mapping[str, Any],
-    ) -> Any:
-        raise NotImplementedError(
-            "GitHub webhook provider is not wired yet; phase 4 will attach event extraction"
-        )
-
-    def extract_event_body(
-        self,
-        *,
-        event_type: str,
-        payload: Mapping[str, Any],
-    ) -> str | None:
-        raise NotImplementedError(
-            "GitHub webhook provider is not wired yet; phase 4 will attach event-body extraction"
-        )
-
-
 def _register_builtin_defaults_locked() -> None:
-    from app.providers.github import GitHubForgeProvider, GitHubGitRemoteProvider
+    from app.providers.github import (
+        GitHubForgeProvider,
+        GitHubGitRemoteProvider,
+        GitHubTaskSourceProvider,
+        GitHubWebhookProvider,
+    )
 
     _register_provider_locked(
         store=_forge_providers,
@@ -440,14 +375,14 @@ def _register_builtin_defaults_locked() -> None:
         store=_task_source_providers,
         category=TASK_SOURCE_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
-        provider=_GitHubTaskSourceProviderStub(),
+        provider=GitHubTaskSourceProvider(),
         replace=False,
     )
     _register_provider_locked(
         store=_webhook_providers,
         category=WEBHOOK_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
-        provider=_GitHubWebhookProviderStub(),
+        provider=GitHubWebhookProvider(),
         replace=False,
     )
     _register_provider_locked(

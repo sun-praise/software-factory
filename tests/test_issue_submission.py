@@ -423,6 +423,90 @@ def test_resolve_pr_number_from_issue_returns_none_for_invalid_pull_request_url(
     )
 
 
+def test_resolve_pr_number_from_issue_uses_task_source_provider(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class _FakeTaskSourceProvider:
+        def resolve_pull_request_number_from_issue(
+            self, *, repo: str, issue_number: int
+        ):
+            calls["repo"] = repo
+            calls["issue_number"] = issue_number
+            return 88
+
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
+
+    result = web._resolve_pr_number_from_issue(
+        owner="acme",
+        repo_name="widgets",
+        issue_number=99,
+    )
+
+    assert result == 88
+    assert calls == {"repo": "acme/widgets", "issue_number": 99}
+
+
+def test_fetch_pull_request_feedback_review_uses_task_source_provider(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class _FakeTaskSourceProvider:
+        def fetch_pull_request_feedback_review(self, *, repo: str, pr_number: int):
+            calls["repo"] = repo
+            calls["pr_number"] = pr_number
+            return {
+                "repo": repo,
+                "pr_number": pr_number,
+                "head_sha": None,
+                "must_fix": [{"text": "Fix this", "severity": "P1"}],
+                "should_fix": [],
+                "ignore": [],
+                "summary": "1 blocking issues, 0 suggestions, 0 ignored",
+                "project_type": "python",
+                "manual_issue_source_url": "https://example.invalid/pr/42",
+            }
+
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
+
+    target = web.ParsedTaskTarget(
+        repo="acme/widgets",
+        owner="acme",
+        repo_name="widgets",
+        pr_number=42,
+        resolved_pr_number=42,
+        issue_number=None,
+        source_ref="https://github.com/acme/widgets/pull/42",
+        source_fragment="",
+        source_kind="pull",
+    )
+
+    normalized = web._fetch_pull_request_feedback_review(
+        target,
+        project_root="backend",
+    )
+
+    assert calls == {"repo": "acme/widgets", "pr_number": 42}
+    assert normalized["must_fix"][0]["text"] == "Fix this"
+    assert normalized["project_root"] == "backend"
+    assert normalized["source_kind"] == "pull"
+    assert normalized["resolved_pr_number"] == 42
+    assert (
+        normalized["manual_issue_source_url"]
+        == "https://github.com/acme/widgets/pull/42"
+    )
+
+
 def test_submit_issue_api_dry_run_validates_without_creating_run(
     tmp_path, monkeypatch
 ) -> None:

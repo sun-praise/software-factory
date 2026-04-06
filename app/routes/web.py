@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.db import connect_db
-from app.providers import get_git_remote_provider
+from app.providers import get_git_remote_provider, get_task_source_provider
 from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
     AgentFeatureFlags,
@@ -41,7 +41,6 @@ from app.services.policy import (
     get_remaining_autofix_quota,
     reset_autofix_count_on_sha_change,
 )
-from app.services.normalizer import normalize_review_events
 from app.services.queue import (
     append_run_operator_hint,
     enqueue_autofix_run,
@@ -705,45 +704,14 @@ def _fetch_pull_request_feedback_review(
     *,
     project_root: str | None = None,
 ) -> dict[str, Any]:
-    review_comments = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/comments?per_page=100",
-        not_found_message="Pull request review comments not found or unavailable.",
-    )
-    issue_comments = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/issues/{target.pr_number}/comments?per_page=100",
-        not_found_message="Pull request issue comments not found or unavailable.",
-    )
-    reviews = _github_get_list(
-        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews?per_page=100",
-        not_found_message="Pull request reviews not found or unavailable.",
-    )
-
-    events: list[dict[str, Any]] = []
-    events.extend(
-        {"event_type": "pull_request_review_comment", "payload": {"comment": comment}}
-        for comment in review_comments
-    )
-    events.extend(
-        {
-            "event_type": "issue_comment",
-            "payload": {
-                "issue": {"pull_request": {"url": target.source_ref}},
-                "comment": comment,
-            },
-        }
-        for comment in issue_comments
-    )
-    events.extend(
-        {"event_type": "pull_request_review", "payload": {"review": review}}
-        for review in reviews
-    )
-
-    normalized = normalize_review_events(
+    provider = get_task_source_provider()
+    raw_normalized = provider.fetch_pull_request_feedback_review(
         repo=target.repo,
         pr_number=target.pr_number,
-        events=events,
-        head_sha=None,
     )
+    if not isinstance(raw_normalized, dict):
+        raise ValueError("Unexpected response from task-source provider.")
+    normalized = dict(raw_normalized)
     normalized["project_type"] = "python"
     normalized["project_root"] = project_root
     normalized["source_kind"] = target.source_kind
@@ -759,24 +727,11 @@ def _resolve_pr_number_from_issue(
     repo_name: str,
     issue_number: int,
 ) -> int | None:
-    payload = _github_get_json(
-        f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}",
-        not_found_message="Issue not found or unavailable.",
+    provider = get_task_source_provider()
+    return provider.resolve_pull_request_number_from_issue(
+        repo=f"{owner}/{repo_name}",
+        issue_number=issue_number,
     )
-
-    pull_request_info = payload.get("pull_request")
-    if not isinstance(pull_request_info, dict):
-        return None
-
-    pr_url = pull_request_info.get("url", "")
-    if not isinstance(pr_url, str):
-        return None
-
-    pull_url_parts = [part for part in pr_url.split("/") if part]
-    try:
-        return int(pull_url_parts[-1])
-    except (TypeError, ValueError):
-        return None
 
 
 def _build_issue_normalized_review(
