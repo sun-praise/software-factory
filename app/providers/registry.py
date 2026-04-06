@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 from typing import Any, Mapping, cast
 
 from app.providers.types import (
@@ -50,6 +51,8 @@ _forge_providers: dict[str, ForgeProvider] = {}
 _task_source_providers: dict[str, TaskSourceProvider] = {}
 _webhook_providers: dict[str, WebhookProvider] = {}
 _git_remote_providers: dict[str, GitRemoteProvider] = {}
+_REGISTRY_LOCK = threading.RLock()
+_registry_initialized = False
 
 
 def resolve_provider_name(
@@ -60,8 +63,21 @@ def resolve_provider_name(
         return candidate
     fallback = _normalize_provider_name(default_name)
     if fallback is None:
-        raise ProviderRegistrationError("default provider name cannot be empty")
+        raise ProviderLookupError("default provider name cannot be empty")
     return fallback
+
+
+def initialize_provider_registry(*, force: bool = False) -> RegistrySnapshot:
+    """Initialize defaults once, or force-reset to defaults."""
+    global _registry_initialized
+    with _REGISTRY_LOCK:
+        if force:
+            _clear_registry_locked()
+            _register_builtin_defaults_locked()
+            _registry_initialized = True
+        else:
+            _ensure_initialized_locked()
+        return _snapshot_registry_locked()
 
 
 def register_forge_provider(
@@ -70,13 +86,24 @@ def register_forge_provider(
     *,
     replace: bool = False,
 ) -> None:
-    _register_provider(
-        store=_forge_providers,
+    normalized_name = _normalize_provider_name(name)
+    if normalized_name is None:
+        raise ProviderRegistrationError("provider name cannot be empty")
+    _validate_provider(
         category=FORGE_PROVIDER_CATEGORY,
-        name=name,
+        name=normalized_name,
         provider=provider,
-        replace=replace,
+        expected_protocol=ForgeProvider,
     )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        _register_provider_locked(
+            store=_forge_providers,
+            category=FORGE_PROVIDER_CATEGORY,
+            name=normalized_name,
+            provider=provider,
+            replace=replace,
+        )
 
 
 def register_task_source_provider(
@@ -85,13 +112,24 @@ def register_task_source_provider(
     *,
     replace: bool = False,
 ) -> None:
-    _register_provider(
-        store=_task_source_providers,
+    normalized_name = _normalize_provider_name(name)
+    if normalized_name is None:
+        raise ProviderRegistrationError("provider name cannot be empty")
+    _validate_provider(
         category=TASK_SOURCE_PROVIDER_CATEGORY,
-        name=name,
+        name=normalized_name,
         provider=provider,
-        replace=replace,
+        expected_protocol=TaskSourceProvider,
     )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        _register_provider_locked(
+            store=_task_source_providers,
+            category=TASK_SOURCE_PROVIDER_CATEGORY,
+            name=normalized_name,
+            provider=provider,
+            replace=replace,
+        )
 
 
 def register_webhook_provider(
@@ -100,13 +138,24 @@ def register_webhook_provider(
     *,
     replace: bool = False,
 ) -> None:
-    _register_provider(
-        store=_webhook_providers,
+    normalized_name = _normalize_provider_name(name)
+    if normalized_name is None:
+        raise ProviderRegistrationError("provider name cannot be empty")
+    _validate_provider(
         category=WEBHOOK_PROVIDER_CATEGORY,
-        name=name,
+        name=normalized_name,
         provider=provider,
-        replace=replace,
+        expected_protocol=WebhookProvider,
     )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        _register_provider_locked(
+            store=_webhook_providers,
+            category=WEBHOOK_PROVIDER_CATEGORY,
+            name=normalized_name,
+            provider=provider,
+            replace=replace,
+        )
 
 
 def register_git_remote_provider(
@@ -115,61 +164,80 @@ def register_git_remote_provider(
     *,
     replace: bool = False,
 ) -> None:
-    _register_provider(
-        store=_git_remote_providers,
+    normalized_name = _normalize_provider_name(name)
+    if normalized_name is None:
+        raise ProviderRegistrationError("provider name cannot be empty")
+    _validate_provider(
         category=GIT_REMOTE_PROVIDER_CATEGORY,
-        name=name,
+        name=normalized_name,
         provider=provider,
-        replace=replace,
+        expected_protocol=GitRemoteProvider,
     )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        _register_provider_locked(
+            store=_git_remote_providers,
+            category=GIT_REMOTE_PROVIDER_CATEGORY,
+            name=normalized_name,
+            provider=provider,
+            replace=replace,
+        )
 
 
 def get_forge_provider(name: str | None = None) -> ForgeProvider:
     resolved_name = resolve_provider_name(name)
-    return cast(
-        ForgeProvider,
-        _get_provider(
-            store=_forge_providers,
-            category=FORGE_PROVIDER_CATEGORY,
-            name=resolved_name,
-        ),
-    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return cast(
+            ForgeProvider,
+            _get_provider_locked(
+                store=_forge_providers,
+                category=FORGE_PROVIDER_CATEGORY,
+                name=resolved_name,
+            ),
+        )
 
 
 def get_task_source_provider(name: str | None = None) -> TaskSourceProvider:
     resolved_name = resolve_provider_name(name)
-    return cast(
-        TaskSourceProvider,
-        _get_provider(
-            store=_task_source_providers,
-            category=TASK_SOURCE_PROVIDER_CATEGORY,
-            name=resolved_name,
-        ),
-    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return cast(
+            TaskSourceProvider,
+            _get_provider_locked(
+                store=_task_source_providers,
+                category=TASK_SOURCE_PROVIDER_CATEGORY,
+                name=resolved_name,
+            ),
+        )
 
 
 def get_webhook_provider(name: str | None = None) -> WebhookProvider:
     resolved_name = resolve_provider_name(name)
-    return cast(
-        WebhookProvider,
-        _get_provider(
-            store=_webhook_providers,
-            category=WEBHOOK_PROVIDER_CATEGORY,
-            name=resolved_name,
-        ),
-    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return cast(
+            WebhookProvider,
+            _get_provider_locked(
+                store=_webhook_providers,
+                category=WEBHOOK_PROVIDER_CATEGORY,
+                name=resolved_name,
+            ),
+        )
 
 
 def get_git_remote_provider(name: str | None = None) -> GitRemoteProvider:
     resolved_name = resolve_provider_name(name)
-    return cast(
-        GitRemoteProvider,
-        _get_provider(
-            store=_git_remote_providers,
-            category=GIT_REMOTE_PROVIDER_CATEGORY,
-            name=resolved_name,
-        ),
-    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return cast(
+            GitRemoteProvider,
+            _get_provider_locked(
+                store=_git_remote_providers,
+                category=GIT_REMOTE_PROVIDER_CATEGORY,
+                name=resolved_name,
+            ),
+        )
 
 
 def list_registered_provider_names(category: str) -> tuple[str, ...]:
@@ -179,34 +247,52 @@ def list_registered_provider_names(category: str) -> tuple[str, ...]:
             f"unknown provider category '{category}'. "
             f"expected one of: {', '.join(sorted(_PROVIDER_CATEGORIES))}"
         )
-    if normalized_category == FORGE_PROVIDER_CATEGORY:
-        return tuple(sorted(_forge_providers))
-    if normalized_category == TASK_SOURCE_PROVIDER_CATEGORY:
-        return tuple(sorted(_task_source_providers))
-    if normalized_category == WEBHOOK_PROVIDER_CATEGORY:
-        return tuple(sorted(_webhook_providers))
-    return tuple(sorted(_git_remote_providers))
+
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        if normalized_category == FORGE_PROVIDER_CATEGORY:
+            return tuple(sorted(_forge_providers))
+        if normalized_category == TASK_SOURCE_PROVIDER_CATEGORY:
+            return tuple(sorted(_task_source_providers))
+        if normalized_category == WEBHOOK_PROVIDER_CATEGORY:
+            return tuple(sorted(_webhook_providers))
+        return tuple(sorted(_git_remote_providers))
 
 
 def snapshot_registry() -> RegistrySnapshot:
-    return RegistrySnapshot(
-        forge=tuple(sorted(_forge_providers)),
-        task_source=tuple(sorted(_task_source_providers)),
-        webhook=tuple(sorted(_webhook_providers)),
-        git_remote=tuple(sorted(_git_remote_providers)),
-    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return _snapshot_registry_locked()
 
 
 def reset_provider_registry(*, include_defaults: bool = True) -> None:
-    _forge_providers.clear()
-    _task_source_providers.clear()
-    _webhook_providers.clear()
-    _git_remote_providers.clear()
-    if include_defaults:
-        _register_builtin_defaults()
+    global _registry_initialized
+    with _REGISTRY_LOCK:
+        _clear_registry_locked()
+        if include_defaults:
+            _register_builtin_defaults_locked()
+        # Mark initialized even when defaults are excluded so callers can
+        # intentionally keep the registry empty without lazy re-initialization.
+        _registry_initialized = True
 
 
-def _register_provider(
+def _validate_provider(
+    *,
+    category: str,
+    name: str,
+    provider: Any,
+    expected_protocol: type[Any],
+) -> None:
+    if provider is None:
+        raise ProviderRegistrationError(f"{category} provider '{name}' cannot be None")
+    if not isinstance(provider, expected_protocol):
+        protocol_name = getattr(expected_protocol, "__name__", str(expected_protocol))
+        raise ProviderRegistrationError(
+            f"{category} provider '{name}' does not implement required protocol {protocol_name}"
+        )
+
+
+def _register_provider_locked(
     *,
     store: dict[str, Any],
     category: str,
@@ -214,21 +300,14 @@ def _register_provider(
     provider: Any,
     replace: bool,
 ) -> None:
-    normalized_name = _normalize_provider_name(name)
-    if normalized_name is None:
-        raise ProviderRegistrationError("provider name cannot be empty")
-    if provider is None:
+    if not replace and name in store:
         raise ProviderRegistrationError(
-            f"{category} provider '{normalized_name}' cannot be None"
+            f"{category} provider '{name}' is already registered"
         )
-    if not replace and normalized_name in store:
-        raise ProviderRegistrationError(
-            f"{category} provider '{normalized_name}' is already registered"
-        )
-    store[normalized_name] = provider
+    store[name] = provider
 
 
-def _get_provider(*, store: Mapping[str, Any], category: str, name: str) -> Any:
+def _get_provider_locked(*, store: Mapping[str, Any], category: str, name: str) -> Any:
     normalized_name = _normalize_provider_name(name)
     if normalized_name is None:
         raise ProviderLookupError(f"{category} provider name cannot be empty")
@@ -244,6 +323,30 @@ def _get_provider(*, store: Mapping[str, Any], category: str, name: str) -> Any:
             f"{category} provider '{normalized_name}' is not registered"
         )
     return provider
+
+
+def _snapshot_registry_locked() -> RegistrySnapshot:
+    return RegistrySnapshot(
+        forge=tuple(sorted(_forge_providers)),
+        task_source=tuple(sorted(_task_source_providers)),
+        webhook=tuple(sorted(_webhook_providers)),
+        git_remote=tuple(sorted(_git_remote_providers)),
+    )
+
+
+def _ensure_initialized_locked() -> None:
+    global _registry_initialized
+    if _registry_initialized:
+        return
+    _register_builtin_defaults_locked()
+    _registry_initialized = True
+
+
+def _clear_registry_locked() -> None:
+    _forge_providers.clear()
+    _task_source_providers.clear()
+    _webhook_providers.clear()
+    _git_remote_providers.clear()
 
 
 def _normalize_provider_name(value: str | None) -> str | None:
@@ -389,13 +492,32 @@ class _GitHubGitRemoteProvider:
         return "https://api.github.com"
 
 
-def _register_builtin_defaults() -> None:
-    register_forge_provider(DEFAULT_PROVIDER_NAME, _GitHubForgeProviderStub())
-    register_task_source_provider(
-        DEFAULT_PROVIDER_NAME, _GitHubTaskSourceProviderStub()
+def _register_builtin_defaults_locked() -> None:
+    _register_provider_locked(
+        store=_forge_providers,
+        category=FORGE_PROVIDER_CATEGORY,
+        name=DEFAULT_PROVIDER_NAME,
+        provider=_GitHubForgeProviderStub(),
+        replace=False,
     )
-    register_webhook_provider(DEFAULT_PROVIDER_NAME, _GitHubWebhookProviderStub())
-    register_git_remote_provider(DEFAULT_PROVIDER_NAME, _GitHubGitRemoteProvider())
-
-
-reset_provider_registry(include_defaults=True)
+    _register_provider_locked(
+        store=_task_source_providers,
+        category=TASK_SOURCE_PROVIDER_CATEGORY,
+        name=DEFAULT_PROVIDER_NAME,
+        provider=_GitHubTaskSourceProviderStub(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_webhook_providers,
+        category=WEBHOOK_PROVIDER_CATEGORY,
+        name=DEFAULT_PROVIDER_NAME,
+        provider=_GitHubWebhookProviderStub(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_git_remote_providers,
+        category=GIT_REMOTE_PROVIDER_CATEGORY,
+        name=DEFAULT_PROVIDER_NAME,
+        provider=_GitHubGitRemoteProvider(),
+        replace=False,
+    )
