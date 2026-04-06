@@ -37,7 +37,7 @@ class ForgeProvider(Protocol):
         repo_dir: str,
         repo: str,
         head_branch: str,
-        base_branch: str,
+        base_branch: str | None = None,
         title: str,
         body: str,
     ) -> PullRequestUpsertResult | Mapping[str, Any]: ...

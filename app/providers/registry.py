@@ -356,58 +356,6 @@ def _normalize_provider_name(value: str | None) -> str | None:
     return normalized or None
 
 
-class _GitHubForgeProviderStub:
-    name = DEFAULT_PROVIDER_NAME
-
-    def ensure_pull_request(
-        self,
-        *,
-        repo_dir: str,
-        repo: str,
-        head_branch: str,
-        base_branch: str,
-        title: str,
-        body: str,
-    ) -> Mapping[str, Any]:
-        raise NotImplementedError(
-            "GitHub forge provider is not wired yet; phase 2 will attach git_ops-backed implementation"
-        )
-
-    def post_pull_request_comment(
-        self,
-        *,
-        repo_dir: str,
-        repo: str,
-        pr_number: int,
-        body: str,
-    ) -> tuple[bool, str]:
-        raise NotImplementedError(
-            "GitHub forge provider is not wired yet; phase 2 will attach git_ops-backed implementation"
-        )
-
-    def get_pull_request_metadata(
-        self,
-        *,
-        repo_dir: str,
-        repo: str,
-        pr_number: int,
-    ) -> Mapping[str, Any] | None:
-        raise NotImplementedError(
-            "GitHub forge provider is not wired yet; phase 2 will attach gh-backed metadata implementation"
-        )
-
-    def collect_changed_file_paths(
-        self,
-        *,
-        repo_dir: str,
-        repo: str,
-        pr_number: int,
-    ) -> list[str]:
-        raise NotImplementedError(
-            "GitHub forge provider is not wired yet; phase 2 will attach gh-backed diff implementation"
-        )
-
-
 class _GitHubTaskSourceProviderStub:
     name = DEFAULT_PROVIDER_NAME
 
@@ -478,26 +426,14 @@ class _GitHubWebhookProviderStub:
         )
 
 
-class _GitHubGitRemoteProvider:
-    name = DEFAULT_PROVIDER_NAME
-
-    def build_clone_url(self, repo: str) -> str:
-        return f"https://github.com/{repo}.git"
-
-    def build_pull_request_url(self, *, repo: str, pr_number: int) -> str:
-        return f"https://github.com/{repo}/pull/{pr_number}"
-
-    @property
-    def api_base_url(self) -> str:
-        return "https://api.github.com"
-
-
 def _register_builtin_defaults_locked() -> None:
+    from app.providers.github import GitHubForgeProvider, GitHubGitRemoteProvider
+
     _register_provider_locked(
         store=_forge_providers,
         category=FORGE_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
-        provider=_GitHubForgeProviderStub(),
+        provider=GitHubForgeProvider(),
         replace=False,
     )
     _register_provider_locked(
@@ -518,6 +454,6 @@ def _register_builtin_defaults_locked() -> None:
         store=_git_remote_providers,
         category=GIT_REMOTE_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
-        provider=_GitHubGitRemoteProvider(),
+        provider=GitHubGitRemoteProvider(),
         replace=False,
     )

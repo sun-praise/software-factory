@@ -44,7 +44,7 @@ class _CustomForgeProvider:
         repo_dir: str,
         repo: str,
         head_branch: str,
-        base_branch: str,
+        base_branch: str | None = None,
         title: str,
         body: str,
     ) -> Mapping[str, Any]:

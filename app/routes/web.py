@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from app.db import connect_db
+from app.providers import get_git_remote_provider
 from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
     AgentFeatureFlags,
@@ -259,7 +260,8 @@ def _resolve_run_pr_url(row: sqlite3.Row) -> str:
         return ""
     if _string_or_empty(row["trigger_source"]) in {"manual_issue", "manual_task"}:
         return ""
-    return f"https://github.com/{repo}/pull/{pr_number}"
+    provider = get_git_remote_provider()
+    return provider.build_pull_request_url(repo=repo, pr_number=pr_number)
 
 
 def _read_log_preview(logs_path: str | None, max_chars: int = 1200) -> str:
