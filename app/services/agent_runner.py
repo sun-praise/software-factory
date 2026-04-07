@@ -464,7 +464,11 @@ def run_once(
 
     agent_workspace = runtime_root
     agent_worktree: str | None = None
-    if OPENHANDS_AGENT_MODE in agent_modes or CLAUDE_AGENT_MODE in agent_modes:
+    if (
+        RALPH_AGENT_MODE in agent_modes
+        or OPENHANDS_AGENT_MODE in agent_modes
+        or CLAUDE_AGENT_MODE in agent_modes
+    ):
         try:
             agent_workspace, agent_worktree, branch, head_sha = _prepare_run_workspace(
                 runtime_root=runtime_root,

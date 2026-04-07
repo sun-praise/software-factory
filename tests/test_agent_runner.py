@@ -520,6 +520,67 @@ def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
     assert "unable to resolve PR head branch" in str(row["error_summary"])
 
 
+def test_run_once_calls_prepare_workspace_when_ralph_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from app.services.feature_flags import (
+        AgentFeatureFlags,
+        _get_code_default_agent_feature_flags,
+        save_agent_feature_flags,
+    )
+
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    defaults = _get_code_default_agent_feature_flags()
+    ralph_only_flags = replace(defaults, agent_sdks=("ralph",))
+    save_agent_feature_flags(conn, flags=ralph_only_flags)
+
+    prepare_called = False
+
+    def track_prepare_run_workspace(**kwargs):
+        nonlocal prepare_called
+        prepare_called = True
+        raise ValueError("workspace init error")
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        track_prepare_run_workspace,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("_execute_agent_sdks should not be called")
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *a, **k: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=RunnerOps(
+            commit_and_push=lambda **_: {
+                "success": True,
+                "commit_sha": "a" * 40,
+                "error": None,
+                "error_stage": None,
+                "remote": "origin",
+                "branch": "f",
+                "pushed_ref": "refs/heads/f",
+            },
+            post_pr_comment=lambda *_: (True, "ok"),
+        ),
+    )
+
+    assert prepare_called is True
+    assert result["status"] in {"failed", "retry_scheduled"}
+    assert "agent workspace init failed" in str(result["error_summary"])
+
+
 def test_run_once_defaults_legacy_manual_issue_runs_to_issue_source_kind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
