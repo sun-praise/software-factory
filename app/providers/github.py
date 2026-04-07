@@ -28,6 +28,7 @@ from app.services.task_source import TEXT_SOURCE_KIND, build_manual_text_task_nu
 
 
 logger = logging.getLogger(__name__)
+webhook_logger = logging.getLogger("webhook_debug")
 _UNKNOWN_CAN_BE_REBASED_FIELD = 'Unknown JSON field: "canBeRebased"'
 _GITHUB_API_BASE_URL = "https://api.github.com"
 
@@ -733,7 +734,7 @@ class GitHubWebhookProvider:
 
         token = _safe_text(github_token)
         if not token:
-            logger.warning(
+            webhook_logger.warning(
                 "GITHUB_TOKEN not set, cannot fetch PR info for %s#%s",
                 repo,
                 pr_number,
@@ -750,7 +751,7 @@ class GitHubWebhookProvider:
         try:
             response = httpx.get(url, headers=headers, timeout=10.0)
             if response.status_code >= 400:
-                logger.warning(
+                webhook_logger.warning(
                     "Failed to fetch PR info from GitHub API: status=%s repo=%s pr=%s",
                     response.status_code,
                     repo,
@@ -760,7 +761,7 @@ class GitHubWebhookProvider:
 
             pr_data = response.json()
             if not isinstance(pr_data, dict):
-                logger.warning(
+                webhook_logger.warning(
                     "Failed to fetch PR info from GitHub API: unexpected payload type repo=%s pr=%s",
                     repo,
                     pr_number,
@@ -774,7 +775,7 @@ class GitHubWebhookProvider:
             if not head_sha:
                 return event, payload
 
-            logger.info(
+            webhook_logger.info(
                 "Fetched head_sha=%s branch=%s for %s PR#%s",
                 head_sha,
                 _safe_text(head.get("ref")) if isinstance(head, Mapping) else None,
@@ -786,7 +787,7 @@ class GitHubWebhookProvider:
             enriched_payload["pull_request"] = pr_data
             return event, enriched_payload
         except Exception as exc:
-            logger.warning("Failed to fetch PR info from GitHub API: %s", exc)
+            webhook_logger.warning("Failed to fetch PR info from GitHub API: %s", exc)
             return event, payload
 
 

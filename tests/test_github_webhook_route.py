@@ -152,6 +152,7 @@ def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> Non
         "event_type": "pull_request_review",
         "payload": payload,
     }
+    assert "enrich" not in calls
 
 
 def test_webhook_route_uses_provider_for_issue_comment_pr_info_enrichment(
