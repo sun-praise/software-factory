@@ -1171,9 +1171,13 @@ async def save_settings(request: Request) -> RedirectResponse:
     claude_agent_enabled = "agent_claude_agent_enabled" in form
     agent_primary_sdk = str(form.get("agent_primary_sdk", "claude_agent_sdk")).strip()
 
-    ralph_command = str(form.get("ralph_command", "ralph")).strip()
-    openhands_command = str(form.get("openhands_command", "openhands")).strip()
-    claude_agent_command = str(form.get("claude_agent_command", "claude")).strip()
+    ralph_command = str(form.get("ralph_command", "ralph")).strip() or "ralph"
+    openhands_command = (
+        str(form.get("openhands_command", "openhands")).strip() or "openhands"
+    )
+    claude_agent_command = (
+        str(form.get("claude_agent_command", "claude")).strip() or "claude"
+    )
     claude_agent_provider = str(form.get("claude_agent_provider", "zhipu")).strip()
     claude_agent_base_url = str(
         form.get("claude_agent_base_url", "https://open.bigmodel.cn/api/anthropic")
@@ -1191,19 +1195,23 @@ async def save_settings(request: Request) -> RedirectResponse:
     ).strip()
     ralph_timeout_raw = str(form.get("ralph_command_timeout_seconds", "1800"))
     try:
-        ralph_command_timeout_seconds = max(1, int(ralph_timeout_raw.strip()))
+        ralph_command_timeout_seconds = max(
+            1, min(86400, int(ralph_timeout_raw.strip()))
+        )
     except (TypeError, ValueError):
         ralph_command_timeout_seconds = 1800
     timeout_raw = str(form.get("openhands_command_timeout_seconds", "600"))
     try:
-        openhands_command_timeout_seconds = max(1, int(timeout_raw.strip()))
+        openhands_command_timeout_seconds = max(1, min(86400, int(timeout_raw.strip())))
     except (TypeError, ValueError):
         openhands_command_timeout_seconds = 600
     claude_timeout_raw = str(
         form.get("claude_agent_command_timeout_seconds", "1800")
     ).strip()
     try:
-        claude_agent_command_timeout_seconds = max(1, int(claude_timeout_raw))
+        claude_agent_command_timeout_seconds = max(
+            1, min(86400, int(claude_timeout_raw))
+        )
     except (TypeError, ValueError):
         claude_agent_command_timeout_seconds = 1800
 

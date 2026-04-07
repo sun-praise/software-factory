@@ -182,8 +182,8 @@
               <option value="claude_agent_sdk" {% if agent_primary_sdk == "claude_agent_sdk" %}selected{% endif %}>Claude Agent SDK</option>
               <option value="openhands" {% if agent_primary_sdk == "openhands" %}selected{% endif %}>OpenHands</option>
             </select>
-            <p class="muted tiny">When both modes are enabled, this one runs first. Environment overrides still take precedence over DB settings.</p>
-            <p class="muted tiny">At least one agent mode must remain enabled. If both checkboxes are cleared, Claude Agent SDK will be automatically re-enabled on save.</p>
+            <p class="muted tiny">When multiple modes are enabled, this one runs first. Environment overrides still take precedence over DB settings.</p>
+            <p class="muted tiny">At least one agent mode must remain enabled. If all agent mode checkboxes are cleared, Claude Agent SDK will be automatically re-enabled on save.</p>
 
             <label for="ralph_command">Ralph command</label>
             <input
