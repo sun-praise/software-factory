@@ -165,6 +165,15 @@ class _CustomWebhookProvider:
     ) -> str | None:
         return str(payload.get("body") or "") or None
 
+    def enrich_event_pull_request_info(
+        self,
+        *,
+        event: Any,
+        payload: Mapping[str, Any],
+        github_token: str,
+    ) -> tuple[Any, Mapping[str, Any]]:
+        return event, payload
+
 
 class _CustomGitRemoteProvider:
     name = "custom"

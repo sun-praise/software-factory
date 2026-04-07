@@ -110,7 +110,11 @@ async def github_webhook(request: Request) -> dict[str, Any]:
         }
 
     if not event.head_sha and event.repo and event.pr_number:
-        event, payload = _fill_pr_info_from_api(event, payload)
+        event, payload = provider.enrich_event_pull_request_info(
+            event=event,
+            payload=payload,
+            github_token=get_settings().github_token,
+        )
 
     run_id: int | None = None
     idempotency_key: str | None = None
@@ -462,47 +466,3 @@ def _as_text(value: Any) -> str | None:
         if text:
             return text
     return None
-
-
-def _fill_pr_info_from_api(event, payload):
-    """issue_comment 事件不含 head_sha/branch，通过 GitHub API 补获取。"""
-    import dataclasses
-    import logging
-    import urllib.request
-
-    log = logging.getLogger("webhook_debug")
-    token = get_settings().github_token
-    if not token:
-        log.warning(
-            "GITHUB_TOKEN not set, cannot fetch PR info for %s#%s",
-            event.repo,
-            event.pr_number,
-        )
-        return event, payload
-
-    url = f"https://api.github.com/repos/{event.repo}/pulls/{event.pr_number}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            pr_data = json.loads(resp.read().decode("utf-8"))
-        head_sha = pr_data.get("head", {}).get("sha")
-        if head_sha:
-            log.info(
-                "Fetched head_sha=%s branch=%s for %s PR#%s",
-                head_sha,
-                pr_data.get("head", {}).get("ref"),
-                event.repo,
-                event.pr_number,
-            )
-            event = dataclasses.replace(event, head_sha=head_sha)
-            payload = dict(payload)
-            payload["pull_request"] = pr_data
-    except Exception as exc:
-        log.warning("Failed to fetch PR info from GitHub API: %s", exc)
-    return event, payload

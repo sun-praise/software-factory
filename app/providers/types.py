@@ -132,6 +132,14 @@ class WebhookProvider(Protocol):
         payload: Mapping[str, Any],
     ) -> str | None: ...
 
+    def enrich_event_pull_request_info(
+        self,
+        *,
+        event: Any,
+        payload: Mapping[str, Any],
+        github_token: str,
+    ) -> tuple[Any, Mapping[str, Any]]: ...
+
 
 @runtime_checkable
 class GitRemoteProvider(Protocol):
