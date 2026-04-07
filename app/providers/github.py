@@ -363,6 +363,70 @@ class GitHubTaskSourceProvider:
         except (TypeError, ValueError):
             return None
 
+    def resolve_manual_issue_context(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        issue_number: int | None,
+        source_kind: str,
+        source_ref: str,
+        source_fragment: str,
+        description_present: bool,
+    ) -> Mapping[str, Any] | None:
+        fragment = source_fragment.strip().lower()
+
+        try:
+            if source_kind == "issue":
+                comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
+                if comment_id is not None:
+                    return self._fetch_issue_comment_context(
+                        repo=repo,
+                        comment_id=comment_id,
+                        source_ref=source_ref,
+                    )
+                if not fragment:
+                    return self._fetch_issue_body_context(
+                        repo=repo,
+                        issue_number=issue_number or pr_number,
+                        source_ref=source_ref,
+                    )
+                return None
+
+            issue_comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
+            if issue_comment_id is not None:
+                return self._fetch_issue_comment_context(
+                    repo=repo,
+                    comment_id=issue_comment_id,
+                    source_ref=source_ref,
+                )
+
+            review_comment_id = _parse_fragment_numeric_id(
+                fragment,
+                ("discussion_r", "r"),
+            )
+            if review_comment_id is not None:
+                return self._fetch_review_comment_context(
+                    repo=repo,
+                    comment_id=review_comment_id,
+                    source_ref=source_ref,
+                )
+
+            review_id = _parse_fragment_numeric_id(fragment, ("pullrequestreview-",))
+            if review_id is not None:
+                return self._fetch_review_context(
+                    repo=repo,
+                    pr_number=pr_number,
+                    review_id=review_id,
+                    source_ref=source_ref,
+                )
+        except ValueError:
+            if description_present:
+                return None
+            raise
+
+        return None
+
     def _parse_issue_url(self, url: str) -> Mapping[str, Any]:
         normalized_url = url.strip()
         parsed = urlparse(normalized_url)
@@ -422,6 +486,121 @@ class GitHubTaskSourceProvider:
             "source_kind": "issue",
             "task_title": None,
             "task_text": None,
+        }
+
+    def _fetch_issue_body_context(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        source_ref: str,
+    ) -> Mapping[str, Any]:
+        payload = self._github_get_json(
+            f"{_GITHUB_API_BASE_URL}/repos/{repo}/issues/{issue_number}",
+            not_found_message="Issue not found or unavailable.",
+        )
+        title = _safe_text(payload.get("title")) or ""
+        body = _safe_text(payload.get("body")) or ""
+        if not title and not body:
+            raise ValueError(
+                "GitHub issue has no body text. Add a description to the manual issue."
+            )
+        context_body = body or title
+        return {
+            "text": _format_manual_issue_context(
+                label="GitHub issue context",
+                title=title,
+                body=context_body,
+            ),
+            "path": None,
+            "line": None,
+            "source_url": _safe_text(payload.get("html_url")) or source_ref,
+        }
+
+    def _fetch_issue_comment_context(
+        self,
+        *,
+        repo: str,
+        comment_id: int,
+        source_ref: str,
+    ) -> Mapping[str, Any]:
+        payload = self._github_get_json(
+            f"{_GITHUB_API_BASE_URL}/repos/{repo}/issues/comments/{comment_id}",
+            not_found_message="GitHub issue comment not found or unavailable.",
+        )
+        body = _safe_text(payload.get("body")) or ""
+        if not body:
+            raise ValueError(
+                "GitHub issue comment is empty. Add a description to the manual issue."
+            )
+        return {
+            "text": _format_manual_issue_context(
+                label="GitHub issue comment",
+                body=body,
+            ),
+            "path": None,
+            "line": None,
+            "source_url": _safe_text(payload.get("html_url")) or source_ref,
+        }
+
+    def _fetch_review_comment_context(
+        self,
+        *,
+        repo: str,
+        comment_id: int,
+        source_ref: str,
+    ) -> Mapping[str, Any]:
+        payload = self._github_get_json(
+            f"{_GITHUB_API_BASE_URL}/repos/{repo}/pulls/comments/{comment_id}",
+            not_found_message="GitHub review comment not found or unavailable.",
+        )
+        body = _safe_text(payload.get("body")) or ""
+        if not body:
+            raise ValueError(
+                "GitHub review comment is empty. Add a description to the manual issue."
+            )
+        path = _safe_text(payload.get("path"))
+        line = _coerce_positive_int(payload.get("line")) or _coerce_positive_int(
+            payload.get("original_line")
+        )
+        return {
+            "text": _format_manual_issue_context(
+                label="GitHub review comment",
+                body=body,
+                path=path,
+                line=line,
+            ),
+            "path": path,
+            "line": line,
+            "source_url": _safe_text(payload.get("html_url")) or source_ref,
+        }
+
+    def _fetch_review_context(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        review_id: int,
+        source_ref: str,
+    ) -> Mapping[str, Any]:
+        payload = self._github_get_json(
+            f"{_GITHUB_API_BASE_URL}/repos/{repo}/pulls/{pr_number}/reviews/{review_id}",
+            not_found_message="GitHub pull request review not found or unavailable.",
+        )
+        body = _safe_text(payload.get("body")) or ""
+        if not body:
+            raise ValueError(
+                "GitHub pull request review is empty. Add a description to the manual issue."
+            )
+        state = _safe_text(payload.get("state"))
+        label = "GitHub pull request review"
+        if state:
+            label = f"{label} ({state.lower()})"
+        return {
+            "text": _format_manual_issue_context(label=label, body=body),
+            "path": None,
+            "line": None,
+            "source_url": _safe_text(payload.get("html_url")) or source_ref,
         }
 
     def _github_headers(self) -> dict[str, str]:
@@ -575,6 +754,49 @@ def _parse_positive_int_from_text(raw_value: str, *, error_message: str) -> int:
     if parsed <= 0:
         raise ValueError(error_message)
     return parsed
+
+
+def _parse_fragment_numeric_id(fragment: str, prefixes: tuple[str, ...]) -> int | None:
+    normalized = fragment.strip().lower()
+    for prefix in prefixes:
+        if normalized.startswith(prefix):
+            suffix = normalized[len(prefix) :]
+            try:
+                parsed_id = int(suffix)
+            except ValueError:
+                return None
+            return parsed_id if parsed_id > 0 else None
+    return None
+
+
+def _format_manual_issue_context(
+    *,
+    label: str,
+    body: str,
+    title: str = "",
+    path: str | None = None,
+    line: int | None = None,
+) -> str:
+    parts = [label]
+    if title:
+        parts.append(f"Title: {title}")
+    if path:
+        location = f"File: {path}"
+        if line is not None:
+            location += f":{line}"
+        parts.append(location)
+    parts.append(body)
+    return "\n".join(part for part in parts if part)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _safe_text(value: Any) -> str | None:

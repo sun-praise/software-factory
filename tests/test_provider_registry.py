@@ -109,6 +109,24 @@ class _CustomTaskSourceProvider:
     ) -> int | None:
         return issue_number
 
+    def resolve_manual_issue_context(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        issue_number: int | None,
+        source_kind: str,
+        source_ref: str,
+        source_fragment: str,
+        description_present: bool,
+    ) -> Mapping[str, Any] | None:
+        return {
+            "text": "context",
+            "path": None,
+            "line": None,
+            "source_url": source_ref,
+        }
+
 
 class _CustomWebhookProvider:
     name = "custom"

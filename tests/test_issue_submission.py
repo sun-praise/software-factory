@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from json import JSONDecodeError
 import os
 import sqlite3
 
@@ -464,13 +463,17 @@ def test_submit_issue_api_rejects_pull_request_url_without_actionable_feedback(
 
 
 def test_resolve_pr_number_from_issue_rejects_invalid_json(monkeypatch) -> None:
-    class _Response:
-        status_code = 200
+    class _FakeTaskSourceProvider:
+        def resolve_pull_request_number_from_issue(
+            self, *, repo: str, issue_number: int
+        ) -> int | None:
+            raise ValueError("GitHub API returned invalid JSON.")
 
-        def json(self):
-            raise JSONDecodeError("bad json", "", 0)
-
-    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
 
     with pytest.raises(ValueError, match="invalid JSON"):
         web._resolve_pr_number_from_issue(
@@ -483,17 +486,17 @@ def test_resolve_pr_number_from_issue_rejects_invalid_json(monkeypatch) -> None:
 def test_resolve_pr_number_from_issue_returns_none_for_invalid_pull_request_url(
     monkeypatch,
 ) -> None:
-    class _Response:
-        status_code = 200
+    class _FakeTaskSourceProvider:
+        def resolve_pull_request_number_from_issue(
+            self, *, repo: str, issue_number: int
+        ) -> int | None:
+            return None
 
-        def json(self):
-            return {
-                "pull_request": {
-                    "url": "https://api.github.com/repos/acme/widgets/pulls/not-a-number"
-                }
-            }
-
-    monkeypatch.setattr(web.httpx, "get", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(
+        web,
+        "get_task_source_provider",
+        lambda: _FakeTaskSourceProvider(),
+    )
 
     assert (
         web._resolve_pr_number_from_issue(

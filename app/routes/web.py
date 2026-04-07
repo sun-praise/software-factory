@@ -1,14 +1,11 @@
 import csv
 import io
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
-from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Mapping
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -431,218 +428,10 @@ def _parse_task_submission(payload: IssueSubmissionRequest) -> ParsedTaskTarget:
     )
 
 
-def _github_token() -> str:
-    for key in (
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "GITHUB_RELEASE_TOKEN",
-    ):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _github_headers() -> dict[str, str]:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "software-factory",
-    }
-    token = _github_token()
-    if token:
-        headers["Authorization"] = f"token {token}"
-    return headers
-
-
-def _github_get_json(url: str, *, not_found_message: str) -> dict[str, Any]:
-    try:
-        response = httpx.get(url, headers=_github_headers(), timeout=10.0)
-    except httpx.RequestError as exc:
-        raise ValueError(f"Failed to query GitHub details: {exc}") from exc
-
-    if response.status_code == 404:
-        raise ValueError(not_found_message)
-    if response.status_code == 403:
-        raise ValueError(
-            "GitHub API access denied while resolving manual issue details."
-        )
-    if response.status_code == 401:
-        raise ValueError("Unauthorized when querying GitHub manual issue details.")
-    if response.status_code >= 400:
-        raise ValueError(
-            f"GitHub API returned unexpected status: {response.status_code}."
-        )
-
-    try:
-        payload = response.json()
-    except JSONDecodeError as exc:
-        raise ValueError("GitHub API returned invalid JSON.") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Unexpected response from GitHub API.")
-    return payload
-
-
-def _github_get_list(url: str, *, not_found_message: str) -> list[dict[str, Any]]:
-    try:
-        response = httpx.get(url, headers=_github_headers(), timeout=10.0)
-    except httpx.RequestError as exc:
-        raise ValueError(f"Failed to query GitHub details: {exc}") from exc
-
-    if response.status_code == 404:
-        raise ValueError(not_found_message)
-    if response.status_code == 403:
-        raise ValueError(
-            "GitHub API access denied while resolving manual issue details."
-        )
-    if response.status_code == 401:
-        raise ValueError("Unauthorized when querying GitHub manual issue details.")
-    if response.status_code >= 400:
-        raise ValueError(
-            f"GitHub API returned unexpected status: {response.status_code}."
-        )
-
-    try:
-        payload = response.json()
-    except JSONDecodeError as exc:
-        raise ValueError("GitHub API returned invalid JSON.") from exc
-    if not isinstance(payload, list):
-        raise ValueError("Unexpected response from GitHub API.")
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def _parse_fragment_numeric_id(fragment: str, prefixes: tuple[str, ...]) -> int | None:
-    normalized = fragment.strip().lower()
-    for prefix in prefixes:
-        if normalized.startswith(prefix):
-            suffix = normalized[len(prefix) :]
-            try:
-                parsed_id = int(suffix)
-            except ValueError:
-                return None
-            return parsed_id if parsed_id > 0 else None
-    return None
-
-
 def _string_or_empty(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
-
-def _format_manual_issue_context(
-    *,
-    label: str,
-    body: str,
-    title: str = "",
-    path: str | None = None,
-    line: int | None = None,
-) -> str:
-    parts = [label]
-    if title:
-        parts.append(f"Title: {title}")
-    if path:
-        location = f"File: {path}"
-        if line is not None:
-            location += f":{line}"
-        parts.append(location)
-    parts.append(body)
-    return "\n".join(part for part in parts if part)
-
-
-def _fetch_issue_body_context(target: ParsedTaskTarget) -> ManualIssueContext:
-    issue_number = target.issue_number or target.pr_number
-    payload = _github_get_json(
-        f"https://api.github.com/repos/{target.repo}/issues/{issue_number}",
-        not_found_message="Issue not found or unavailable.",
-    )
-    title = _string_or_empty(payload.get("title"))
-    body = _string_or_empty(payload.get("body"))
-    if not title and not body:
-        raise ValueError(
-            "GitHub issue has no body text. Add a description to the manual issue."
-        )
-    context_body = body or title
-    return ManualIssueContext(
-        text=_format_manual_issue_context(
-            label="GitHub issue context",
-            title=title,
-            body=context_body,
-        ),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
-    )
-
-
-def _fetch_issue_comment_context(
-    target: ParsedTaskTarget, comment_id: int
-) -> ManualIssueContext:
-    payload = _github_get_json(
-        f"https://api.github.com/repos/{target.repo}/issues/comments/{comment_id}",
-        not_found_message="GitHub issue comment not found or unavailable.",
-    )
-    body = _string_or_empty(payload.get("body"))
-    if not body:
-        raise ValueError(
-            "GitHub issue comment is empty. Add a description to the manual issue."
-        )
-    return ManualIssueContext(
-        text=_format_manual_issue_context(
-            label="GitHub issue comment",
-            body=body,
-        ),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
-    )
-
-
-def _fetch_review_comment_context(
-    target: ParsedTaskTarget, comment_id: int
-) -> ManualIssueContext:
-    payload = _github_get_json(
-        f"https://api.github.com/repos/{target.repo}/pulls/comments/{comment_id}",
-        not_found_message="GitHub review comment not found or unavailable.",
-    )
-    body = _string_or_empty(payload.get("body"))
-    if not body:
-        raise ValueError(
-            "GitHub review comment is empty. Add a description to the manual issue."
-        )
-    path = _string_or_empty(payload.get("path")) or None
-    line = coerce_positive_int(payload.get("line")) or coerce_positive_int(
-        payload.get("original_line")
-    )
-    return ManualIssueContext(
-        text=_format_manual_issue_context(
-            label="GitHub review comment",
-            body=body,
-            path=path,
-            line=line,
-        ),
-        path=path,
-        line=line,
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
-    )
-
-
-def _fetch_review_context(
-    target: ParsedTaskTarget, review_id: int
-) -> ManualIssueContext:
-    payload = _github_get_json(
-        f"https://api.github.com/repos/{target.repo}/pulls/{target.pr_number}/reviews/{review_id}",
-        not_found_message="GitHub pull request review not found or unavailable.",
-    )
-    body = _string_or_empty(payload.get("body"))
-    if not body:
-        raise ValueError(
-            "GitHub pull request review is empty. Add a description to the manual issue."
-        )
-    state = _string_or_empty(payload.get("state"))
-    label = "GitHub pull request review"
-    if state:
-        label = f"{label} ({state.lower()})"
-    return ManualIssueContext(
-        text=_format_manual_issue_context(label=label, body=body),
-        source_url=_string_or_empty(payload.get("html_url")) or target.source_ref,
-    )
 
 
 def _resolve_manual_issue_context(
@@ -650,37 +439,33 @@ def _resolve_manual_issue_context(
     *,
     description_present: bool,
 ) -> ManualIssueContext | None:
-    fragment = target.source_fragment.strip().lower()
+    provider = get_task_source_provider()
+    raw_context = provider.resolve_manual_issue_context(
+        repo=target.repo,
+        pr_number=target.pr_number,
+        issue_number=target.issue_number,
+        source_kind=target.source_kind,
+        source_ref=target.source_ref,
+        source_fragment=target.source_fragment,
+        description_present=description_present,
+    )
+    if raw_context is None:
+        return None
+    if not isinstance(raw_context, Mapping):
+        raise ValueError("Unexpected response from task-source provider.")
 
-    try:
-        if target.source_kind == "issue":
-            comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
-            if comment_id is not None:
-                return _fetch_issue_comment_context(target, comment_id)
-            if not fragment:
-                return _fetch_issue_body_context(target)
-            return None
-
-        issue_comment_id = _parse_fragment_numeric_id(fragment, ("issuecomment-",))
-        if issue_comment_id is not None:
-            return _fetch_issue_comment_context(target, issue_comment_id)
-
-        review_comment_id = _parse_fragment_numeric_id(
-            fragment,
-            ("discussion_r", "r"),
-        )
-        if review_comment_id is not None:
-            return _fetch_review_comment_context(target, review_comment_id)
-
-        review_id = _parse_fragment_numeric_id(fragment, ("pullrequestreview-",))
-        if review_id is not None:
-            return _fetch_review_context(target, review_id)
-    except ValueError:
+    context_text = _string_or_empty(raw_context.get("text"))
+    if not context_text:
         if description_present:
             return None
-        raise
+        raise ValueError("Manual issue context is empty.")
 
-    return None
+    return ManualIssueContext(
+        text=context_text,
+        path=_string_or_empty(raw_context.get("path")) or None,
+        line=coerce_positive_int(raw_context.get("line")),
+        source_url=_string_or_empty(raw_context.get("source_url")) or target.source_ref,
+    )
 
 
 def _fetch_pull_request_feedback_review(
