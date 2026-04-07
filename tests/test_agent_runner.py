@@ -707,6 +707,67 @@ def test_run_once_fails_fast_when_workspace_init_fails_in_claude_mode(
     assert "unable to resolve PR head branch" in str(row["error_summary"])
 
 
+def test_run_once_calls_prepare_workspace_when_ralph_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from app.services.feature_flags import (
+        AgentFeatureFlags,
+        _get_code_default_agent_feature_flags,
+        save_agent_feature_flags,
+    )
+
+    conn = _make_conn()
+    run = _enqueue_and_claim(conn)
+    defaults = _get_code_default_agent_feature_flags()
+    ralph_only_flags = replace(defaults, agent_sdks=("ralph",))
+    save_agent_feature_flags(conn, flags=ralph_only_flags)
+
+    prepare_called = False
+
+    def track_prepare_run_workspace(**kwargs):
+        nonlocal prepare_called
+        prepare_called = True
+        raise ValueError("workspace init error")
+
+    monkeypatch.setattr(
+        agent_runner,
+        "_prepare_run_workspace",
+        track_prepare_run_workspace,
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_execute_agent_sdks",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("_execute_agent_sdks should not be called")
+        ),
+    )
+
+    result = run_once(
+        conn=conn,
+        run=run,
+        workspace_dir=str(tmp_path),
+        executor=lambda *a, **k: {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ops=RunnerOps(
+            commit_and_push=lambda **_: {
+                "success": True,
+                "commit_sha": "a" * 40,
+                "error": None,
+                "error_stage": None,
+                "remote": "origin",
+                "branch": "f",
+                "pushed_ref": "refs/heads/f",
+            },
+            post_pr_comment=lambda *_: (True, "ok"),
+        ),
+    )
+
+    assert prepare_called is True
+    assert result["status"] in {"failed", "retry_scheduled"}
+    assert "agent workspace init failed" in str(result["error_summary"])
+
+
 def test_run_once_defaults_legacy_manual_issue_runs_to_issue_source_kind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2647,9 +2708,10 @@ def test_run_once_schedules_retry_for_retryable_agent_error(
 
 
 def test_normalize_agent_modes() -> None:
-    assert _normalize_agent_modes(("legacy", "OPENHANDS", "legacy", "")) == (
+    assert _normalize_agent_modes(("legacy", "OPENHANDS", "ralph", "legacy", "")) == (
         "claude_agent_sdk",
         "openhands",
+        "ralph",
     )
     # No recognized modes → empty tuple; callers (e.g. agent_runner) add defaults
     assert _normalize_agent_modes(("unknown", "", "other")) == ()
@@ -2715,6 +2777,8 @@ def test_execute_agent_sdks_falls_back_to_claude(
         prompt="fix this",
         normalized_review={},
         modes=("openhands", "claude_agent_sdk"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
@@ -2773,6 +2837,8 @@ def test_execute_agent_sdks_falls_back_to_openhands_after_claude_failure(
         prompt="fix this",
         normalized_review={},
         modes=("claude_agent_sdk", "openhands"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
@@ -2815,6 +2881,8 @@ def test_execute_agent_sdks_stops_immediately_on_cancelled_mode(
         prompt="fix this",
         normalized_review={},
         modes=("claude_agent_sdk", "openhands"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
         openhands_command="openhands",
         openhands_command_timeout_seconds=600,
         claude_agent_command="claude",
@@ -2831,6 +2899,94 @@ def test_execute_agent_sdks_stops_immediately_on_cancelled_mode(
     assert err_message == "cancelled"
     assert selected_mode == "claude_agent_sdk"
     assert calls == ["claude"]
+
+
+def test_execute_agent_sdks_falls_back_from_ralph_to_claude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_ralph(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("ralph")
+        return False, "ralph failed", "agent_ralph_failed"
+
+    def fake_claude(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return True, "claude succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_ralph_agent", fake_ralph)
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        normalized_review={},
+        modes=("ralph", "claude_agent_sdk"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
+    assert ok is True
+    assert err_code is None
+    assert err_message is None
+    assert selected_mode == "claude_agent_sdk"
+    assert calls == ["ralph", "claude"]
+
+
+def test_execute_agent_sdks_stops_immediately_on_ralph_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_ralph(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("ralph")
+        return False, "cancelled", agent_runner.RUN_CANCELLED_CODE
+
+    def fake_claude(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return True, "claude succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_ralph_agent", fake_ralph)
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        normalized_review={},
+        modes=("ralph", "claude_agent_sdk"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
+    assert ok is False
+    assert err_code == agent_runner.RUN_CANCELLED_CODE
+    assert err_message == "cancelled"
+    assert selected_mode == "ralph"
+    assert calls == ["ralph"]
 
 
 def test_run_claude_agent_uses_normalized_command_and_filtered_env(
@@ -2936,6 +3092,63 @@ def test_build_openhands_command_argv_enables_headless_json_task() -> None:
         "ignored",
     )
     assert existing == ["openhands", "--headless", "--json", "--task", "existing"]
+
+
+def test_build_ralph_command_argv_uses_task_flag() -> None:
+    argv = agent_runner._build_ralph_command_argv(["ralph"], "fix this")
+    assert argv == ["ralph", "--task", "fix this"]
+
+    existing = agent_runner._build_ralph_command_argv(
+        ["ralph", "--task", "existing"],
+        "ignored",
+    )
+    assert existing == ["ralph", "--task", "existing"]
+
+
+def test_run_ralph_agent_uses_task_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeProcess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.returncode = 0
+            self.pid = 654
+            self.stdout = None
+            self.stderr = None
+            captured["command"] = (
+                list(args[0]) if args and isinstance(args[0], (list, tuple)) else []
+            )
+            captured.update(kwargs)
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
+    monkeypatch.setattr(agent_runner.subprocess, "Popen", _FakeProcess)
+
+    ok, message, error_code = agent_runner._run_ralph_agent(
+        workspace=str(tmp_path),
+        run_id=9,
+        repo="acme/widgets",
+        pr_number=7,
+        prompt="fix this",
+        normalized_review={},
+        command="ralph",
+        timeout_seconds=42,
+    )
+
+    assert ok is True
+    assert message == "Ralph completed"
+    assert error_code is None
+    assert captured["command"] == [
+        "ralph",
+        "--task",
+        "fix this",
+    ]
+    assert captured["stdin"] == agent_runner.subprocess.DEVNULL
 
 
 def test_run_openhands_agent_uses_headless_task_mode(

@@ -30,6 +30,8 @@ def _clear_agent_env(monkeypatch, tmp_path) -> None:
     for key in (
         "AGENT_SDKS",
         "CLAUDE_AGENT_SDKS",
+        "RALPH_COMMAND",
+        "RALPH_COMMAND_TIMEOUT_SECONDS",
         "OPENHANDS_COMMAND",
         "OPENHANDS_COMMAND_TIMEOUT_SECONDS",
         "OPENHANDS_WORKTREE_BASE_DIR",
@@ -109,14 +111,25 @@ def test_resolve_agent_feature_flags_uses_db_agent_sdks_order(
 def test_build_selected_agent_sdks_respects_primary_mode() -> None:
     assert build_selected_agent_sdks(
         "openhands",
+        ralph_enabled=False,
         openhands_enabled=True,
         claude_agent_enabled=True,
     ) == ("openhands", "claude_agent_sdk")
     assert build_selected_agent_sdks(
         "claude_agent_sdk",
+        ralph_enabled=False,
         openhands_enabled=False,
         claude_agent_enabled=True,
     ) == ("claude_agent_sdk",)
+
+
+def test_build_selected_agent_sdks_supports_ralph_primary() -> None:
+    assert build_selected_agent_sdks(
+        "ralph",
+        ralph_enabled=True,
+        openhands_enabled=True,
+        claude_agent_enabled=True,
+    ) == ("ralph", "claude_agent_sdk", "openhands")
 
 
 def test_claude_agent_sdks_env_alias_accepted(monkeypatch, tmp_path) -> None:
@@ -252,12 +265,14 @@ def test_build_feature_flag_context_reuses_resolved_defaults(
 
     assert context["default_agent_sdks"] == "openhands,claude_agent_sdk"
     assert context["agent_primary_sdk"] == "openhands"
+    assert context["agent_ralph_enabled"] is False
 
 
 def test_build_selected_agent_sdks_auto_enables_claude_when_both_disabled() -> None:
     """If both agent checkboxes are unchecked, Claude Agent SDK is forced on."""
     result = build_selected_agent_sdks(
         "claude_agent_sdk",
+        ralph_enabled=False,
         openhands_enabled=False,
         claude_agent_enabled=False,
     )
@@ -268,7 +283,25 @@ def test_build_selected_agent_sdks_auto_enables_claude_openhands_primary() -> No
     """If both are disabled and OpenHands is primary, Claude is still added."""
     result = build_selected_agent_sdks(
         "openhands",
+        ralph_enabled=False,
         openhands_enabled=False,
         claude_agent_enabled=False,
     )
     assert result == ("claude_agent_sdk",)
+
+
+def test_resolve_agent_feature_flags_supports_ralph_env_settings(
+    monkeypatch, tmp_path
+) -> None:
+    _clear_agent_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    monkeypatch.setenv("AGENT_SDKS", "ralph,claude_agent_sdk")
+    monkeypatch.setenv("RALPH_COMMAND", "ralph --engine codex")
+    monkeypatch.setenv("RALPH_COMMAND_TIMEOUT_SECONDS", "321")
+
+    flags = resolve_agent_feature_flags(conn)
+
+    assert flags.agent_sdks == ("ralph", "claude_agent_sdk")
+    assert flags.ralph_command == "ralph --engine codex"
+    assert flags.ralph_command_timeout_seconds == 321
