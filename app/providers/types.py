@@ -90,6 +90,18 @@ class TaskSourceProvider(Protocol):
         issue_number: int,
     ) -> int | None: ...
 
+    def resolve_manual_issue_context(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        issue_number: int | None,
+        source_kind: str,
+        source_ref: str,
+        source_fragment: str,
+        description_present: bool,
+    ) -> Mapping[str, Any] | None: ...
+
 
 @runtime_checkable
 class WebhookProvider(Protocol):
