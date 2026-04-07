@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-07
+
+### Added
+
+- Provider registry foundation with vendor-neutral task inputs (#187, #146)
+- GitHub forge and remote provider wiring (#190)
+- GitHub task source and webhook provider wiring (#192)
+- Manual issue context routing via provider (#194)
+- Webhook PR enrichment routing via provider (#196)
+- Configurable provider defaults (#198)
+- Auto-scroll toggle button for live log viewer (#201)
+- Runtime settings persistence and audit trail in database (#165)
+- Shared runtime settings with form specs and validation (#167)
+- Agent config consolidation with hardened fallback handling (#166)
+- AI token isolation to worker process only (#158)
+- Execution hints for manual issue runs (#154)
+- Auto-create PR when baseline checks fail (#157)
+- Manual issue auto-create PRs with recovery (#134)
+- Semantic understanding for review classification in normalizer
+- Issue templates and PR link checks (#141)
+- OpenCode review on GitHub runner with merge verdict (#136)
+- Community issue templates (bug report, feature request, question)
+- OpenSpec configuration for spec-driven workflow (#151)
+
+### Changed
+
+- Refactored AI token env vars to single source of truth
+- Expanded autofix prompt with git alternates hiding and PR changed file paths
+- Runtime config ownership and hardened env-only runtime inspection
+- CI: made AI Code Review non-blocking on API billing errors
+- GitHub-hosted runner for pytest (#130)
+- OpenCode review workflow with merge verdict requirement
+
+### Fixed
+
+- Prevent baseline check timeout from leaving run in fake-running state
+- Clear cached feature flag env overrides in tests
+- Agent stall fallback handling (#133)
+- Manual issue workspace resolution and prompts for Claude failures (#132, #129)
+- Opencode review PR security hardening (#139)
+- Distinguish Issue vs Pull Request in web run history
+- Token file path validation and permissions checks
+- Correct trigger_source usage instead of hardcoded 'pr'
+- Normalizer: remove side effect in `_detect_semantic_groups`, add stemming exceptions
+- Unify constant naming and improve OSError handling across codebase
+- Project root hint support for multi-project repos in manual issue intake
+
 ## [0.2.0] - 2026-03-23
 
 ### Added
@@ -134,6 +181,7 @@ Environment variables:
 
 @Svtter
 
-[Unreleased]: https://github.com/sun-praise/software-factory/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sun-praise/software-factory/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sun-praise/software-factory/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sun-praise/software-factory/compare/v0.1.1...v0.2.0
 [0.1.0]: https://github.com/sun-praise/software-factory/releases/tag/v0.1.0
