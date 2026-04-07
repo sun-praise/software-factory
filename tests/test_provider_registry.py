@@ -281,6 +281,32 @@ def test_get_forge_provider_raises_for_unknown_provider_name() -> None:
 
 
 @pytest.mark.parametrize(
+    ("env_key", "env_value", "get_fn"),
+    [
+        ("FORGE_PROVIDER", "", get_forge_provider),
+        ("FORGE_PROVIDER", "   ", get_forge_provider),
+        ("TASK_SOURCE_PROVIDER", "", get_task_source_provider),
+        ("TASK_SOURCE_PROVIDER", "   ", get_task_source_provider),
+        ("WEBHOOK_PROVIDER", "", get_webhook_provider),
+        ("WEBHOOK_PROVIDER", "   ", get_webhook_provider),
+        ("GIT_REMOTE_PROVIDER", "", get_git_remote_provider),
+        ("GIT_REMOTE_PROVIDER", "   ", get_git_remote_provider),
+    ],
+)
+def test_get_provider_empty_or_blank_env_defaults_to_github(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+    env_value: str,
+    get_fn: Callable[..., Any],
+) -> None:
+    monkeypatch.setenv(env_key, env_value)
+    get_settings.cache_clear()
+
+    provider = get_fn()
+    assert provider.name == "github"
+
+
+@pytest.mark.parametrize(
     ("env_key", "register_fn", "get_fn", "provider_factory"),
     [
         (
@@ -357,6 +383,77 @@ def test_get_provider_raises_for_unknown_configured_default_provider(
     message = str(exc.value)
     assert expected_fragment in message
     assert "available: github" in message
+
+
+@pytest.mark.parametrize(
+    (
+        "env_key",
+        "register_fn",
+        "get_fn",
+        "provider_factory",
+    ),
+    [
+        (
+            "FORGE_PROVIDER",
+            register_forge_provider,
+            get_forge_provider,
+            _CustomForgeProvider,
+        ),
+        (
+            "TASK_SOURCE_PROVIDER",
+            register_task_source_provider,
+            get_task_source_provider,
+            _CustomTaskSourceProvider,
+        ),
+        (
+            "WEBHOOK_PROVIDER",
+            register_webhook_provider,
+            get_webhook_provider,
+            _CustomWebhookProvider,
+        ),
+        (
+            "GIT_REMOTE_PROVIDER",
+            register_git_remote_provider,
+            get_git_remote_provider,
+            _CustomGitRemoteProvider,
+        ),
+    ],
+)
+def test_explicit_provider_name_overrides_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+    register_fn: Callable[..., None],
+    get_fn: Callable[..., Any],
+    provider_factory: Callable[[], Any],
+) -> None:
+    custom_provider = provider_factory()
+    register_fn("custom", custom_provider)
+
+    monkeypatch.setenv(env_key, "custom")
+    get_settings.cache_clear()
+
+    assert get_fn() is custom_provider
+    explicit_default = get_fn("github")
+    assert explicit_default.name == "github"
+    assert explicit_default is not custom_provider
+
+
+def test_provider_selection_reflects_env_changes_after_settings_cache_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_provider = _CustomForgeProvider()
+    register_forge_provider("custom", custom_provider)
+
+    monkeypatch.setenv("FORGE_PROVIDER", "custom")
+    get_settings.cache_clear()
+    assert get_forge_provider() is custom_provider
+
+    monkeypatch.setenv("FORGE_PROVIDER", "github")
+    # get_settings() is cached: without cache clear this still resolves to "custom".
+    assert get_forge_provider() is custom_provider
+
+    get_settings.cache_clear()
+    assert get_forge_provider().name == "github"
 
 
 def test_list_registered_provider_names_raises_for_unknown_category() -> None:
