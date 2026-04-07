@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
 
+from app.services.agent_modes import (
+    CLAUDE_AGENT_MODE,
+    LEGACY_AGENT_MODE,
+    OPENHANDS_AGENT_MODE,
+    RALPH_AGENT_MODE,
+)
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,11 +34,6 @@ FEATURE_FLAG_CLAUDE_AGENT_CONTAINER_IMAGE_KEY = "agent.claude_agent.container_im
 FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seconds"
 FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY = "agent.claude_agent.worktree_base_dir"
 FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
-
-RALPH_AGENT_MODE = "ralph"
-OPENHANDS_AGENT_MODE = "openhands"
-CLAUDE_AGENT_MODE = "claude_agent_sdk"
-LEGACY_AGENT_MODE = "legacy"
 CLAUDE_AGENT_PROVIDER_ZHIPU = "zhipu"
 CLAUDE_AGENT_PROVIDER_OPENROUTER = "openrouter"
 CLAUDE_AGENT_PROVIDER_DEEPSEEK = "deepseek"
@@ -748,6 +749,13 @@ def _feature_flag_default_enabled(mode: str, current_modes: tuple[str, ...]) -> 
     return mode in {value.strip().lower() for value in current_modes}
 
 
+_ENABLED_MODE_FLAGS = {
+    CLAUDE_AGENT_MODE: "claude_enabled",
+    OPENHANDS_AGENT_MODE: "openhands_enabled",
+    RALPH_AGENT_MODE: "ralph_enabled",
+}
+
+
 def _resolve_enabled_modes(
     *,
     preferred_modes: tuple[str, ...],
@@ -755,24 +763,16 @@ def _resolve_enabled_modes(
     openhands_enabled: bool,
     claude_enabled: bool,
 ) -> list[str]:
+    enabled_flags: dict[str, bool] = {
+        CLAUDE_AGENT_MODE: claude_enabled,
+        OPENHANDS_AGENT_MODE: openhands_enabled,
+        RALPH_AGENT_MODE: ralph_enabled,
+    }
     ordered_modes = list(_normalize_agent_modes(preferred_modes))
-
-    if CLAUDE_AGENT_MODE not in ordered_modes:
-        ordered_modes.append(CLAUDE_AGENT_MODE)
-    if OPENHANDS_AGENT_MODE not in ordered_modes:
-        ordered_modes.append(OPENHANDS_AGENT_MODE)
-    if RALPH_AGENT_MODE not in ordered_modes:
-        ordered_modes.append(RALPH_AGENT_MODE)
-
-    resolved: list[str] = []
-    for mode in ordered_modes:
-        if mode == CLAUDE_AGENT_MODE and claude_enabled:
-            resolved.append(mode)
-        if mode == OPENHANDS_AGENT_MODE and openhands_enabled:
-            resolved.append(mode)
-        if mode == RALPH_AGENT_MODE and ralph_enabled:
-            resolved.append(mode)
-    return resolved
+    for mode in _ENABLED_MODE_FLAGS:
+        if mode not in ordered_modes:
+            ordered_modes.append(mode)
+    return [mode for mode in ordered_modes if enabled_flags.get(mode, False)]
 
 
 def _coerce_bool(value: str | None, default: bool) -> bool:

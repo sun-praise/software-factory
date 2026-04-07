@@ -35,6 +35,11 @@ from app.services.git_ops import (
     rebase_onto_base,
 )
 from app.services.logging_config import cleanup_archived_logs, get_run_log_path
+from app.services.agent_modes import (
+    CLAUDE_AGENT_MODE,
+    OPENHANDS_AGENT_MODE,
+    RALPH_AGENT_MODE,
+)
 from app.services.feature_flags import (
     _normalize_agent_modes as normalize_agent_modes,
     resolve_agent_feature_flags,
@@ -62,9 +67,6 @@ GIT_COMMAND_TIMEOUT_SECONDS = 30
 CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 MAX_CHECK_FEEDBACK_ATTEMPTS = 3
 WORKTREE_CMD_PREFIX = "sf-autofix-openhands"
-RALPH_AGENT_MODE = "ralph"
-OPENHANDS_AGENT_MODE = "openhands"
-CLAUDE_AGENT_MODE = "claude_agent_sdk"
 RALPH_FAILURE_CODE_COMMAND = "agent_ralph_failed"
 OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
@@ -2078,30 +2080,39 @@ def _format_command_for_log(argv: list[str]) -> str:
     return _sanitize_log_text(" ".join(shlex.quote(token) for token in argv))
 
 
+def _append_task_flag_if_missing(
+    argv: list[str],
+    prompt: str,
+    task_flags: frozenset[str],
+) -> list[str]:
+    expanded = list(argv)
+    has_task = any(token in task_flags for token in expanded) or any(
+        any(token.startswith(f"{flag}=") for flag in task_flags) for token in expanded
+    )
+    if prompt and not has_task:
+        expanded.extend(["--task", prompt])
+    return expanded
+
+
 def _build_openhands_command_argv(argv: list[str], prompt: str) -> list[str]:
     expanded = list(argv)
     if "--headless" not in expanded:
         expanded.append("--headless")
     if "--json" not in expanded:
         expanded.append("--json")
-    has_task_or_file = any(
-        token in {"-t", "--task", "-f", "--file"} for token in expanded
-    ) or any(
-        token.startswith("--task=") or token.startswith("--file=") for token in expanded
+    return _append_task_flag_if_missing(
+        expanded,
+        prompt,
+        frozenset({"-t", "--task", "-f", "--file"}),
     )
-    if prompt and not has_task_or_file:
-        expanded.extend(["--task", prompt])
-    return expanded
 
 
 def _build_ralph_command_argv(argv: list[str], prompt: str) -> list[str]:
-    expanded = list(argv)
-    has_task = any(token in {"-t", "--task"} for token in expanded) or any(
-        token.startswith("--task=") for token in expanded
+    return _append_task_flag_if_missing(
+        list(argv),
+        prompt,
+        frozenset({"-t", "--task"}),
     )
-    if prompt and not has_task:
-        expanded.extend(["--task", prompt])
-    return expanded
 
 
 def _build_claude_stream_command_argv(argv: list[str]) -> list[str]:

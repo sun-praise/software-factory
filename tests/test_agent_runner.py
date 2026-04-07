@@ -2546,6 +2546,50 @@ def test_execute_agent_sdks_falls_back_from_ralph_to_claude(
     assert calls == ["ralph", "claude"]
 
 
+def test_execute_agent_sdks_stops_immediately_on_ralph_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_ralph(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("ralph")
+        return False, "cancelled", agent_runner.RUN_CANCELLED_CODE
+
+    def fake_claude(**kwargs) -> tuple[bool, str, str | None]:
+        calls.append("claude")
+        return True, "claude succeeded", None
+
+    monkeypatch.setattr(agent_runner, "_run_ralph_agent", fake_ralph)
+    monkeypatch.setattr(agent_runner, "_run_claude_agent", fake_claude)
+
+    ok, err_code, err_message, selected_mode = agent_runner._execute_agent_sdks(
+        workspace="/tmp",
+        run_id=123,
+        repo="owner/repo",
+        pr_number=1,
+        prompt="fix this",
+        normalized_review={},
+        modes=("ralph", "claude_agent_sdk"),
+        ralph_command="ralph",
+        ralph_command_timeout_seconds=600,
+        openhands_command="openhands",
+        openhands_command_timeout_seconds=600,
+        claude_agent_command="claude",
+        claude_agent_provider="openrouter",
+        claude_agent_base_url="https://openrouter.ai/api",
+        claude_agent_model="openrouter/hunter-alpha",
+        claude_agent_runtime="host",
+        claude_agent_container_image="",
+        claude_agent_command_timeout_seconds=600,
+    )
+
+    assert ok is False
+    assert err_code == agent_runner.RUN_CANCELLED_CODE
+    assert err_message == "cancelled"
+    assert selected_mode == "ralph"
+    assert calls == ["ralph"]
+
+
 def test_run_claude_agent_uses_normalized_command_and_filtered_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

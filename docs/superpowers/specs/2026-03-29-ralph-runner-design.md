@@ -1,10 +1,10 @@
-# Ralph Runner Design
+# Ralph Runner 设计文档
 
-## Goal
+## 目标
 
 在现有 Software Factory runner 中新增一个最小可交付的 `ralph` agent mode，使其可以像 `openhands` 和 `claude_agent_sdk` 一样被配置、选择并由后台 worker 执行。
 
-## Scope
+## 范围
 
 第一版只做最小接入：
 
@@ -21,9 +21,9 @@
 - Ralph 项目配置管理界面的扩展
 - Ralph 特有高级能力的深度适配
 
-## Design
+## 设计
 
-### Feature flags
+### 特性标志
 
 `app/services/feature_flags.py` 目前只认识 `openhands` 和 `claude_agent_sdk`。本次新增：
 
@@ -34,7 +34,7 @@
 
 默认模式顺序保持不变，不把 Ralph 加入默认启用列表，避免影响现有部署。`_normalize_agent_modes()` 和 `_resolve_enabled_modes()` 会扩展为支持第三种 mode。`build_feature_flag_context()` 和 `save_agent_feature_flags()` 也会暴露并持久化 Ralph 相关字段。
 
-### Settings UI
+### 设置界面
 
 `app/templates/settings.html` 和 `app/routes/web.py` 会加入 Ralph 配置：
 
@@ -45,7 +45,7 @@
 
 表单保存仍走现有 `AgentFeatureFlags` 聚合对象，不新增独立保存路径。
 
-### Runner execution
+### Runner 执行
 
 `app/services/agent_runner.py` 新增：
 
@@ -59,7 +59,7 @@
 - 使用专属 argv builder，为 prompt 提供最小可预测的 CLI 参数注入
 - 在 `_execute_agent_sdks()` 中按配置顺序参与 fallback
 
-### Ralph command contract
+### Ralph 命令契约
 
 第一版使用最小命令契约：
 
@@ -69,7 +69,7 @@
 
 这样做的目的是先满足 runner 的单次任务执行模型，而不是假设所有 Ralph 上游高级能力都要暴露给 Software Factory。
 
-### Testing
+### 测试
 
 测试覆盖三层：
 
@@ -86,6 +86,6 @@
   - Ralph argv builder 行为
   - Ralph 执行路径返回专属 failure code
 
-### Docs
+### 文档
 
 在 `README.md` 和 `README.zh-CN.md` 中补一条 runner 支持 Ralph 的说明，并注明需要在 runner 环境可执行 `ralph` 命令。
