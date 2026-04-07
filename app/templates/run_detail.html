@@ -67,6 +67,7 @@
           </div>
           <div class="log-toolbar-meta">
             <span id="polling-indicator" class="live-indicator">Live</span>
+            <button id="auto-scroll-toggle" type="button" class="live-indicator auto-scroll-toggle" title="Toggle auto-scroll">Auto-scroll: ON</button>
             <button id="stop-run-button" type="button" class="button-danger run-action-button" hidden>
               Stop run
             </button>
@@ -125,6 +126,16 @@
           JSON.parse(root.dataset.hintEditableStatuses || "[]")
         );
         let pollHandle = null;
+        let autoScroll = true;
+        const scrollToggle = document.getElementById("auto-scroll-toggle");
+        scrollToggle.addEventListener("click", () => {
+          autoScroll = !autoScroll;
+          scrollToggle.textContent = autoScroll ? "Auto-scroll: ON" : "Auto-scroll: OFF";
+          scrollToggle.classList.toggle("auto-scroll-off", !autoScroll);
+          if (autoScroll) {
+            logNode.scrollTop = logNode.scrollHeight;
+          }
+        });
 
         const setStatus = (status) => {
           statusPill.textContent = status;
@@ -212,7 +223,9 @@
           createdAt.textContent = run.created_at || "-";
           updatedAt.textContent = run.updated_at || "-";
           logNode.textContent = run.log_preview || "No log data yet.";
-          logNode.scrollTop = logNode.scrollHeight;
+          if (autoScroll) {
+            logNode.scrollTop = logNode.scrollHeight;
+          }
           updateHintControls(run);
 
           const shouldKeepPolling = activeStatuses.has(run.status);
