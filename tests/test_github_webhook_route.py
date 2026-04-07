@@ -97,6 +97,20 @@ def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> Non
             calls["body"] = {"event_type": event_type, "payload": payload}
             return "Please fix"
 
+        def enrich_event_pull_request_info(
+            self,
+            *,
+            event,
+            payload,
+            github_token: str,
+        ):
+            calls["enrich"] = {
+                "event": event,
+                "payload": payload,
+                "github_token": github_token,
+            }
+            return event, payload
+
     monkeypatch.setattr(
         github_route,
         "get_webhook_provider",
@@ -138,6 +152,107 @@ def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> Non
         "event_type": "pull_request_review",
         "payload": payload,
     }
+    assert "enrich" not in calls
+
+
+def test_webhook_route_uses_provider_for_issue_comment_pr_info_enrichment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _set_env(tmp_path, secret="")
+    monkeypatch.setenv("GITHUB_TOKEN", "provider-token")
+    calls: dict[str, object] = {}
+
+    class _FakeWebhookProvider:
+        @property
+        def signature_header(self) -> str:
+            return "X-Custom-Signature"
+
+        def verify_signature(
+            self,
+            *,
+            body: bytes,
+            secret: str,
+            signature_header: str | None,
+        ) -> SignatureVerificationResult:
+            return SignatureVerificationResult(status=SignatureStatus.VERIFIED)
+
+        def extract_review_event(self, *, event_type: str, payload: dict[str, object]):
+            return GitHubReviewEvent(
+                repo="acme/widgets",
+                pr_number=42,
+                event_type=event_type,
+                event_id="3001",
+                event_key="gh:issue_comment:acme/widgets:42:3001",
+                actor="reviewer",
+                head_sha=None,
+                raw_payload_json=json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            )
+
+        def extract_event_body(self, *, event_type: str, payload: dict[str, object]):
+            return "Please fix"
+
+        def enrich_event_pull_request_info(
+            self,
+            *,
+            event,
+            payload,
+            github_token: str,
+        ):
+            calls["enrich"] = {
+                "event_type": event.event_type,
+                "head_sha_before": event.head_sha,
+                "github_token": github_token,
+            }
+            enriched_event = GitHubReviewEvent(
+                repo=event.repo,
+                pr_number=event.pr_number,
+                event_type=event.event_type,
+                event_id=event.event_id,
+                event_key=event.event_key,
+                actor=event.actor,
+                head_sha="abc123",
+                raw_payload_json=event.raw_payload_json,
+            )
+            enriched_payload = dict(payload)
+            enriched_payload["pull_request"] = {
+                "number": 42,
+                "head": {"sha": "abc123", "ref": "feature/test"},
+            }
+            return enriched_event, enriched_payload
+
+    monkeypatch.setattr(
+        github_route,
+        "get_webhook_provider",
+        lambda: _FakeWebhookProvider(),
+    )
+
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "Please fix"},
+        "sender": {"login": "reviewer"},
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/github/webhook",
+            json=payload,
+            headers={
+                "X-GitHub-Event": "issue_comment",
+                "X-Custom-Signature": "sha256=abc",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["queue_status"] == "queued"
+    assert isinstance(response.json()["queued_run_id"], int)
+    assert calls["enrich"] == {
+        "event_type": "issue_comment",
+        "head_sha_before": None,
+        "github_token": "provider-token",
+    }
+    assert response.json()["idempotency_key"].startswith("task:acme/widgets:42:abc123:")
 
 
 def test_webhook_inserts_and_deduplicates_review_event(tmp_path: Path) -> None:

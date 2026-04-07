@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from app.providers import github as github_provider
+from app.services.github_events import GitHubReviewEvent
 
 
 def test_github_forge_provider_ensure_pull_request_delegates_to_git_ops(
@@ -436,6 +437,249 @@ def test_github_webhook_provider_delegates_to_service_helpers(
         "event_type": "pull_request_review",
         "payload": {"review": {"body": "Please fix"}},
     }
+
+
+def test_github_webhook_provider_enrich_event_no_token_is_noop() -> None:
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="",
+    )
+
+    assert enriched_event == event
+    assert enriched_payload == payload
+
+
+def test_github_webhook_provider_enrich_event_fetches_pr_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature/test",
+                },
+                "number": 42,
+            }
+
+    def fake_get(url: str, *, headers, timeout: float):
+        captured["url"] = url
+        captured["headers"] = dict(headers)
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(github_provider.httpx, "get", fake_get)
+
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="secret-token",
+    )
+
+    assert captured["url"] == "https://api.github.com/repos/acme/widgets/pulls/42"
+    assert captured["headers"] == {
+        "Authorization": "token secret-token",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "software-factory",
+    }
+    assert captured["timeout"] == 10.0
+    assert enriched_event.head_sha == "abc123"
+    assert isinstance(enriched_payload.get("pull_request"), dict)
+    assert enriched_payload["pull_request"]["head"]["sha"] == "abc123"
+
+
+def test_github_webhook_provider_enrich_event_non_2xx_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 503
+
+        def json(self):
+            return {"message": "down"}
+
+    monkeypatch.setattr(
+        github_provider.httpx, "get", lambda *args, **kwargs: _Response()
+    )
+
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="secret-token",
+    )
+
+    assert enriched_event == event
+    assert enriched_payload == payload
+
+
+def test_github_webhook_provider_enrich_event_non_dict_json_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return ["unexpected", "payload"]
+
+    monkeypatch.setattr(
+        github_provider.httpx, "get", lambda *args, **kwargs: _Response()
+    )
+
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="secret-token",
+    )
+
+    assert enriched_event == event
+    assert enriched_payload == payload
+
+
+def test_github_webhook_provider_enrich_event_missing_head_sha_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"head": {"ref": "feature/test"}, "number": 42}
+
+    monkeypatch.setattr(
+        github_provider.httpx, "get", lambda *args, **kwargs: _Response()
+    )
+
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="secret-token",
+    )
+
+    assert enriched_event == event
+    assert enriched_payload == payload
+
+
+def test_github_webhook_provider_enrich_event_exception_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(*args, **kwargs):
+        raise RuntimeError("network failure")
+
+    monkeypatch.setattr(github_provider.httpx, "get", fake_get)
+
+    provider = github_provider.GitHubWebhookProvider()
+    event = GitHubReviewEvent(
+        repo="acme/widgets",
+        pr_number=42,
+        event_type="issue_comment",
+        event_id="3001",
+        event_key="gh:issue_comment:acme/widgets:42:3001",
+        actor="reviewer",
+        head_sha=None,
+        raw_payload_json="{}",
+    )
+    payload = {
+        "repository": {"full_name": "acme/widgets"},
+        "issue": {"number": 42, "pull_request": {"url": "https://example/pr/42"}},
+        "comment": {"id": 3001, "body": "please fix"},
+    }
+
+    enriched_event, enriched_payload = provider.enrich_event_pull_request_info(
+        event=event,
+        payload=payload,
+        github_token="secret-token",
+    )
+
+    assert enriched_event == event
+    assert enriched_payload == payload
 
 
 def test_github_git_remote_provider_builds_expected_urls() -> None:

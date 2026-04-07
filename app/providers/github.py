@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import logging
@@ -27,6 +28,7 @@ from app.services.task_source import TEXT_SOURCE_KIND, build_manual_text_task_nu
 
 
 logger = logging.getLogger(__name__)
+webhook_logger = logging.getLogger("webhook_debug")
 _UNKNOWN_CAN_BE_REBASED_FIELD = 'Unknown JSON field: "canBeRebased"'
 _GITHUB_API_BASE_URL = "https://api.github.com"
 
@@ -717,6 +719,76 @@ class GitHubWebhookProvider:
         payload: Mapping[str, Any],
     ) -> str | None:
         return extract_event_body(event_type=event_type, payload=payload)
+
+    def enrich_event_pull_request_info(
+        self,
+        *,
+        event: Any,
+        payload: Mapping[str, Any],
+        github_token: str,
+    ) -> tuple[Any, Mapping[str, Any]]:
+        repo = _safe_text(getattr(event, "repo", None))
+        pr_number = _coerce_positive_int(getattr(event, "pr_number", None))
+        if not repo or pr_number is None:
+            return event, payload
+
+        token = _safe_text(github_token)
+        if not token:
+            webhook_logger.warning(
+                "GITHUB_TOKEN not set, cannot fetch PR info for %s#%s",
+                repo,
+                pr_number,
+            )
+            return event, payload
+
+        url = f"{_GITHUB_API_BASE_URL}/repos/{repo}/pulls/{pr_number}"
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "software-factory",
+        }
+
+        try:
+            response = httpx.get(url, headers=headers, timeout=10.0)
+            if response.status_code >= 400:
+                webhook_logger.warning(
+                    "Failed to fetch PR info from GitHub API: status=%s repo=%s pr=%s",
+                    response.status_code,
+                    repo,
+                    pr_number,
+                )
+                return event, payload
+
+            pr_data = response.json()
+            if not isinstance(pr_data, dict):
+                webhook_logger.warning(
+                    "Failed to fetch PR info from GitHub API: unexpected payload type repo=%s pr=%s",
+                    repo,
+                    pr_number,
+                )
+                return event, payload
+
+            head = pr_data.get("head")
+            head_sha = (
+                _safe_text(head.get("sha")) if isinstance(head, Mapping) else None
+            )
+            if not head_sha:
+                return event, payload
+
+            webhook_logger.info(
+                "Fetched head_sha=%s branch=%s for %s PR#%s",
+                head_sha,
+                _safe_text(head.get("ref")) if isinstance(head, Mapping) else None,
+                repo,
+                pr_number,
+            )
+            event = dataclasses.replace(event, head_sha=head_sha)
+            enriched_payload = dict(payload)
+            enriched_payload["pull_request"] = pr_data
+            return event, enriched_payload
+        except Exception as exc:
+            webhook_logger.warning("Failed to fetch PR info from GitHub API: %s", exc)
+            return event, payload
 
 
 class GitHubGitRemoteProvider:
