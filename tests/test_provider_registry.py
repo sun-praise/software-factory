@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 import pytest
 
+from app.config import get_settings
 from app.providers.registry import (
     FORGE_PROVIDER_CATEGORY,
     GIT_REMOTE_PROVIDER_CATEGORY,
@@ -30,8 +31,10 @@ from app.providers.registry import (
 
 @pytest.fixture(autouse=True)
 def _reset_registry_state() -> None:
+    get_settings.cache_clear()
     reset_provider_registry(include_defaults=True)
     yield
+    get_settings.cache_clear()
     reset_provider_registry(include_defaults=True)
 
 
@@ -275,6 +278,85 @@ def test_get_forge_provider_raises_for_unknown_provider_name() -> None:
         get_forge_provider("missing")
 
     assert "available: github" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("env_key", "register_fn", "get_fn", "provider_factory"),
+    [
+        (
+            "FORGE_PROVIDER",
+            register_forge_provider,
+            get_forge_provider,
+            _CustomForgeProvider,
+        ),
+        (
+            "TASK_SOURCE_PROVIDER",
+            register_task_source_provider,
+            get_task_source_provider,
+            _CustomTaskSourceProvider,
+        ),
+        (
+            "WEBHOOK_PROVIDER",
+            register_webhook_provider,
+            get_webhook_provider,
+            _CustomWebhookProvider,
+        ),
+        (
+            "GIT_REMOTE_PROVIDER",
+            register_git_remote_provider,
+            get_git_remote_provider,
+            _CustomGitRemoteProvider,
+        ),
+    ],
+)
+def test_get_provider_uses_configured_default_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+    register_fn: Callable[..., None],
+    get_fn: Callable[..., Any],
+    provider_factory: Callable[[], Any],
+) -> None:
+    custom_provider = provider_factory()
+    register_fn("custom", custom_provider)
+
+    monkeypatch.setenv(env_key, " Custom ")
+    get_settings.cache_clear()
+
+    assert get_fn() is custom_provider
+
+
+@pytest.mark.parametrize(
+    ("env_key", "get_fn", "expected_fragment"),
+    [
+        ("FORGE_PROVIDER", get_forge_provider, "forge provider 'missing'"),
+        (
+            "TASK_SOURCE_PROVIDER",
+            get_task_source_provider,
+            "task_source provider 'missing'",
+        ),
+        ("WEBHOOK_PROVIDER", get_webhook_provider, "webhook provider 'missing'"),
+        (
+            "GIT_REMOTE_PROVIDER",
+            get_git_remote_provider,
+            "git_remote provider 'missing'",
+        ),
+    ],
+)
+def test_get_provider_raises_for_unknown_configured_default_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+    get_fn: Callable[..., Any],
+    expected_fragment: str,
+) -> None:
+    monkeypatch.setenv(env_key, "missing")
+    get_settings.cache_clear()
+
+    with pytest.raises(ProviderLookupError) as exc:
+        get_fn()
+
+    message = str(exc.value)
+    assert expected_fragment in message
+    assert "available: github" in message
 
 
 def test_list_registered_provider_names_raises_for_unknown_category() -> None:
