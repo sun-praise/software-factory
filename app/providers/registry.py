@@ -25,6 +25,12 @@ _PROVIDER_CATEGORIES = frozenset(
         GIT_REMOTE_PROVIDER_CATEGORY,
     }
 )
+_CATEGORY_TO_SETTINGS_FIELD = {
+    FORGE_PROVIDER_CATEGORY: "forge_provider",
+    TASK_SOURCE_PROVIDER_CATEGORY: "task_source_provider",
+    WEBHOOK_PROVIDER_CATEGORY: "webhook_provider",
+    GIT_REMOTE_PROVIDER_CATEGORY: "git_remote_provider",
+}
 
 
 class ProviderRegistryError(RuntimeError):
@@ -185,7 +191,10 @@ def register_git_remote_provider(
 
 
 def get_forge_provider(name: str | None = None) -> ForgeProvider:
-    resolved_name = resolve_provider_name(name)
+    resolved_name = resolve_provider_name(
+        name,
+        default_name=_configured_default_provider_name(FORGE_PROVIDER_CATEGORY),
+    )
     with _REGISTRY_LOCK:
         _ensure_initialized_locked()
         return cast(
@@ -199,7 +208,10 @@ def get_forge_provider(name: str | None = None) -> ForgeProvider:
 
 
 def get_task_source_provider(name: str | None = None) -> TaskSourceProvider:
-    resolved_name = resolve_provider_name(name)
+    resolved_name = resolve_provider_name(
+        name,
+        default_name=_configured_default_provider_name(TASK_SOURCE_PROVIDER_CATEGORY),
+    )
     with _REGISTRY_LOCK:
         _ensure_initialized_locked()
         return cast(
@@ -213,7 +225,10 @@ def get_task_source_provider(name: str | None = None) -> TaskSourceProvider:
 
 
 def get_webhook_provider(name: str | None = None) -> WebhookProvider:
-    resolved_name = resolve_provider_name(name)
+    resolved_name = resolve_provider_name(
+        name,
+        default_name=_configured_default_provider_name(WEBHOOK_PROVIDER_CATEGORY),
+    )
     with _REGISTRY_LOCK:
         _ensure_initialized_locked()
         return cast(
@@ -227,7 +242,10 @@ def get_webhook_provider(name: str | None = None) -> WebhookProvider:
 
 
 def get_git_remote_provider(name: str | None = None) -> GitRemoteProvider:
-    resolved_name = resolve_provider_name(name)
+    resolved_name = resolve_provider_name(
+        name,
+        default_name=_configured_default_provider_name(GIT_REMOTE_PROVIDER_CATEGORY),
+    )
     with _REGISTRY_LOCK:
         _ensure_initialized_locked()
         return cast(
@@ -354,6 +372,26 @@ def _normalize_provider_name(value: str | None) -> str | None:
         return None
     normalized = str(value).strip().lower()
     return normalized or None
+
+
+def _configured_default_provider_name(category: str) -> str:
+    settings_value = _read_provider_setting(category)
+    normalized = _normalize_provider_name(settings_value)
+    return normalized or DEFAULT_PROVIDER_NAME
+
+
+def _read_provider_setting(category: str) -> str | None:
+    field_name = _CATEGORY_TO_SETTINGS_FIELD.get(category)
+    if field_name is None:
+        return None
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    raw_value = getattr(settings, field_name, DEFAULT_PROVIDER_NAME)
+    if raw_value is None:
+        return None
+    return str(raw_value)
 
 
 def _register_builtin_defaults_locked() -> None:

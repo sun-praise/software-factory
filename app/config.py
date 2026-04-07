@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     db_path: str = "./data/software_factory.db"
     github_webhook_secret: str = ""
     github_token: str = ""
+    forge_provider: str = "github"
+    task_source_provider: str = "github"
+    webhook_provider: str = "github"
+    git_remote_provider: str = "github"
     github_webhook_debounce_seconds: int = 60
     max_autofix_per_pr: int = 3
     max_concurrent_runs: int = 3
@@ -117,6 +121,20 @@ class Settings(BaseSettings):
         if value is None:
             return ""
         return str(value).strip()
+
+    @field_validator(
+        "forge_provider",
+        "task_source_provider",
+        "webhook_provider",
+        "git_remote_provider",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_provider_name(cls, value: Any) -> str:
+        if value is None:
+            return "github"
+        normalized = str(value).strip().lower()
+        return normalized or "github"
 
     model_config = SettingsConfigDict(
         env_file=".env",
