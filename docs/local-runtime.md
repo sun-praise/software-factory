@@ -24,25 +24,25 @@ Or use `scripts/start_system_bg.sh` to manage both processes together.
 
 When running the local `web` service and the local `worker`, both processes must use the same database file.
 
-Do not let `web` fall back to its default `./data/software_factory.db` while `worker` uses a different `DB_PATH`.
+The **default database path** (when `DB_PATH` is not set) is:
 
-Known-good local database path:
-
-```bash
-${HOME}/data/software_factory.db
 ```
+./data/software_factory.db
+```
+
+This is a relative path resolved from the **working directory** where the process is started. When running from the project root (`/home/svtter/work/project/software-factory`), the actual path is:
+
+```
+/home/svtter/work/project/software-factory/data/software_factory.db
+```
+
+> **Do NOT set `DB_PATH=${HOME}/data/software_factory.db`** — that points to a different file outside the project and will cause data to appear missing.
 
 ## Required startup rule
 
-Always start `web` and `worker` with the same `DB_PATH`.
+When starting `web` or `worker` manually, always run from the project root and do **not** override `DB_PATH` unless you have a specific reason.
 
 `DB_PATH` is bootstrap configuration and stays env-only. Do not move it into SQLite or the `/settings` form.
-
-Example:
-
-```bash
-export DB_PATH=${HOME}/data/software_factory.db
-```
 
 Start `web` (recommended — uses the isolation script):
 
@@ -59,7 +59,6 @@ env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
   -u ZHIPU_API_KEY -u ZHIPU_AUTH_TOKEN -u API_TIMEOUT_MS \
   -u DEEPSEEK_API_KEY -u ENABLE_TOOL_SEARCH \
   -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
-  DB_PATH=${HOME}/data/software_factory.db \
   python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8011
 ```
 
@@ -78,8 +77,7 @@ Start `worker` with DeepSeek backend:
 Start `worker` (manual):
 
 ```bash
-env DB_PATH=${HOME}/data/software_factory.db \
-  python3 scripts/run_worker.py --loop --workspace-dir ${HOME}/project/software-factory
+env python3 scripts/run_worker.py --loop --workspace-dir ${HOME}/project/software-factory
 ```
 
 ## Quick verification
