@@ -60,7 +60,7 @@ env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
   -u DEEPSEEK_API_KEY -u ENABLE_TOOL_SEARCH \
   -u CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
   DB_PATH=${HOME}/data/software_factory.db \
-  python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+  python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8011
 ```
 
 Start `worker` (recommended — uses the isolation script):
