@@ -60,6 +60,11 @@ These settings must stay outside SQLite because they are bootstrap, deployment-s
 
 - `DB_PATH`
 - `GITHUB_WEBHOOK_SECRET`
+- `GITEE_WEBHOOK_SECRET`
+- `FORGE_PROVIDER`
+- `TASK_SOURCE_PROVIDER`
+- `WEBHOOK_PROVIDER`
+- `GIT_REMOTE_PROVIDER`
 - provider API keys and auth tokens
 - host / port
 - other deployment-only values that should not be changed from the product

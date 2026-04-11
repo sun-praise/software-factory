@@ -214,6 +214,13 @@ Base settings:
 - `PORT` (`8000`): listen port
 - `DB_PATH` (`./data/software_factory.db`): SQLite file path
 - `GITHUB_WEBHOOK_SECRET` (empty): can be left empty for local debugging; production should enable signature verification
+- `GITEE_WEBHOOK_SECRET` (empty): used when `WEBHOOK_PROVIDER=gitee`
+- `GITHUB_TOKEN` (empty): GitHub API token for PR metadata, comments, and webhook enrichment
+- `GITEE_TOKEN` (empty): Gitee API token for PR metadata, comments, and webhook enrichment
+- `FORGE_PROVIDER` (`github`): forge provider, set to `gitee` to create/comment/query PRs on Gitee
+- `TASK_SOURCE_PROVIDER` (`github`): task-source provider, set to `gitee` to resolve Gitee task URLs
+- `WEBHOOK_PROVIDER` (`github`): webhook provider, set to `gitee` for Gitee webhook headers/signatures
+- `GIT_REMOTE_PROVIDER` (`github`): remote URL provider, set to `gitee` for clone and PR links
 
 Webhook settings:
 
@@ -312,6 +319,17 @@ curl -i -X POST http://127.0.0.1:8001/github/webhook \
 ```
 
 Note: `/github/webhook` already validates signatures. In production, `GITHUB_WEBHOOK_SECRET` should always be configured.
+
+Gitee provider example:
+
+```bash
+export FORGE_PROVIDER=gitee
+export TASK_SOURCE_PROVIDER=gitee
+export WEBHOOK_PROVIDER=gitee
+export GIT_REMOTE_PROVIDER=gitee
+export GITEE_WEBHOOK_SECRET="your-gitee-webhook-secret"
+export GITEE_TOKEN="your-gitee-token"
+```
 
 Syntax / bytecode compilation check:
 

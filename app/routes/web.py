@@ -398,7 +398,7 @@ def _parse_task_submission(payload: IssueSubmissionRequest) -> ParsedTaskTarget:
         pr_number = resolved_pr_number or issue_number
     elif source_kind == TEXT_SOURCE_KIND:
         if not task_text:
-            raise ValueError("Task text is required for non-GitHub submissions.")
+            raise ValueError("Task text is required for direct text submissions.")
         if pr_number is None:
             pr_number = build_manual_text_task_number(
                 repo=repo,
@@ -432,6 +432,13 @@ def _string_or_empty(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _task_source_context_label() -> str:
+    provider_name = str(get_task_source_provider().name or "github").strip().lower()
+    if provider_name == "gitee":
+        return "Gitee"
+    return "GitHub"
 
 
 def _resolve_manual_issue_context(
@@ -517,8 +524,9 @@ def _build_issue_normalized_review(
         issue_parts.append(f"Operator note:\n{description}")
     if resolved_context is not None:
         context_source = resolved_context.source_url or target.source_ref
-        issue_parts.append(f"GitHub context source: {context_source}")
-        issue_parts.append(f"GitHub context:\n{resolved_context.text}")
+        context_label = _task_source_context_label()
+        issue_parts.append(f"{context_label} context source: {context_source}")
+        issue_parts.append(f"{context_label} context:\n{resolved_context.text}")
 
     issue_text = "\n\n".join(part for part in issue_parts if part)
     context_resolved = bool(description or resolved_context is not None)

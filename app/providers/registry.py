@@ -395,6 +395,12 @@ def _read_provider_setting(category: str) -> str | None:
 
 
 def _register_builtin_defaults_locked() -> None:
+    from app.providers.gitee import (
+        GiteeForgeProvider,
+        GiteeGitRemoteProvider,
+        GiteeTaskSourceProvider,
+        GiteeWebhookProvider,
+    )
     from app.providers.github import (
         GitHubForgeProvider,
         GitHubGitRemoteProvider,
@@ -405,8 +411,22 @@ def _register_builtin_defaults_locked() -> None:
     _register_provider_locked(
         store=_forge_providers,
         category=FORGE_PROVIDER_CATEGORY,
+        name="gitee",
+        provider=GiteeForgeProvider(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_forge_providers,
+        category=FORGE_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
         provider=GitHubForgeProvider(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_task_source_providers,
+        category=TASK_SOURCE_PROVIDER_CATEGORY,
+        name="gitee",
+        provider=GiteeTaskSourceProvider(),
         replace=False,
     )
     _register_provider_locked(
@@ -419,8 +439,22 @@ def _register_builtin_defaults_locked() -> None:
     _register_provider_locked(
         store=_webhook_providers,
         category=WEBHOOK_PROVIDER_CATEGORY,
+        name="gitee",
+        provider=GiteeWebhookProvider(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_webhook_providers,
+        category=WEBHOOK_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
         provider=GitHubWebhookProvider(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_git_remote_providers,
+        category=GIT_REMOTE_PROVIDER_CATEGORY,
+        name="gitee",
+        provider=GiteeGitRemoteProvider(),
         replace=False,
     )
     _register_provider_locked(

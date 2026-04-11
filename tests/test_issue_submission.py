@@ -105,6 +105,21 @@ def test_parse_task_submission_uses_resolve_helper_for_issue(monkeypatch) -> Non
     assert target.source_kind == "issue"
 
 
+def test_parse_task_submission_supports_gitee_pull_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TASK_SOURCE_PROVIDER", "gitee")
+    get_settings.cache_clear()
+
+    payload = IssueSubmissionRequest(url="https://gitee.com/acme/widgets/pulls/42")
+    target = web._parse_task_submission(payload)
+
+    assert target.repo == "acme/widgets"
+    assert target.pr_number == 42
+    assert target.resolved_pr_number == 42
+    assert target.source_kind == "pull"
+
+
 def test_submit_issue_api_queues_autofix_run(tmp_path, monkeypatch) -> None:
     db_path = _setup_db(tmp_path)
 

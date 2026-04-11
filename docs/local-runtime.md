@@ -2,6 +2,19 @@
 
 See also: `docs/runtime-config.md` for the DB-vs-env ownership rules and the dev/prod rollout guidance for mutable runtime settings.
 
+## Provider selection
+
+The default provider remains GitHub. To run the same flow against Gitee, set:
+
+```bash
+export FORGE_PROVIDER=gitee
+export TASK_SOURCE_PROVIDER=gitee
+export WEBHOOK_PROVIDER=gitee
+export GIT_REMOTE_PROVIDER=gitee
+export GITEE_WEBHOOK_SECRET="your-gitee-webhook-secret"
+export GITEE_TOKEN="your-gitee-token"
+```
+
 ## Token safety: environment isolation
 
 **The `web` service must never receive AI tokens.** Only the `worker` needs them.

@@ -110,12 +110,16 @@ class WebhookProvider(Protocol):
     @property
     def signature_header(self) -> str: ...
 
+    @property
+    def event_header(self) -> str: ...
+
     def verify_signature(
         self,
         *,
         body: bytes,
         secret: str,
         signature_header: str | None,
+        request_headers: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
     def extract_review_event(

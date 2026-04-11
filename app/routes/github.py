@@ -81,39 +81,44 @@ def _get_filter_reason_for_event(
 async def github_webhook(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
     provider = get_webhook_provider()
+    provider_name = _provider_display_name(provider)
+    provider_key = _provider_name(provider)
     signature_result = provider.verify_signature(
         body=raw_body,
-        secret=get_settings().github_webhook_secret,
+        secret=_webhook_secret_for_provider(provider_key),
         signature_header=request.headers.get(provider.signature_header),
+        request_headers=request.headers,
     )
     if signature_result.status == SignatureStatus.FAILED:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "ok": False,
-                "message": "Invalid GitHub webhook signature",
+                "message": f"Invalid {provider_name} webhook signature",
                 "reason": signature_result.reason,
             },
         )
 
     payload = await _read_payload(request)
-    event_type = request.headers.get("x-github-event", "unknown").strip().lower()
+    event_type = request.headers.get(provider.event_header, "unknown").strip().lower()
     event = provider.extract_review_event(event_type=event_type, payload=payload)
     if event is None:
         return {
             "ok": True,
-            "message": "GitHub webhook received",
+            "message": f"{provider_name} webhook received",
             "event_type": event_type,
             "ignored": True,
             "reason": "unsupported_or_non_pr_event",
             "signature": signature_result.status,
         }
 
+    normalized_event_type = _provider_event_type(event, fallback=event_type)
+
     if not event.head_sha and event.repo and event.pr_number:
         event, payload = provider.enrich_event_pull_request_info(
             event=event,
             payload=payload,
-            github_token=get_settings().github_token,
+            github_token=_webhook_token_for_provider(provider_key),
         )
 
     run_id: int | None = None
@@ -121,16 +126,19 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     queue_status = "not_queued"
     remaining_quota: int | None = None
     runtime_settings: RuntimeSettings | None = None
-    should_ignore_actor = event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
+    should_ignore_actor = normalized_event_type in _REVIEW_EVENTS_ALLOWING_BOT_ACTORS
     event_body = provider.extract_event_body(event_type=event_type, payload=payload)
     try:
         with connect_db() as conn:
             runtime_settings = resolve_runtime_settings(conn)
-            if _is_autofix_summary_comment(event_type=event_type, body=event_body):
+            if _is_autofix_summary_comment(
+                event_type=normalized_event_type,
+                body=event_body,
+            ):
                 return {
                     "ok": True,
-                    "message": "GitHub webhook received",
-                    "event_type": event_type,
+                    "message": f"{provider_name} webhook received",
+                    "event_type": normalized_event_type,
                     "ignored": True,
                     "reason": "autofix_summary_comment",
                     "signature": signature_result.status,
@@ -138,7 +146,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                     "pr_number": event.pr_number,
                 }
             filter_reason = _get_filter_reason_for_event(
-                event_type,
+                normalized_event_type,
                 repo=event.repo,
                 actor=None if should_ignore_actor else event.actor,
                 body=event_body,
@@ -147,8 +155,8 @@ async def github_webhook(request: Request) -> dict[str, Any]:
             if filter_reason is not None:
                 return {
                     "ok": True,
-                    "message": "GitHub webhook received",
-                    "event_type": event_type,
+                    "message": f"{provider_name} webhook received",
+                    "event_type": normalized_event_type,
                     "ignored": True,
                     "reason": filter_reason,
                     "signature": signature_result.status,
@@ -179,7 +187,7 @@ async def github_webhook(request: Request) -> dict[str, Any]:
                     pr_number=event.pr_number,
                     head_sha=event.head_sha,
                 )
-                if _should_enqueue_for_event(event_type):
+                if _should_enqueue_for_event(normalized_event_type):
                     review_batch_id = build_review_batch_id(normalized_review)
                     normalized_review["review_batch_id"] = review_batch_id
                     idempotency_key = build_task_idempotency_key(
@@ -232,8 +240,8 @@ async def github_webhook(request: Request) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "message": "GitHub webhook received",
-        "event_type": event_type,
+        "message": f"{provider_name} webhook received",
+        "event_type": normalized_event_type,
         "signature": signature_result.status,
         "repo": event.repo,
         "pr_number": event.pr_number,
@@ -466,3 +474,35 @@ def _as_text(value: Any) -> str | None:
         if text:
             return text
     return None
+
+
+def _provider_display_name(provider: Any) -> str:
+    normalized_name = _provider_name(provider)
+    if normalized_name == "gitee":
+        return "Gitee"
+    return "GitHub"
+
+
+def _provider_name(provider: Any) -> str:
+    return str(getattr(provider, "name", "") or "github").strip().lower() or "github"
+
+
+def _webhook_secret_for_provider(provider_name: str) -> str:
+    settings = get_settings()
+    normalized_name = provider_name.strip().lower()
+    if normalized_name == "gitee":
+        return settings.gitee_webhook_secret
+    return settings.github_webhook_secret
+
+
+def _webhook_token_for_provider(provider_name: str) -> str:
+    settings = get_settings()
+    normalized_name = provider_name.strip().lower()
+    if normalized_name == "gitee":
+        return settings.gitee_token or settings.github_token
+    return settings.github_token
+
+
+def _provider_event_type(event: Any, *, fallback: str) -> str:
+    normalized = str(getattr(event, "event_type", "") or fallback).strip().lower()
+    return normalized or fallback.strip().lower()

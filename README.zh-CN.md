@@ -208,6 +208,13 @@ cp example.env .env
 - `PORT`（`8000`）：服务监听端口
 - `DB_PATH`（`./data/software_factory.db`）：SQLite 文件路径
 - `GITHUB_WEBHOOK_SECRET`（空字符串）：本地联调可留空；生产环境建议启用签名校验
+- `GITEE_WEBHOOK_SECRET`（空字符串）：当 `WEBHOOK_PROVIDER=gitee` 时使用
+- `GITHUB_TOKEN`（空字符串）：GitHub PR 元数据、评论和 webhook 补全所需 token
+- `GITEE_TOKEN`（空字符串）：Gitee PR 元数据、评论和 webhook 补全所需 token
+- `FORGE_PROVIDER`（`github`）：Forge provider，设为 `gitee` 可切换到 Gitee PR 能力
+- `TASK_SOURCE_PROVIDER`（`github`）：任务来源 provider，设为 `gitee` 可解析 Gitee 链接
+- `WEBHOOK_PROVIDER`（`github`）：Webhook provider，设为 `gitee` 可使用 Gitee 头和签名校验
+- `GIT_REMOTE_PROVIDER`（`github`）：远端地址 provider，设为 `gitee` 可生成 Gitee clone / PR 链接
 
 Webhook 配置：
 
@@ -306,6 +313,17 @@ curl -i -X POST http://127.0.0.1:8001/github/webhook \
 ```
 
 说明：`/github/webhook` 已实现签名校验；生产环境请务必配置 `GITHUB_WEBHOOK_SECRET`。
+
+Gitee provider 示例：
+
+```bash
+export FORGE_PROVIDER=gitee
+export TASK_SOURCE_PROVIDER=gitee
+export WEBHOOK_PROVIDER=gitee
+export GIT_REMOTE_PROVIDER=gitee
+export GITEE_WEBHOOK_SECRET="your-gitee-webhook-secret"
+export GITEE_TOKEN="your-gitee-token"
+```
 
 语法 / 字节码编译检查：
 
