@@ -62,9 +62,15 @@ def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> Non
     calls: dict[str, object] = {}
 
     class _FakeWebhookProvider:
+        name = "github"
+
         @property
         def signature_header(self) -> str:
             return "X-Custom-Signature"
+
+        @property
+        def event_header(self) -> str:
+            return "X-GitHub-Event"
 
         def verify_signature(
             self,
@@ -72,6 +78,7 @@ def test_webhook_route_uses_webhook_provider(tmp_path: Path, monkeypatch) -> Non
             body: bytes,
             secret: str,
             signature_header: str | None,
+            request_headers=None,
         ) -> SignatureVerificationResult:
             calls["verify"] = {
                 "body": body,
@@ -164,9 +171,15 @@ def test_webhook_route_uses_provider_for_issue_comment_pr_info_enrichment(
     calls: dict[str, object] = {}
 
     class _FakeWebhookProvider:
+        name = "github"
+
         @property
         def signature_header(self) -> str:
             return "X-Custom-Signature"
+
+        @property
+        def event_header(self) -> str:
+            return "X-GitHub-Event"
 
         def verify_signature(
             self,
@@ -174,6 +187,7 @@ def test_webhook_route_uses_provider_for_issue_comment_pr_info_enrichment(
             body: bytes,
             secret: str,
             signature_header: str | None,
+            request_headers=None,
         ) -> SignatureVerificationResult:
             return SignatureVerificationResult(status=SignatureStatus.VERIFIED)
 

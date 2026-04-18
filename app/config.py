@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     db_path: str = "./data/software_factory.db"
     github_webhook_secret: str = ""
     github_token: str = ""
+    gitee_webhook_secret: str = ""
+    gitee_token: str = ""
     forge_provider: str = "github"
     task_source_provider: str = "github"
     webhook_provider: str = "github"

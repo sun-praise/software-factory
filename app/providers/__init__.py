@@ -1,5 +1,7 @@
 """Provider interfaces and registry utilities."""
 
+from app.providers import gitee, github
+
 from app.providers.registry import (
     FORGE_PROVIDER_CATEGORY,
     GIT_REMOTE_PROVIDER_CATEGORY,
@@ -62,4 +64,6 @@ __all__ = [
     "list_registered_provider_names",
     "snapshot_registry",
     "reset_provider_registry",
+    "github",
+    "gitee",
 ]

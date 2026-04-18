@@ -691,13 +691,19 @@ class GitHubWebhookProvider:
     def signature_header(self) -> str:
         return GITHUB_SIGNATURE_HEADER
 
+    @property
+    def event_header(self) -> str:
+        return "X-GitHub-Event"
+
     def verify_signature(
         self,
         *,
         body: bytes,
         secret: str,
         signature_header: str | None,
+        request_headers: Mapping[str, Any] | None = None,
     ) -> Any:
+        del request_headers
         return verify_github_signature(
             body=body,
             secret=secret,

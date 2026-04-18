@@ -138,18 +138,24 @@ class _CustomWebhookProvider:
     def signature_header(self) -> str:
         return "X-Custom-Signature"
 
+    @property
+    def event_header(self) -> str:
+        return "X-Custom-Event"
+
     def verify_signature(
         self,
         *,
         body: bytes,
         secret: str,
         signature_header: str | None,
+        request_headers: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         return {
             "ok": True,
             "body_length": len(body),
             "secret": secret,
             "signature": signature_header,
+            "request_headers": request_headers,
         }
 
     def extract_review_event(
@@ -198,10 +204,22 @@ def test_default_github_providers_are_registered() -> None:
     assert get_webhook_provider().name == "github"
     assert get_git_remote_provider().name == "github"
 
-    assert list_registered_provider_names(FORGE_PROVIDER_CATEGORY) == ("github",)
-    assert list_registered_provider_names(TASK_SOURCE_PROVIDER_CATEGORY) == ("github",)
-    assert list_registered_provider_names(WEBHOOK_PROVIDER_CATEGORY) == ("github",)
-    assert list_registered_provider_names(GIT_REMOTE_PROVIDER_CATEGORY) == ("github",)
+    assert list_registered_provider_names(FORGE_PROVIDER_CATEGORY) == (
+        "gitee",
+        "github",
+    )
+    assert list_registered_provider_names(TASK_SOURCE_PROVIDER_CATEGORY) == (
+        "gitee",
+        "github",
+    )
+    assert list_registered_provider_names(WEBHOOK_PROVIDER_CATEGORY) == (
+        "gitee",
+        "github",
+    )
+    assert list_registered_provider_names(GIT_REMOTE_PROVIDER_CATEGORY) == (
+        "gitee",
+        "github",
+    )
 
 
 def test_resolve_provider_name_uses_default_and_normalizes_case() -> None:
@@ -217,6 +235,7 @@ def test_register_forge_provider_supports_custom_lookup() -> None:
     assert get_forge_provider("custom") is custom
     assert list_registered_provider_names(FORGE_PROVIDER_CATEGORY) == (
         "custom",
+        "gitee",
         "github",
     )
 
@@ -228,6 +247,7 @@ def test_register_task_source_provider_supports_custom_lookup() -> None:
     assert get_task_source_provider("custom") is custom
     assert list_registered_provider_names(TASK_SOURCE_PROVIDER_CATEGORY) == (
         "custom",
+        "gitee",
         "github",
     )
 
@@ -239,6 +259,7 @@ def test_register_webhook_provider_supports_custom_lookup() -> None:
     assert get_webhook_provider("custom") is custom
     assert list_registered_provider_names(WEBHOOK_PROVIDER_CATEGORY) == (
         "custom",
+        "gitee",
         "github",
     )
 
@@ -250,6 +271,7 @@ def test_register_git_remote_provider_supports_custom_lookup() -> None:
     assert get_git_remote_provider("custom") is custom
     assert list_registered_provider_names(GIT_REMOTE_PROVIDER_CATEGORY) == (
         "custom",
+        "gitee",
         "github",
     )
 
@@ -277,7 +299,7 @@ def test_get_forge_provider_raises_for_unknown_provider_name() -> None:
     with pytest.raises(ProviderLookupError) as exc:
         get_forge_provider("missing")
 
-    assert "available: github" in str(exc.value)
+    assert "available: gitee, github" in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -382,7 +404,7 @@ def test_get_provider_raises_for_unknown_configured_default_provider(
 
     message = str(exc.value)
     assert expected_fragment in message
-    assert "available: github" in message
+    assert "available: gitee, github" in message
 
 
 @pytest.mark.parametrize(
