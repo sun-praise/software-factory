@@ -874,6 +874,10 @@ def rollback_config_value(
     pre_update_value = (
         str(current_row["value"]) if current_row is not None else None
     )
+    if pre_update_value is not None:
+        pre_update_value = _normalize_persisted_runtime_value(
+            spec, pre_update_value
+        )
     if rollback_value is None:
         conn.execute("DELETE FROM app_feature_flags WHERE key = ?", (key,))
         audit_new_value = None

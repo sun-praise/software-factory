@@ -295,3 +295,111 @@ def test_audit_entries_have_complete_metadata(monkeypatch, tmp_path) -> None:
     assert entry.change_source == "web.settings"
     assert entry.created_at is not None
     assert entry.id > 0
+
+
+def test_rollback_list_value_no_spurious_audit(monkeypatch, tmp_path) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_BOT_LOGINS_KEY: '["a","b"]'},
+        changed_by="test",
+        change_source="test",
+    )
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_BOT_LOGINS_KEY: '["c"]'},
+        changed_by="test",
+        change_source="test",
+    )
+
+    entries = get_config_audit_history(conn, key=RUNTIME_BOT_LOGINS_KEY)
+    second_change = entries[0]
+    assert second_change.new_value == '["c"]'
+
+    rollback_config_value(
+        conn,
+        key=RUNTIME_BOT_LOGINS_KEY,
+        target_audit_id=second_change.id,
+        changed_by="operator",
+        change_source="api.rollback",
+    )
+
+    audit_entries = get_config_audit_history(conn, key=RUNTIME_BOT_LOGINS_KEY)
+    assert len(audit_entries) == 3
+    rollback_entry = audit_entries[0]
+    assert rollback_entry.change_source == "api.rollback"
+    assert rollback_entry.new_value == '["a", "b"]'
+
+
+def test_rollback_same_value_no_audit_entry(monkeypatch, tmp_path) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "5"},
+        changed_by="test",
+        change_source="test",
+    )
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "8"},
+        changed_by="test",
+        change_source="test",
+    )
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "5"},
+        changed_by="test",
+        change_source="test",
+    )
+
+    entries = get_config_audit_history(conn, key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY)
+    assert len(entries) == 3
+
+    second_change = [e for e in entries if e.new_value == "8"][0]
+
+    rollback_config_value(
+        conn,
+        key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY,
+        target_audit_id=second_change.id,
+        changed_by="operator",
+        change_source="api.rollback",
+    )
+
+    audit_entries = get_config_audit_history(conn, key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY)
+    assert len(audit_entries) == 3
+
+
+def test_rollback_uses_changed_by_from_caller(monkeypatch, tmp_path) -> None:
+    _clear_runtime_override_env(monkeypatch, tmp_path)
+    conn = _make_conn()
+
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "5"},
+        changed_by="alice",
+        change_source="web.settings",
+    )
+    save_runtime_setting_values(
+        conn,
+        {RUNTIME_MAX_RETRY_ATTEMPTS_KEY: "8"},
+        changed_by="bob",
+        change_source="web.settings",
+    )
+
+    entries = get_config_audit_history(conn, key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY)
+    second_change = entries[0]
+
+    rollback_config_value(
+        conn,
+        key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY,
+        target_audit_id=second_change.id,
+        changed_by="carol",
+        change_source="api.rollback",
+    )
+
+    audit_entries = get_config_audit_history(conn, key=RUNTIME_MAX_RETRY_ATTEMPTS_KEY)
+    assert audit_entries[0].changed_by == "carol"

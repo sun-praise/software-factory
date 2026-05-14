@@ -1026,6 +1026,7 @@ async def config_rollback_api(request: Request) -> JSONResponse:
     body = await request.json()
     key = body.get("key")
     target_audit_id = body.get("target_audit_id")
+    changed_by = body.get("changed_by", "operator")
     if not key or target_audit_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1044,7 +1045,7 @@ async def config_rollback_api(request: Request) -> JSONResponse:
                 conn,
                 key=key,
                 target_audit_id=target_audit_id,
-                changed_by="operator",
+                changed_by=changed_by,
                 change_source="api.rollback",
             )
         except ValueError as exc:
