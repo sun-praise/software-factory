@@ -14,6 +14,7 @@ jobs:
     name: Require Linked Issue
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: nearform-actions/github-action-check-linked-issues@05f1d702b9a2d51123a6f32a51292eff6dc78815 # v1.8.3
         id: check-linked-issues
