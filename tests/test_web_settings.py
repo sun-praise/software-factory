@@ -258,3 +258,185 @@ def test_save_settings_writes_runtime_audit_log(tmp_path: Path) -> None:
     assert rows
     assert rows[0]["changed_by"] == "settings_ui"
     assert rows[0]["change_source"] == "web.settings"
+
+
+def test_audit_log_api_returns_empty_when_no_changes(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/audit-log")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["entries"] == []
+    assert payload["count"] == 0
+
+
+def test_audit_log_api_returns_entries_after_save(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        client.post(
+            "/settings",
+            data={
+                "github_webhook_debounce_seconds": "45",
+                "max_autofix_per_pr": "7",
+                "max_concurrent_runs": "5",
+                "stale_run_timeout_seconds": "321",
+                "pr_lock_ttl_seconds": "654",
+                "max_retry_attempts": "4",
+                "retry_backoff_base_seconds": "12",
+                "retry_backoff_max_seconds": "900",
+                "bot_logins_text": "",
+                "noise_comment_patterns_text": "",
+                "managed_repo_prefixes_text": "",
+                "autofix_comment_author": "autofix-bot",
+            },
+            follow_redirects=False,
+        )
+        response = client.get("/api/settings/audit-log")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] > 0
+    entry = payload["entries"][0]
+    assert "key" in entry
+    assert "old_value" in entry
+    assert "new_value" in entry
+    assert "changed_by" in entry
+    assert "change_source" in entry
+    assert "created_at" in entry
+
+
+def test_audit_log_api_filters_by_key(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        client.post(
+            "/settings",
+            data={
+                "github_webhook_debounce_seconds": "45",
+                "max_autofix_per_pr": "7",
+                "max_concurrent_runs": "5",
+                "stale_run_timeout_seconds": "321",
+                "pr_lock_ttl_seconds": "654",
+                "max_retry_attempts": "4",
+                "retry_backoff_base_seconds": "12",
+                "retry_backoff_max_seconds": "900",
+                "bot_logins_text": "",
+                "noise_comment_patterns_text": "",
+                "managed_repo_prefixes_text": "",
+                "autofix_comment_author": "autofix-bot",
+            },
+            follow_redirects=False,
+        )
+        response = client.get(
+            "/api/settings/audit-log",
+            params={"key": "runtime.max_retry_attempts"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["entries"][0]["key"] == "runtime.max_retry_attempts"
+
+
+def test_rollback_api_restores_previous_value(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        client.post(
+            "/settings",
+            data={
+                "github_webhook_debounce_seconds": "60",
+                "max_autofix_per_pr": "3",
+                "max_concurrent_runs": "3",
+                "stale_run_timeout_seconds": "900",
+                "pr_lock_ttl_seconds": "900",
+                "max_retry_attempts": "5",
+                "retry_backoff_base_seconds": "30",
+                "retry_backoff_max_seconds": "1800",
+                "bot_logins_text": "",
+                "noise_comment_patterns_text": "",
+                "managed_repo_prefixes_text": "",
+                "autofix_comment_author": "software-factory[bot]",
+            },
+            follow_redirects=False,
+        )
+        client.post(
+            "/settings",
+            data={
+                "github_webhook_debounce_seconds": "60",
+                "max_autofix_per_pr": "3",
+                "max_concurrent_runs": "3",
+                "stale_run_timeout_seconds": "900",
+                "pr_lock_ttl_seconds": "900",
+                "max_retry_attempts": "8",
+                "retry_backoff_base_seconds": "30",
+                "retry_backoff_max_seconds": "1800",
+                "bot_logins_text": "",
+                "noise_comment_patterns_text": "",
+                "managed_repo_prefixes_text": "",
+                "autofix_comment_author": "software-factory[bot]",
+            },
+            follow_redirects=False,
+        )
+
+        audit_response = client.get(
+            "/api/settings/audit-log",
+            params={"key": "runtime.max_retry_attempts"},
+        )
+        assert audit_response.status_code == 200
+        entries = audit_response.json()["entries"]
+        assert len(entries) == 2
+        latest_entry = entries[0]
+        assert latest_entry["new_value"] == "8"
+
+        rollback_response = client.post(
+            "/api/settings/rollback",
+            json={
+                "key": "runtime.max_retry_attempts",
+                "target_audit_id": latest_entry["id"],
+            },
+        )
+
+    assert rollback_response.status_code == 200
+    result = rollback_response.json()
+    assert result["ok"] is True
+    assert result["current"]["effective"] == 5
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        audit_rows = conn.execute(
+            "SELECT changed_by, change_source FROM app_config_audit_log WHERE key = 'runtime.max_retry_attempts' ORDER BY id"
+        ).fetchall()
+
+    assert any(
+        row["change_source"] == "api.rollback" for row in audit_rows
+    )
+
+
+def test_rollback_api_rejects_missing_params(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/settings/rollback",
+            json={"key": "runtime.max_retry_attempts"},
+        )
+
+    assert response.status_code == 400
+
+
+def test_audit_log_api_rejects_invalid_limit(tmp_path: Path) -> None:
+    _setup_db(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/settings/audit-log",
+            params={"limit": 0},
+        )
+
+    assert response.status_code == 400

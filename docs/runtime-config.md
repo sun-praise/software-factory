@@ -118,3 +118,80 @@ The application uses a single SQLite file shared between the `web` and `worker` 
 - **Read during write**: WAL mode is not enabled; readers may see `SQLITE_BUSY` if a write transaction is in progress.
 - **Mitigation**: Keep write transactions short. The `save_runtime_setting_values()` function performs a single `executemany` + `commit` and should complete well within the busy-timeout window.
 - **Practical constraint**: The current workload (operator-initiated settings saves, webhook processing) generates very low write concurrency. If concurrent write throughput increases (e.g. high-frequency webhook bursts), consider enabling WAL mode or migrating to a client-server database.
+
+## Worker Refresh Semantics
+
+Workers consume DB-backed config on a **per-task-read** basis — not via polling or pub/sub.
+
+### How It Works
+
+1. The worker loop (`scripts/run_worker.py`) calls `resolve_runtime_settings(conn)` at the start of every `_process_one()` iteration.
+2. `resolve_runtime_settings()` performs a fresh `SELECT` from `app_feature_flags` on every call (no caching).
+3. The resolved `RuntimeSettings` is passed to `claim_next_queued_run()` and `run_once()` for that single task.
+4. On the next loop iteration, the worker re-reads the DB, picking up any changes saved via `/settings` or the API.
+
+### Implications
+
+- **No restart needed**: Changing a config value through `/settings` or the API takes effect on the next worker loop iteration (within ~2 seconds at the default `--interval-seconds`).
+- **No polling overhead**: There is no background polling thread. The read happens as part of normal task processing.
+- **No subscription mechanism**: There is no push-based notification (e.g. PostgreSQL `LISTEN/NOTIFY`). Workers simply re-read on each iteration.
+- **Stale reads within a task**: A single `run_once()` call uses the settings snapshot from its invocation. Mid-task config changes do not affect an in-progress run.
+- **Startup-only settings**: Bootstrap settings like `DB_PATH`, `WORKER_ID`, and provider selections are read once at process start via environment variables and are not refreshable from DB.
+
+### Refresh Latency Table
+
+| Setting Type | Refresh Mechanism | Max Staleness |
+|---|---|---|
+| Runtime settings (DB-backed) | Per-task DB read | ~2 seconds (one loop interval) |
+| Feature flags (agent config) | Per-task DB read | ~2 seconds (one loop interval) |
+| Bootstrap settings (env-only) | Process start only | Until process restart |
+
+## Change History and Rollback
+
+### Audit History API
+
+All config changes are recorded in `app_config_audit_log`. Operators can query change history without direct database access:
+
+```
+GET /api/settings/audit-log                    # all recent changes
+GET /api/settings/audit-log?key=runtime.max_retry_attempts  # filter by key
+GET /api/settings/audit-log?limit=20           # limit results (1-500)
+```
+
+Each entry includes:
+- `key`: the setting key
+- `old_value`: previous value (or `null` if first write)
+- `new_value`: the new value
+- `changed_by`: who made the change (e.g. `settings_ui`, `operator`)
+- `change_source`: the interface used (e.g. `web.settings`, `api.rollback`)
+- `created_at`: timestamp
+
+### Rollback API
+
+To revert a setting to a previous value:
+
+```
+POST /api/settings/rollback
+Content-Type: application/json
+
+{
+  "key": "runtime.max_retry_attempts",
+  "target_audit_id": 42
+}
+```
+
+This restores the `old_value` from the specified audit entry. The rollback itself is recorded as a new audit entry with `change_source: "api.rollback"`.
+
+### Rollback Workflow
+
+1. Find the target entry: `GET /api/settings/audit-log?key=<setting>`
+2. Identify the `id` of the change you want to undo
+3. Rollback: `POST /api/settings/rollback` with `key` and `target_audit_id`
+4. Verify: `GET /api/settings/runtime` to confirm the effective value
+
+### Constraints
+
+- Only DB-backed settings (`ownership: "db"`) can be rolled back
+- Rolling back to a state where `old_value` is `null` removes the DB entry entirely, reverting to the code default
+- Rollback writes a new audit entry; it does not delete history
+- If the target audit entry's `old_value` is invalid (e.g. corrupted), the rollback returns a 400 error
