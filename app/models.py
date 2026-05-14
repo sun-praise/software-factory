@@ -126,6 +126,21 @@ CREATE TABLE IF NOT EXISTS app_config_audit_log (
 )
 
 
+USER_API_KEYS_TABLE = TableDef(
+    name="user_api_keys",
+    create_sql="""
+CREATE TABLE IF NOT EXISTS user_api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+""".strip(),
+)
+
 SCHEMA_STATEMENTS = [
     SESSIONS_TABLE.create_sql,
     PULL_REQUESTS_TABLE.create_sql,
@@ -133,6 +148,7 @@ SCHEMA_STATEMENTS = [
     AUTOFIX_RUNS_TABLE.create_sql,
     APP_FEATURE_FLAGS_TABLE.create_sql,
     APP_CONFIG_AUDIT_LOG_TABLE.create_sql,
+    USER_API_KEYS_TABLE.create_sql,
     "CREATE INDEX IF NOT EXISTS idx_sessions_repo_branch ON sessions(repo, branch);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_pull_requests_repo_pr_number ON pull_requests(repo, pr_number);",
     "CREATE INDEX IF NOT EXISTS idx_review_events_repo_pr_number ON review_events(repo, pr_number);",
@@ -142,6 +158,7 @@ SCHEMA_STATEMENTS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_autofix_runs_idempotency_key ON autofix_runs(idempotency_key);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_review_events_event_key ON review_events(event_key);",
     "CREATE INDEX IF NOT EXISTS idx_app_config_audit_log_key_created_at ON app_config_audit_log(key, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);",
 ]
 
 
