@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to check'
+        required: false
+        default: '0'
 
 permissions:
   contents: read
@@ -13,15 +18,49 @@ permissions:
 jobs:
   linked-issue:
     name: Require Linked Issue
-    if: github.event.pull_request.draft == false
+    if: >
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: nearform-actions/github-action-check-linked-issues@05f1d702b9a2d51123a6f32a51292eff6dc78815 # v1.8.3
-        id: check-linked-issues
+      - name: Check linked issues
+        uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          exclude-branches: "dependabot/**"
-          exclude-labels: "skip-issue-check, documentation"
-          loose-matching: true
-          comment: false
+          script: |
+            let prNumber;
+            if (context.eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+            } else {
+              const inputNumber = parseInt('${{ github.event.inputs.pr_number }}', 10);
+              if (inputNumber > 0) {
+                prNumber = inputNumber;
+              } else {
+                core.setFailed('workflow_dispatch requires pr_number input');
+                return;
+              }
+            }
+
+            const result = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 10) {
+                      totalCount
+                    }
+                  }
+                }
+              }
+            `, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: prNumber,
+            });
+
+            const linkedIssues = result.repository.pullRequest.closingIssuesReferences.totalCount;
+            if (linkedIssues > 0) {
+              console.log(`Found ${linkedIssues} linked issue(s) for PR #${prNumber}`);
+              return;
+            }
+
+            core.setFailed(`No linked issue found for PR #${prNumber}.`);
