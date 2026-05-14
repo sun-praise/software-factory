@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 
 from app.config import get_settings
@@ -14,8 +15,6 @@ from scripts.backfill_runtime_settings import _collect_env_overrides
 
 
 def _make_conn(tmp_path) -> sqlite3.Connection:
-    import os
-
     get_settings.cache_clear()
     db_path = tmp_path / "backfill_test.db"
     os.environ["DB_PATH"] = str(db_path)
@@ -95,23 +94,16 @@ def test_backfill_skips_already_stored_keys(monkeypatch, tmp_path) -> None:
 def test_backfill_dry_run_does_not_write(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "9")
-    _make_conn(tmp_path)
+    conn = _make_conn(tmp_path)
 
     from scripts.backfill_runtime_settings import backfill_runtime_settings
 
     backfill_runtime_settings(dry_run=True)
 
-    import os
-
-    db_path = os.environ["DB_PATH"]
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM app_feature_flags WHERE key LIKE 'runtime.%'"
-    ).fetchone()
+    stored = load_runtime_setting_rows(conn)
     conn.close()
 
-    assert rows["cnt"] == 0
+    assert RUNTIME_MAX_AUTOFIX_PER_PR_KEY not in stored
 
 
 def test_backfill_noop_when_no_env_vars(monkeypatch, tmp_path) -> None:

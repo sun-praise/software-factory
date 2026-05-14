@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,8 +18,6 @@ from app.services.runtime_settings import (  # noqa: E402
 
 
 def _collect_env_overrides() -> dict[str, str]:
-    import os
-
     overrides: dict[str, str] = {}
     for spec in _RUNTIME_SETTING_SPECS:
         if spec.ownership != _DB_OWNERSHIP:
