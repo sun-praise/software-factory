@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from app.config import get_settings
 from app.db import connect_db
 from app.services.byok import (
     SUPPORTED_PROVIDERS,
@@ -22,11 +23,30 @@ _PROVIDERS = [
 ]
 
 
+async def _verify_byok_admin(request: Request) -> None:
+    settings = get_settings()
+    admin_token = settings.byok_admin_token
+    if not admin_token:
+        return
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[len("Bearer "):]
+    else:
+        token = auth
+    if token != admin_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing BYOK admin token",
+        )
+
+
 @router.get("/byok", response_class=HTMLResponse)
 async def byok_page(request: Request) -> HTMLResponse:
     templates = request.app.state.templates
+    added = request.query_params.get("added") == "1"
     with connect_db() as conn:
         keys = list_api_keys(conn)
+    message = "API key added successfully." if added else None
     return templates.TemplateResponse(
         request=request,
         name="byok.html",
@@ -35,8 +55,8 @@ async def byok_page(request: Request) -> HTMLResponse:
             "title": "API Keys (BYOK)",
             "keys": keys,
             "providers": _PROVIDERS,
-            "message": None,
-            "message_class": "ok",
+            "message": message,
+            "message_class": "ok" if added else "",
             "form": {},
         },
     )
@@ -52,7 +72,7 @@ async def byok_add_key(request: Request) -> HTMLResponse:
 
     try:
         payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except Exception:
+    except (ValueError, TypeError) as exc:
         return templates.TemplateResponse(
             request=request,
             name="byok.html",
@@ -61,7 +81,7 @@ async def byok_add_key(request: Request) -> HTMLResponse:
                 "title": "API Keys (BYOK)",
                 "keys": _load_keys(),
                 "providers": _PROVIDERS,
-                "message": "Invalid input.",
+                "message": f"Invalid input: {exc}",
                 "message_class": "",
                 "form": {"provider": provider, "label": label},
             },
@@ -92,12 +112,12 @@ async def byok_add_key(request: Request) -> HTMLResponse:
 
 @router.post("/byok/{key_id}/toggle", response_class=HTMLResponse)
 async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
-    form = await request.form()
-    enabled = form.get("enabled") != "false"
     with connect_db() as conn:
-        updated = toggle_api_key(conn, key_id, enabled=not enabled)
-    if not updated:
-        raise HTTPException(status_code=404, detail="Key not found")
+        keys = list_api_keys(conn)
+        current = next((k for k in keys if k.id == key_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Key not found")
+        updated = toggle_api_key(conn, key_id, enabled=not current.enabled)
     return RedirectResponse(url="/byok", status_code=303)
 
 
@@ -110,7 +130,7 @@ async def byok_delete_key(request: Request, key_id: int) -> HTMLResponse:
     return RedirectResponse(url="/byok", status_code=303)
 
 
-@router.get("/api/byok/keys")
+@router.get("/api/byok/keys", dependencies=[Depends(_verify_byok_admin)])
 async def api_list_keys() -> JSONResponse:
     with connect_db() as conn:
         keys = list_api_keys(conn)
@@ -131,7 +151,7 @@ async def api_list_keys() -> JSONResponse:
     )
 
 
-@router.post("/api/byok/keys")
+@router.post("/api/byok/keys", dependencies=[Depends(_verify_byok_admin)])
 async def api_add_key(request: Request) -> JSONResponse:
     body = await request.json()
     provider = str(body.get("provider", "")).strip()
@@ -168,7 +188,11 @@ async def api_add_key(request: Request) -> JSONResponse:
     )
 
 
-@router.delete("/api/byok/keys/{key_id}")
+@router.delete(
+    "/api/byok/keys/{key_id}",
+    response_class=JSONResponse,
+    dependencies=[Depends(_verify_byok_admin)],
+)
 async def api_delete_key(key_id: int) -> JSONResponse:
     with connect_db() as conn:
         deleted = delete_api_key(conn, key_id)

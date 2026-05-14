@@ -59,6 +59,38 @@ class TestEncryptDecrypt:
         assert encrypted_a != encrypted_b
         get_settings.cache_clear()
 
+    def test_same_plaintext_different_ciphertexts(self):
+        original = "sk-same-key"
+        encrypted_a = _encrypt(original)
+        encrypted_b = _encrypt(original)
+        assert encrypted_a != encrypted_b
+        assert _decrypt(encrypted_a) == original
+        assert _decrypt(encrypted_b) == original
+
+    def test_missing_encryption_key_raises(self, monkeypatch):
+        from app.config import get_settings
+
+        monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+        get_settings.cache_clear()
+        with pytest.raises(RuntimeError, match="GITHUB_WEBHOOK_SECRET"):
+            _encrypt("test")
+        get_settings.cache_clear()
+
+    def test_wrong_key_decrypt_fails(self, monkeypatch):
+        from cryptography.fernet import InvalidToken
+
+        monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret-a")
+        from app.config import get_settings
+
+        get_settings.cache_clear()
+        encrypted = _encrypt("test-key")
+
+        monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret-b")
+        get_settings.cache_clear()
+        with pytest.raises(InvalidToken):
+            _decrypt(encrypted)
+        get_settings.cache_clear()
+
 
 class TestMaskKey:
     def test_short_key(self):

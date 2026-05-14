@@ -3,10 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
 
@@ -37,29 +38,23 @@ _PROVIDER_ENV_MAP = {
 }
 
 
-def _get_encryption_key() -> bytes:
+def _get_fernet() -> Fernet:
     settings = get_settings()
-    secret = settings.github_webhook_secret or "software-factory-byok-default"
-    return hashlib.sha256(secret.encode("utf-8")).digest()
+    secret = settings.github_webhook_secret
+    if not secret:
+        raise RuntimeError(
+            "GITHUB_WEBHOOK_SECRET must be configured for BYOK encryption"
+        )
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
 
 
 def _encrypt(plaintext: str) -> str:
-    key = _get_encryption_key()
-    raw = plaintext.encode("utf-8")
-    encrypted = bytes(a ^ b for a, b in zip(raw, _cycle_key(key, len(raw))))
-    return base64.b64encode(encrypted).decode("ascii")
+    return _get_fernet().encrypt(plaintext.encode("utf-8")).decode("ascii")
 
 
 def _decrypt(ciphertext: str) -> str:
-    key = _get_encryption_key()
-    raw = base64.b64decode(ciphertext)
-    decrypted = bytes(a ^ b for a, b in zip(raw, _cycle_key(key, len(raw))))
-    return decrypted.decode("utf-8")
-
-
-def _cycle_key(key: bytes, length: int) -> bytes:
-    full_repeats = length // len(key) + 1
-    return (key * full_repeats)[:length]
+    return _get_fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
 
 
 def _mask_key(key: str) -> str:
@@ -98,7 +93,7 @@ def list_api_keys(conn: sqlite3.Connection) -> list[UserApiKeyEntry]:
     for row in rows:
         try:
             plain = _decrypt(str(row["encrypted_key"]))
-        except Exception:
+        except (InvalidToken, Exception):
             plain = ""
         entries.append(
             UserApiKeyEntry(
