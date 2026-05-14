@@ -13,7 +13,7 @@ jobs:
   linked-issue:
     name: Require Linked Issue
     if: github.event.pull_request.draft == false
-    runs-on: [self-hosted, builder]
+    runs-on: ubuntu-latest
     steps:
       - uses: nearform-actions/github-action-check-linked-issues@05f1d702b9a2d51123a6f32a51292eff6dc78815 # v1.8.3
         id: check-linked-issues
