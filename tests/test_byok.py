@@ -38,11 +38,16 @@ def db_conn(tmp_path, monkeypatch):
 
 
 class TestEncryptDecrypt:
-    def test_roundtrip(self):
+    def test_roundtrip(self, monkeypatch):
+        from app.config import get_settings
+
+        monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret-for-byok")
+        get_settings.cache_clear()
         original = "sk-test-key-12345"
         encrypted = _encrypt(original)
         assert encrypted != original
         assert _decrypt(encrypted) == original
+        get_settings.cache_clear()
 
     def test_different_keys_produce_different_ciphertext(self, monkeypatch):
         from app.config import get_settings
@@ -59,13 +64,18 @@ class TestEncryptDecrypt:
         assert encrypted_a != encrypted_b
         get_settings.cache_clear()
 
-    def test_same_plaintext_different_ciphertexts(self):
+    def test_same_plaintext_different_ciphertexts(self, monkeypatch):
+        from app.config import get_settings
+
+        monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret-for-byok")
+        get_settings.cache_clear()
         original = "sk-same-key"
         encrypted_a = _encrypt(original)
         encrypted_b = _encrypt(original)
         assert encrypted_a != encrypted_b
         assert _decrypt(encrypted_a) == original
         assert _decrypt(encrypted_b) == original
+        get_settings.cache_clear()
 
     def test_missing_encryption_key_raises(self, monkeypatch):
         from app.config import get_settings
