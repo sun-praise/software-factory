@@ -75,7 +75,7 @@ async def byok_page(request: Request) -> HTMLResponse:
         qp_token = request.query_params.get("token", "")
         cookie_token = request.cookies.get("byok_admin_token", "")
         qp_valid = hmac.compare_digest(qp_token, admin_token) if qp_token else False
-        cookie_valid = hmac.compare_digest(cookie_token, admin_token) if cookie_token else False
+        cookie_valid = hmac.compare_digest(cookie_token, _token_hmac(admin_token)) if cookie_token else False
         if not (cookie_valid or qp_valid):
             _html_auth_response(request)
 

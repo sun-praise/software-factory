@@ -167,11 +167,33 @@ def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='user_api_keys'"
     ).fetchall()
-    if rows:
+    if not rows:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL UNIQUE,
+                encrypted_key TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);"
+        )
+        conn.commit()
+        return
+    unique_rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='user_api_keys' AND sql LIKE '%UNIQUE%'"
+    ).fetchall()
+    if unique_rows:
         return
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS user_api_keys (
+        CREATE TABLE user_api_keys_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             provider TEXT NOT NULL UNIQUE,
             encrypted_key TEXT NOT NULL,
@@ -182,6 +204,11 @@ def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO user_api_keys_new SELECT * FROM user_api_keys"
+    )
+    conn.execute("DROP TABLE user_api_keys")
+    conn.execute("ALTER TABLE user_api_keys_new RENAME TO user_api_keys")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);"
     )
