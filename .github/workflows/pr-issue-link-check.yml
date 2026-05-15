@@ -31,16 +31,34 @@ jobs:
         with:
           script: |
             let prNumber;
+            let sourceBranch = '';
             if (context.eventName === 'pull_request_target') {
               prNumber = context.payload.pull_request.number;
+              sourceBranch = context.payload.pull_request.head.ref || '';
             } else {
               const inputNumber = parseInt(process.env.PR_NUMBER_INPUT, 10);
-              if (inputNumber > 0) {
-                prNumber = inputNumber;
-              } else {
-                core.setFailed('workflow_dispatch requires pr_number input');
+              if (isNaN(inputNumber) || inputNumber <= 0) {
+                core.setFailed('workflow_dispatch requires a valid pr_number input');
                 return;
               }
+              prNumber = inputNumber;
+            }
+
+            if (sourceBranch.startsWith('dependabot/')) {
+              console.log(`Skipping issue link check for dependabot branch: ${sourceBranch}`);
+              return;
+            }
+
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const labelNames = labels.map(l => l.name);
+            const skipLabels = ['skip-issue-check', 'documentation'];
+            if (labelNames.some(name => skipLabels.includes(name))) {
+              console.log(`Skipping issue link check due to label: ${labelNames.filter(n => skipLabels.includes(n)).join(', ')}`);
+              return;
             }
 
             const result = await github.graphql(`
