@@ -126,25 +126,7 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     api_key = str(form.get("api_key", "")).strip()
     label = str(form.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except (ValueError, TypeError) as exc:
-        with connect_db() as conn:
-            keys = list_api_keys(conn)
-        return templates.TemplateResponse(
-            request=request,
-            name="byok.html",
-            context={
-                "request": request,
-                "title": "API Keys (BYOK)",
-                "keys": keys,
-                "providers": _PROVIDERS,
-                "message": str(exc),
-                "message_class": "",
-                "form": {"provider": provider, "label": label},
-            },
-            status_code=400,
-        )
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:
@@ -179,7 +161,9 @@ async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
         current = next((k for k in keys if k.id == key_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="Key not found")
-        toggle_api_key(conn, key_id, enabled=not current.enabled)
+        updated = toggle_api_key(conn, key_id, enabled=not current.enabled)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Key not found")
     return RedirectResponse(url="/byok", status_code=303)
 
 
@@ -222,12 +206,7 @@ async def api_add_key(request: Request) -> JSONResponse:
     api_key = str(body.get("api_key", "")).strip()
     label = str(body.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:

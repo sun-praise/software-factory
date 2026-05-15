@@ -37,6 +37,9 @@ _PROVIDER_ENV_MAP = {
 }
 
 
+_fernet_cache: dict[str, Fernet] = {}
+
+
 def _get_fernet() -> Fernet:
     settings = get_settings()
     secret = settings.byok_encryption_key or settings.github_webhook_secret
@@ -45,8 +48,10 @@ def _get_fernet() -> Fernet:
             "BYOK_ENCRYPTION_KEY or GITHUB_WEBHOOK_SECRET must be configured "
             "for BYOK encryption"
         )
-    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
-    return Fernet(key)
+    if secret not in _fernet_cache:
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+        _fernet_cache[secret] = Fernet(key)
+    return _fernet_cache[secret]
 
 
 def _encrypt(plaintext: str) -> str:
