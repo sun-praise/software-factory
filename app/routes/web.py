@@ -66,8 +66,13 @@ def _parse_bool_like(value: str | None) -> bool:
     return str(value).strip().lower() in _TRUE_VALUES
 
 
+_LIKE_ESCAPE_CHAR = "\\"
+_ESCAPE_CLAUSE = f"ESCAPE '{_LIKE_ESCAPE_CHAR}'"
+
+
 def _escape_like_pattern(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    esc = _LIKE_ESCAPE_CHAR
+    return value.replace(esc, esc + esc).replace("%", esc + "%").replace("_", esc + "_")
 
 
 def _find_existing_run_by_source_url(
@@ -76,11 +81,11 @@ def _find_existing_run_by_source_url(
 ) -> dict[str, Any] | None:
     escaped_url = _escape_like_pattern(source_url)
     cursor = conn.execute(
-        """
+        f"""
         SELECT id, status, normalized_review_json
         FROM autofix_runs
         WHERE trigger_source = 'manual_issue'
-          AND normalized_review_json LIKE ? ESCAPE '\\'
+          AND normalized_review_json LIKE ? {_ESCAPE_CLAUSE}
         ORDER BY id DESC
         LIMIT 10
         """,
@@ -144,13 +149,14 @@ def _fetch_runs(
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
-        like_value = f"%{normalized_query.lower()}%"
-        sql_where = """
+        escaped_query = _escape_like_pattern(normalized_query.lower())
+        like_value = f"%{escaped_query}%"
+        sql_where = f"""
             WHERE
-                lower(repo) LIKE ?
-                OR lower(status) LIKE ?
-                OR CAST(id AS TEXT) LIKE ?
-                OR CAST(pr_number AS TEXT) LIKE ?
+                lower(repo) LIKE ? {_ESCAPE_CLAUSE}
+                OR lower(status) LIKE ? {_ESCAPE_CLAUSE}
+                OR CAST(id AS TEXT) LIKE ? {_ESCAPE_CLAUSE}
+                OR CAST(pr_number AS TEXT) LIKE ? {_ESCAPE_CLAUSE}
         """
         sql_params.extend([like_value, like_value, like_value, like_value])
 
