@@ -145,7 +145,8 @@ def _fetch_runs(
     query: str = "",
 ) -> dict[str, Any]:
     normalized_query = query.strip()
-    # sql_where contains only fixed SQL template fragments, no user input
+    # sql_where contains only fixed SQL template fragments, no user input.
+    # ESCAPE '\\' must match _LIKE_ESCAPE_CHAR above.
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
