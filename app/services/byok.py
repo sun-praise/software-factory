@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import logging
 import sqlite3
@@ -37,7 +38,10 @@ _PROVIDER_ENV_MAP = {
 }
 
 
-_fernet_cache: dict[str, Fernet] = {}
+@functools.lru_cache(maxsize=1)
+def _make_fernet(secret: str) -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
 
 
 def _get_fernet() -> Fernet:
@@ -48,10 +52,7 @@ def _get_fernet() -> Fernet:
             "BYOK_ENCRYPTION_KEY or GITHUB_WEBHOOK_SECRET must be configured "
             "for BYOK encryption"
         )
-    if secret not in _fernet_cache:
-        key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
-        _fernet_cache[secret] = Fernet(key)
-    return _fernet_cache[secret]
+    return _make_fernet(secret)
 
 
 def _encrypt(plaintext: str) -> str:
