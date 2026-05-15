@@ -15,6 +15,7 @@ from app.services.byok import (
     add_api_key,
     build_byok_env_overrides,
     delete_api_key,
+    flip_api_key_enabled,
     list_api_keys,
     resolve_api_key,
     resolve_all_api_keys,
@@ -244,6 +245,31 @@ class TestResolveAllApiKeys:
         all_keys = resolve_all_api_keys(db_conn)
         assert "anthropic" not in all_keys
         assert all_keys["openai"] == "active-key"
+
+
+class TestFlipApiKeyEnabled:
+    def test_flip_disables_enabled_key(self, db_conn):
+        entry = add_api_key(
+            db_conn, UserApiKeyCreatePayload("anthropic", "sk-test-flip", "")
+        )
+        assert entry.enabled is True
+        result = flip_api_key_enabled(db_conn, entry.id)
+        assert result is True
+        keys = list_api_keys(db_conn)
+        assert keys[0].enabled is False
+
+    def test_double_flip_restores_state(self, db_conn):
+        entry = add_api_key(
+            db_conn, UserApiKeyCreatePayload("openai", "sk-test-double", "")
+        )
+        flip_api_key_enabled(db_conn, entry.id)
+        flip_api_key_enabled(db_conn, entry.id)
+        keys = list_api_keys(db_conn)
+        assert keys[0].enabled is True
+
+    def test_flip_nonexistent_returns_false(self, db_conn):
+        result = flip_api_key_enabled(db_conn, 99999)
+        assert result is False
 
 
 class TestBuildByokEnvOverrides:

@@ -17,7 +17,6 @@ from app.services.byok import (
     delete_api_key,
     flip_api_key_enabled,
     list_api_keys,
-    toggle_api_key,
 )
 
 router = APIRouter(tags=["byok"])

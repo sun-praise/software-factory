@@ -40,9 +40,10 @@ _PROVIDER_ENV_MAP = {
 
 @functools.lru_cache(maxsize=1)
 def _make_fernet(secret: str) -> Fernet:
-    """Cache keyed on *secret* — changing the encryption secret at runtime
-    requires a process restart; previously encrypted data will not be
-    decryptable with a different secret."""
+    """Cache keyed on *secret* — when the secret changes the lru_cache will
+    transparently cache a new Fernet instance, but data encrypted with the
+    previous secret will no longer be decryptable.  Switching secrets in
+    production requires re-encrypting all stored keys first."""
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
 
