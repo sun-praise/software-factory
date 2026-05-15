@@ -110,7 +110,7 @@ async def byok_page(request: Request) -> HTMLResponse:
                 _token_hmac(admin_token),
                 httponly=True,
                 max_age=86400,
-                secure=True,
+                secure=request.url.scheme == "https",
                 samesite="Lax",
             )
     return response
@@ -126,32 +126,14 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     api_key = str(form.get("api_key", "")).strip()
     label = str(form.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except (ValueError, TypeError) as exc:
-        with connect_db() as conn2:
-            keys = _load_keys(conn2)
-        return templates.TemplateResponse(
-            request=request,
-            name="byok.html",
-            context={
-                "request": request,
-                "title": "API Keys (BYOK)",
-                "keys": keys,
-                "providers": _PROVIDERS,
-                "message": str(exc),
-                "message_class": "",
-                "form": {"provider": provider, "label": label},
-            },
-            status_code=400,
-        )
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:
             add_api_key(conn, payload)
     except ValueError as exc:
         with connect_db() as conn2:
-            keys = _load_keys(conn2)
+            keys = list_api_keys(conn2)
         return templates.TemplateResponse(
             request=request,
             name="byok.html",
@@ -222,12 +204,7 @@ async def api_add_key(request: Request) -> JSONResponse:
     api_key = str(body.get("api_key", "")).strip()
     label = str(body.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:
@@ -264,6 +241,3 @@ async def api_delete_key(key_id: int) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Key not found")
     return JSONResponse({"ok": True})
 
-
-def _load_keys(conn):
-    return list_api_keys(conn)

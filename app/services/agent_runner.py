@@ -2727,7 +2727,7 @@ def _build_claude_agent_environment(
         pr_number=pr_number,
         normalized_review=normalized_review,
     )
-    _byok = dict(byok_overrides) if byok_overrides else {}
+    _byok = byok_overrides or {}
     normalized_provider = str(provider).strip().lower()
     normalized_base_url = str(base_url).strip()
     normalized_model = str(model).strip()
