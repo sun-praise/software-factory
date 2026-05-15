@@ -144,14 +144,14 @@ def _fetch_runs(
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
-        escaped_query = _escape_like_pattern(normalized_query)
-        like_value = f"%{escaped_query.lower()}%"
+        escaped_query = _escape_like_pattern(normalized_query.lower())
+        like_value = f"%{escaped_query}%"
         sql_where = """
             WHERE
-                lower(repo) LIKE ?
-                OR lower(status) LIKE ?
-                OR CAST(id AS TEXT) LIKE ?
-                OR CAST(pr_number AS TEXT) LIKE ?
+                lower(repo) LIKE ? ESCAPE '\\'
+                OR lower(status) LIKE ? ESCAPE '\\'
+                OR CAST(id AS TEXT) LIKE ? ESCAPE '\\'
+                OR CAST(pr_number AS TEXT) LIKE ? ESCAPE '\\'
         """
         sql_params.extend([like_value, like_value, like_value, like_value])
 
