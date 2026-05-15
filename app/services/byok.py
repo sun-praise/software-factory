@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
 
@@ -93,8 +93,11 @@ def list_api_keys(conn: sqlite3.Connection) -> list[UserApiKeyEntry]:
     for row in rows:
         try:
             plain = _decrypt(str(row["encrypted_key"]))
-        except Exception:
+        except InvalidToken:
             _LOG.warning("failed to decrypt key id=%s", row["id"])
+            plain = ""
+        except Exception as e:
+            _LOG.error("unexpected error decrypting key id=%s: %s: %s", row["id"], type(e).__name__, e)
             plain = ""
         entries.append(
             UserApiKeyEntry(
@@ -189,8 +192,11 @@ def resolve_api_key(conn: sqlite3.Connection, provider: str) -> str | None:
         return None
     try:
         return _decrypt(str(row["encrypted_key"]))
-    except Exception:
+    except InvalidToken:
         _LOG.warning("failed to decrypt BYOK key for provider %s", provider)
+        return None
+    except Exception as e:
+        _LOG.error("unexpected error decrypting BYOK key for provider %s: %s: %s", provider, type(e).__name__, e)
         return None
 
 
@@ -209,8 +215,10 @@ def resolve_all_api_keys(conn: sqlite3.Connection) -> dict[str, str]:
             continue
         try:
             result[provider] = _decrypt(str(row["encrypted_key"]))
-        except Exception:
+        except InvalidToken:
             _LOG.warning("failed to decrypt BYOK key for provider %s", provider)
+        except Exception as e:
+            _LOG.error("unexpected error decrypting BYOK key for provider %s: %s: %s", provider, type(e).__name__, e)
     return result
 
 
