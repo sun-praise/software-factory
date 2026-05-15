@@ -71,11 +71,19 @@ def test_fetch_runs_search_with_like_wildcards(tmp_path: Path) -> None:
             """,
             ("acme/100Xdone", 4, "manual_issue", "success", "{}"),
         )
+        conn.execute(
+            """
+            INSERT INTO autofix_runs (repo, pr_number, trigger_source, status, normalized_review_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("acme/a\\b", 5, "manual_issue", "success", "{}"),
+        )
         conn.commit()
 
     with TestClient(app) as client:
         underscore = client.get("/", params={"q": "test_1"})
         percent = client.get("/", params={"q": "100%"})
+        backslash = client.get("/", params={"q": "a\\b"})
         plain = client.get("/", params={"q": "test"})
 
     assert underscore.status_code == 200
@@ -85,6 +93,9 @@ def test_fetch_runs_search_with_like_wildcards(tmp_path: Path) -> None:
     assert percent.status_code == 200
     assert "acme/100%done" in percent.text
     assert "acme/100Xdone" not in percent.text
+
+    assert backslash.status_code == 200
+    assert "acme/a\\b" in backslash.text
 
     assert plain.status_code == 200
     assert "acme/test_1" in plain.text
