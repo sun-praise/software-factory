@@ -67,6 +67,7 @@ def _parse_bool_like(value: str | None) -> bool:
 
 
 _LIKE_ESCAPE_CHAR = "\\"
+_ESCAPE_CLAUSE = f"ESCAPE '{_LIKE_ESCAPE_CHAR}'"
 
 
 def _escape_like_pattern(value: str) -> str:
@@ -80,11 +81,11 @@ def _find_existing_run_by_source_url(
 ) -> dict[str, Any] | None:
     escaped_url = _escape_like_pattern(source_url)
     cursor = conn.execute(
-        """
+        f"""
         SELECT id, status, normalized_review_json
         FROM autofix_runs
         WHERE trigger_source = 'manual_issue'
-          AND normalized_review_json LIKE ? ESCAPE '\\'
+          AND normalized_review_json LIKE ? {_ESCAPE_CLAUSE}
         ORDER BY id DESC
         LIMIT 10
         """,
@@ -145,19 +146,17 @@ def _fetch_runs(
     query: str = "",
 ) -> dict[str, Any]:
     normalized_query = query.strip()
-    # sql_where contains only fixed SQL template fragments, no user input.
-    # ESCAPE '\\' must match _LIKE_ESCAPE_CHAR above.
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
         escaped_query = _escape_like_pattern(normalized_query.lower())
         like_value = f"%{escaped_query}%"
-        sql_where = """
+        sql_where = f"""
             WHERE
-                lower(repo) LIKE ? ESCAPE '\\'
-                OR lower(status) LIKE ? ESCAPE '\\'
-                OR CAST(id AS TEXT) LIKE ? ESCAPE '\\'
-                OR CAST(pr_number AS TEXT) LIKE ? ESCAPE '\\'
+                lower(repo) LIKE ? {_ESCAPE_CLAUSE}
+                OR lower(status) LIKE ? {_ESCAPE_CLAUSE}
+                OR CAST(id AS TEXT) LIKE ? {_ESCAPE_CLAUSE}
+                OR CAST(pr_number AS TEXT) LIKE ? {_ESCAPE_CLAUSE}
         """
         sql_params.extend([like_value, like_value, like_value, like_value])
 

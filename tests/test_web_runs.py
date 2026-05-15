@@ -78,6 +78,13 @@ def test_fetch_runs_search_with_like_wildcards(tmp_path: Path) -> None:
             """,
             ("acme/a\\b", 5, "manual_issue", "success", "{}"),
         )
+        conn.execute(
+            """
+            INSERT INTO autofix_runs (repo, pr_number, trigger_source, status, normalized_review_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("acme/aXb", 6, "manual_issue", "success", "{}"),
+        )
         conn.commit()
 
     with TestClient(app) as client:
@@ -96,6 +103,7 @@ def test_fetch_runs_search_with_like_wildcards(tmp_path: Path) -> None:
 
     assert backslash.status_code == 200
     assert "acme/a\\b" in backslash.text
+    assert "acme/aXb" not in backslash.text
 
     assert plain.status_code == 200
     assert "acme/test_1" in plain.text
