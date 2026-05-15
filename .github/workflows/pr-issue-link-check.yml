@@ -19,7 +19,7 @@ jobs:
   linked-issue:
     name: Require Linked Issue
     if: >
-      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false) ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -31,7 +31,7 @@ jobs:
         with:
           script: |
             let prNumber;
-            if (context.eventName === 'pull_request') {
+            if (context.eventName === 'pull_request_target') {
               prNumber = context.payload.pull_request.number;
             } else {
               const inputNumber = parseInt(process.env.PR_NUMBER_INPUT, 10);
@@ -47,7 +47,7 @@ jobs:
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
-                    closingIssuesReferences(first: 10) {
+                    closingIssuesReferences {
                       totalCount
                     }
                   }
