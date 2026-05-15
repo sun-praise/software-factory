@@ -40,6 +40,9 @@ _PROVIDER_ENV_MAP = {
 
 @functools.lru_cache(maxsize=1)
 def _make_fernet(secret: str) -> Fernet:
+    """Cache keyed on *secret* — changing the encryption secret at runtime
+    requires a process restart; previously encrypted data will not be
+    decryptable with a different secret."""
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
 
@@ -178,6 +181,18 @@ def toggle_api_key(conn: sqlite3.Connection, key_id: int, *, enabled: bool) -> b
         WHERE id = ?
         """,
         (1 if enabled else 0, key_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def flip_api_key_enabled(conn: sqlite3.Connection, key_id: int) -> bool:
+    cursor = conn.execute(
+        """
+        UPDATE user_api_keys SET enabled = 1 - enabled, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (key_id,),
     )
     conn.commit()
     return cursor.rowcount > 0

@@ -15,6 +15,7 @@ from app.services.byok import (
     _PROVIDER_LABELS,
     add_api_key,
     delete_api_key,
+    flip_api_key_enabled,
     list_api_keys,
     toggle_api_key,
 )
@@ -157,11 +158,7 @@ async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
     if not _check_html_admin(request):
         _html_auth_response(request)
     with connect_db() as conn:
-        keys = list_api_keys(conn)
-        current = next((k for k in keys if k.id == key_id), None)
-        if current is None:
-            raise HTTPException(status_code=404, detail="Key not found")
-        updated = toggle_api_key(conn, key_id, enabled=not current.enabled)
+        updated = flip_api_key_enabled(conn, key_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Key not found")
     return RedirectResponse(url="/byok", status_code=303)
