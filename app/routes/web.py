@@ -144,7 +144,8 @@ def _fetch_runs(
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
-        like_value = f"%{normalized_query.lower()}%"
+        escaped_query = _escape_like_pattern(normalized_query)
+        like_value = f"%{escaped_query.lower()}%"
         sql_where = """
             WHERE
                 lower(repo) LIKE ?
