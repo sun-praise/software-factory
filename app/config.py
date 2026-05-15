@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     repo_cache_base_dir: str = ".software-factory-repo-cache"
     run_workspace_base_dir: str = ".software-factory-run-workspaces"
     byok_admin_token: str = ""
+    byok_encryption_key: str = ""
 
     @field_validator(
         "bot_logins",

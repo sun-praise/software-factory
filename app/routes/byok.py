@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -27,20 +29,23 @@ async def _verify_byok_admin(request: Request) -> None:
     settings = get_settings()
     admin_token = settings.byok_admin_token
     if not admin_token:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="BYOK admin token not configured",
+        )
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[len("Bearer "):]
     else:
         token = auth
-    if token != admin_token:
+    if not hmac.compare_digest(token, admin_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing BYOK admin token",
         )
 
 
-@router.get("/byok", response_class=HTMLResponse)
+@router.get("/byok", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
 async def byok_page(request: Request) -> HTMLResponse:
     templates = request.app.state.templates
     added = request.query_params.get("added") == "1"
@@ -62,7 +67,7 @@ async def byok_page(request: Request) -> HTMLResponse:
     )
 
 
-@router.post("/byok", response_class=HTMLResponse)
+@router.post("/byok", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
 async def byok_add_key(request: Request) -> HTMLResponse:
     templates = request.app.state.templates
     form = await request.form()
@@ -70,35 +75,21 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     api_key = str(form.get("api_key", "")).strip()
     label = str(form.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except (ValueError, TypeError) as exc:
-        return templates.TemplateResponse(
-            request=request,
-            name="byok.html",
-            context={
-                "request": request,
-                "title": "API Keys (BYOK)",
-                "keys": _load_keys(),
-                "providers": _PROVIDERS,
-                "message": f"Invalid input: {exc}",
-                "message_class": "",
-                "form": {"provider": provider, "label": label},
-            },
-            status_code=400,
-        )
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:
             add_api_key(conn, payload)
     except ValueError as exc:
+        with connect_db() as conn2:
+            keys = _load_keys(conn2)
         return templates.TemplateResponse(
             request=request,
             name="byok.html",
             context={
                 "request": request,
                 "title": "API Keys (BYOK)",
-                "keys": _load_keys(),
+                "keys": keys,
                 "providers": _PROVIDERS,
                 "message": str(exc),
                 "message_class": "",
@@ -110,18 +101,18 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     return RedirectResponse(url="/byok?added=1", status_code=303)
 
 
-@router.post("/byok/{key_id}/toggle", response_class=HTMLResponse)
+@router.post("/byok/{key_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
 async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
     with connect_db() as conn:
         keys = list_api_keys(conn)
         current = next((k for k in keys if k.id == key_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="Key not found")
-        updated = toggle_api_key(conn, key_id, enabled=not current.enabled)
+        toggle_api_key(conn, key_id, enabled=not current.enabled)
     return RedirectResponse(url="/byok", status_code=303)
 
 
-@router.post("/byok/{key_id}/delete", response_class=HTMLResponse)
+@router.post("/byok/{key_id}/delete", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
 async def byok_delete_key(request: Request, key_id: int) -> HTMLResponse:
     with connect_db() as conn:
         deleted = delete_api_key(conn, key_id)
@@ -158,12 +149,7 @@ async def api_add_key(request: Request) -> JSONResponse:
     api_key = str(body.get("api_key", "")).strip()
     label = str(body.get("label", "")).strip()
 
-    try:
-        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
 
     try:
         with connect_db() as conn:
@@ -201,6 +187,5 @@ async def api_delete_key(key_id: int) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-def _load_keys():
-    with connect_db() as conn:
-        return list_api_keys(conn)
+def _load_keys(conn):
+    return list_api_keys(conn)

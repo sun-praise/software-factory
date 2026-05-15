@@ -73,10 +73,17 @@ def generate_fix(
     normalized_review: Mapping[str, Any],
     byok_overrides: Mapping[str, str] | None = None,
 ) -> FixPlan:
+    """Generate a fix plan using the configured AI provider.
+
+    ``byok_overrides`` allows callers to inject user-provided API keys
+    (from the BYOK subsystem) that take precedence over the global
+    configuration.  Pass the result of ``build_byok_env_overrides``
+    when available.
+    """
     settings = get_settings()
     provider = settings.ai_provider.strip().lower()
     request_prompt = _build_request_prompt(prompt, workspace_dir, normalized_review)
-    _byok = dict(byok_overrides) if byok_overrides else {}
+    _byok = byok_overrides or {}
 
     if provider == "anthropic":
         text = _call_anthropic(request_prompt, byok_overrides=_byok)

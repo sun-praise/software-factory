@@ -5,7 +5,6 @@ import hashlib
 import logging
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -40,10 +39,11 @@ _PROVIDER_ENV_MAP = {
 
 def _get_fernet() -> Fernet:
     settings = get_settings()
-    secret = settings.github_webhook_secret
+    secret = settings.byok_encryption_key or settings.github_webhook_secret
     if not secret:
         raise RuntimeError(
-            "GITHUB_WEBHOOK_SECRET must be configured for BYOK encryption"
+            "BYOK_ENCRYPTION_KEY or GITHUB_WEBHOOK_SECRET must be configured "
+            "for BYOK encryption"
         )
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
@@ -93,7 +93,8 @@ def list_api_keys(conn: sqlite3.Connection) -> list[UserApiKeyEntry]:
     for row in rows:
         try:
             plain = _decrypt(str(row["encrypted_key"]))
-        except (InvalidToken, Exception):
+        except InvalidToken:
+            _LOG.warning("failed to decrypt key id=%s", row["id"])
             plain = ""
         entries.append(
             UserApiKeyEntry(
@@ -122,6 +123,15 @@ def add_api_key(
     api_key = payload.api_key.strip()
     if not api_key:
         raise ValueError("API key must not be empty")
+    existing = conn.execute(
+        "SELECT id FROM user_api_keys WHERE provider = ? LIMIT 1",
+        (provider,),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "DELETE FROM user_api_keys WHERE provider = ?",
+            (provider,),
+        )
     encrypted = _encrypt(api_key)
     label = payload.label.strip() or _PROVIDER_LABELS.get(provider, provider)
     cursor = conn.execute(

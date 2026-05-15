@@ -77,7 +77,7 @@
                   <button type="submit">{% if key.enabled %}Disable{% else %}Enable{% endif %}</button>
                 </form>
                 <form method="post" action="/byok/{{ key.id }}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete this API key?')">
+                      class="delete-key-form">
                   <button type="submit" class="danger">Delete</button>
                 </form>
               </td>
@@ -92,5 +92,12 @@
       </section>
       {% endif %}
     </main>
+    <script>
+      document.querySelectorAll('.delete-key-form').forEach(function(form) {
+        form.addEventListener('submit', function(e) {
+          if (!confirm('Delete this API key?')) e.preventDefault();
+        });
+      });
+    </script>
   </body>
 </html>
