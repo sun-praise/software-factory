@@ -29,10 +29,7 @@ async def _verify_byok_admin(request: Request) -> None:
     settings = get_settings()
     admin_token = settings.byok_admin_token
     if not admin_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="BYOK admin token not configured",
-        )
+        return
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[len("Bearer "):]
@@ -45,14 +42,40 @@ async def _verify_byok_admin(request: Request) -> None:
         )
 
 
-@router.get("/byok", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
+def _check_html_admin(request: Request) -> bool:
+    settings = get_settings()
+    admin_token = settings.byok_admin_token
+    if not admin_token:
+        return True
+    token = request.cookies.get("byok_admin_token", "")
+    return hmac.compare_digest(token, admin_token)
+
+
+def _html_auth_response(request: Request):
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="BYOK admin token required. Access via /byok?token=<your_token>",
+    )
+
+
+@router.get("/byok", response_class=HTMLResponse)
 async def byok_page(request: Request) -> HTMLResponse:
+    settings = get_settings()
+    admin_token = settings.byok_admin_token
+    if admin_token:
+        qp_token = request.query_params.get("token", "")
+        cookie_token = request.cookies.get("byok_admin_token", "")
+        qp_valid = hmac.compare_digest(qp_token, admin_token) if qp_token else False
+        cookie_valid = hmac.compare_digest(cookie_token, admin_token) if cookie_token else False
+        if not (cookie_valid or qp_valid):
+            _html_auth_response(request)
+
     templates = request.app.state.templates
     added = request.query_params.get("added") == "1"
     with connect_db() as conn:
         keys = list_api_keys(conn)
     message = "API key added successfully." if added else None
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="byok.html",
         context={
@@ -65,10 +88,19 @@ async def byok_page(request: Request) -> HTMLResponse:
             "form": {},
         },
     )
+    if admin_token:
+        qp_token = request.query_params.get("token", "")
+        if qp_token and hmac.compare_digest(qp_token, admin_token):
+            response.set_cookie(
+                "byok_admin_token", admin_token, httponly=True, max_age=86400
+            )
+    return response
 
 
-@router.post("/byok", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
+@router.post("/byok", response_class=HTMLResponse)
 async def byok_add_key(request: Request) -> HTMLResponse:
+    if not _check_html_admin(request):
+        _html_auth_response(request)
     templates = request.app.state.templates
     form = await request.form()
     provider = str(form.get("provider", "")).strip()
@@ -101,8 +133,10 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     return RedirectResponse(url="/byok?added=1", status_code=303)
 
 
-@router.post("/byok/{key_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
+@router.post("/byok/{key_id}/toggle", response_class=HTMLResponse)
 async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
+    if not _check_html_admin(request):
+        _html_auth_response(request)
     with connect_db() as conn:
         keys = list_api_keys(conn)
         current = next((k for k in keys if k.id == key_id), None)
@@ -112,8 +146,10 @@ async def byok_toggle_key(request: Request, key_id: int) -> HTMLResponse:
     return RedirectResponse(url="/byok", status_code=303)
 
 
-@router.post("/byok/{key_id}/delete", response_class=HTMLResponse, dependencies=[Depends(_verify_byok_admin)])
+@router.post("/byok/{key_id}/delete", response_class=HTMLResponse)
 async def byok_delete_key(request: Request, key_id: int) -> HTMLResponse:
+    if not _check_html_admin(request):
+        _html_auth_response(request)
     with connect_db() as conn:
         deleted = delete_api_key(conn, key_id)
     if not deleted:

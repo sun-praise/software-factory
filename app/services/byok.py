@@ -198,7 +198,7 @@ def resolve_api_key(conn: sqlite3.Connection, provider: str) -> str | None:
         return None
     try:
         return _decrypt(str(row["encrypted_key"]))
-    except Exception:
+    except InvalidToken:
         _LOG.warning("failed to decrypt BYOK key for provider %s", provider)
         return None
 
@@ -218,7 +218,7 @@ def resolve_all_api_keys(conn: sqlite3.Connection) -> dict[str, str]:
             continue
         try:
             result[provider] = _decrypt(str(row["encrypted_key"]))
-        except Exception:
+        except InvalidToken:
             _LOG.warning("failed to decrypt BYOK key for provider %s", provider)
     return result
 
