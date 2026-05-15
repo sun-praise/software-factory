@@ -96,7 +96,6 @@ class Settings(BaseSettings):
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     oauth_redirect_uri: str = ""
-    oauth_session_secret: str = ""
 
     @field_validator(
         "bot_logins",

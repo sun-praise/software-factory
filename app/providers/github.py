@@ -855,8 +855,6 @@ class GitHubOAuthProvider:
         code: str,
         redirect_uri: str,
     ) -> Mapping[str, Any]:
-        import httpx
-
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 self.token_url,
@@ -876,8 +874,6 @@ class GitHubOAuthProvider:
         *,
         access_token: str,
     ) -> OAuthUserInfo:
-        import httpx
-
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 self.userinfo_url,

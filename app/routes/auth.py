@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app.config import get_settings
 from app.db import connect_db
 from app.providers import get_oauth_provider
+from app.services.byok import _decrypt, _encrypt
 
 logger = logging.getLogger(__name__)
 
@@ -72,30 +73,28 @@ def _upsert_user(
     email: str | None,
     avatar_url: str | None,
 ) -> int:
-    existing = conn.execute(
-        "SELECT id FROM users WHERE provider = ? AND provider_user_id = ?",
-        (provider, provider_user_id),
-    ).fetchone()
-    if existing:
-        conn.execute(
-            """
-            UPDATE users SET username = ?, display_name = ?, email = ?,
-                             avatar_url = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (username, display_name, email, avatar_url,
-             datetime.now(timezone.utc).isoformat(), existing[0]),
-        )
-        return existing[0]
+    now_iso = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """
         INSERT INTO users (provider, provider_user_id, username, display_name,
-                           email, avatar_url)
-        VALUES (?, ?, ?, ?, ?, ?)
+                           email, avatar_url, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+            username = excluded.username,
+            display_name = excluded.display_name,
+            email = excluded.email,
+            avatar_url = excluded.avatar_url,
+            updated_at = excluded.updated_at
         """,
-        (provider, provider_user_id, username, display_name, email, avatar_url),
+        (provider, provider_user_id, username, display_name, email, avatar_url, now_iso),
     )
-    return cursor.lastrowid
+    if cursor.lastrowid and cursor.lastrowid > 0:
+        return cursor.lastrowid
+    row = conn.execute(
+        "SELECT id FROM users WHERE provider = ? AND provider_user_id = ?",
+        (provider, provider_user_id),
+    ).fetchone()
+    return row[0]
 
 
 def _create_session(
@@ -107,13 +106,14 @@ def _create_session(
 ) -> str:
     token = _generate_session_token()
     expires_at = datetime.now(timezone.utc) + timedelta(days=_SESSION_TTL_DAYS)
+    encrypted_token = _encrypt(access_token)
     conn.execute(
         """
         INSERT INTO oauth_sessions (session_token, user_id, provider,
                                     access_token, expires_at)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (token, user_id, provider, access_token, expires_at.isoformat()),
+        (token, user_id, provider, encrypted_token, expires_at.isoformat()),
     )
     return token
 
@@ -137,6 +137,8 @@ async def login(request: Request) -> Response:
         state=state,
     )
 
+    secure = settings.app_env != "development"
+
     response = RedirectResponse(url=authorize_url, status_code=302)
     response.set_cookie(
         key=_STATE_COOKIE_NAME,
@@ -144,6 +146,7 @@ async def login(request: Request) -> Response:
         httponly=True,
         max_age=600,
         samesite="lax",
+        secure=secure,
     )
     return response
 
@@ -205,6 +208,8 @@ async def callback(
         )
         conn.commit()
 
+    secure = settings.app_env != "development"
+
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(
         key=_SESSION_COOKIE_NAME,
@@ -212,6 +217,7 @@ async def callback(
         httponly=True,
         max_age=_SESSION_TTL_DAYS * 86400,
         samesite="lax",
+        secure=secure,
     )
     response.delete_cookie(key=_STATE_COOKIE_NAME)
     return response
@@ -235,6 +241,13 @@ async def logout(
     return response
 
 
+def _cleanup_expired_sessions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "DELETE FROM oauth_sessions WHERE expires_at < ?",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+
+
 def get_current_user_from_request(
     request: Request,
 ) -> dict[str, Any] | None:
@@ -242,4 +255,5 @@ def get_current_user_from_request(
     if not session_token:
         return None
     with connect_db() as conn:
+        _cleanup_expired_sessions(conn)
         return _get_current_user(conn, session_token)
