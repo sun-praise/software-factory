@@ -429,10 +429,12 @@ def _read_metadata(raw_value: str | None) -> dict[str, Any]:
         return {}
     try:
         loaded = json.loads(raw_value)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse metadata JSON at pos %d: %s", exc.pos, exc.msg)
         return {}
     if isinstance(loaded, dict):
         return loaded
+    logger.warning("Metadata is not a dict, got: %s, raw: %.200s", type(loaded).__name__, loaded)
     return {}
 
 
