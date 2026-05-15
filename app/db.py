@@ -186,10 +186,11 @@ def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
         )
         conn.commit()
         return
-    unique_rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='user_api_keys' AND sql LIKE '%UNIQUE%'"
+    index_rows = conn.execute(
+        "PRAGMA index_list('user_api_keys')"
     ).fetchall()
-    if unique_rows:
+    has_unique = any(row[2] == 1 for row in index_rows)
+    if has_unique:
         return
     conn.execute(
         """
