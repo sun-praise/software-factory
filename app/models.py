@@ -131,7 +131,7 @@ USER_API_KEYS_TABLE = TableDef(
     create_sql="""
 CREATE TABLE IF NOT EXISTS user_api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider TEXT NOT NULL,
+    provider TEXT NOT NULL UNIQUE,
     encrypted_key TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,

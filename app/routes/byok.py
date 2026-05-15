@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
+from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -42,16 +44,23 @@ async def _verify_byok_admin(request: Request) -> None:
         )
 
 
+def _token_hmac(token: str) -> str:
+    settings = get_settings()
+    key = (settings.byok_encryption_key or settings.github_webhook_secret or "").encode()
+    return hashlib.sha256(key + b":" + token.encode()).hexdigest()
+
+
 def _check_html_admin(request: Request) -> bool:
     settings = get_settings()
     admin_token = settings.byok_admin_token
     if not admin_token:
         return True
-    token = request.cookies.get("byok_admin_token", "")
-    return hmac.compare_digest(token, admin_token)
+    cookie_val = request.cookies.get("byok_admin_token", "")
+    expected = _token_hmac(admin_token)
+    return hmac.compare_digest(cookie_val, expected)
 
 
-def _html_auth_response(request: Request):
+def _html_auth_response(request: Request) -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="BYOK admin token required. Access via /byok?token=<your_token>",
@@ -92,7 +101,12 @@ async def byok_page(request: Request) -> HTMLResponse:
         qp_token = request.query_params.get("token", "")
         if qp_token and hmac.compare_digest(qp_token, admin_token):
             response.set_cookie(
-                "byok_admin_token", admin_token, httponly=True, max_age=86400
+                "byok_admin_token",
+                _token_hmac(admin_token),
+                httponly=True,
+                max_age=86400,
+                secure=True,
+                samesite="Lax",
             )
     return response
 
@@ -107,7 +121,25 @@ async def byok_add_key(request: Request) -> HTMLResponse:
     api_key = str(form.get("api_key", "")).strip()
     label = str(form.get("label", "")).strip()
 
-    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
+    try:
+        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
+    except (ValueError, TypeError) as exc:
+        with connect_db() as conn2:
+            keys = _load_keys(conn2)
+        return templates.TemplateResponse(
+            request=request,
+            name="byok.html",
+            context={
+                "request": request,
+                "title": "API Keys (BYOK)",
+                "keys": keys,
+                "providers": _PROVIDERS,
+                "message": str(exc),
+                "message_class": "",
+                "form": {"provider": provider, "label": label},
+            },
+            status_code=400,
+        )
 
     try:
         with connect_db() as conn:
@@ -185,7 +217,12 @@ async def api_add_key(request: Request) -> JSONResponse:
     api_key = str(body.get("api_key", "")).strip()
     label = str(body.get("label", "")).strip()
 
-    payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
+    try:
+        payload = UserApiKeyCreatePayload(provider=provider, api_key=api_key, label=label)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     try:
         with connect_db() as conn:

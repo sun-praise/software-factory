@@ -123,32 +123,23 @@ def add_api_key(
     api_key = payload.api_key.strip()
     if not api_key:
         raise ValueError("API key must not be empty")
-    existing = conn.execute(
-        "SELECT id FROM user_api_keys WHERE provider = ? LIMIT 1",
-        (provider,),
-    ).fetchone()
-    if existing:
-        conn.execute(
-            "DELETE FROM user_api_keys WHERE provider = ?",
-            (provider,),
-        )
     encrypted = _encrypt(api_key)
     label = payload.label.strip() or _PROVIDER_LABELS.get(provider, provider)
-    cursor = conn.execute(
+    conn.execute(
         """
-        INSERT INTO user_api_keys (provider, encrypted_key, label, enabled)
+        INSERT OR REPLACE INTO user_api_keys (provider, encrypted_key, label, enabled)
         VALUES (?, ?, ?, 1)
         """,
         (provider, encrypted, label),
     )
     conn.commit()
-    row_id = cursor.lastrowid
     row = conn.execute(
         """
         SELECT id, provider, encrypted_key, label, enabled, created_at, updated_at
-        FROM user_api_keys WHERE id = ?
+        FROM user_api_keys WHERE provider = ?
+        ORDER BY id DESC LIMIT 1
         """,
-        (row_id,),
+        (provider,),
     ).fetchone()
     plain = _decrypt(str(row["encrypted_key"]))
     return UserApiKeyEntry(
