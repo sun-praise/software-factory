@@ -46,8 +46,13 @@ async def _verify_byok_admin(request: Request) -> None:
 
 def _token_hmac(token: str) -> str:
     settings = get_settings()
-    key = (settings.byok_encryption_key or settings.github_webhook_secret or "").encode()
-    return hashlib.sha256(key + b":" + token.encode()).hexdigest()
+    secret = settings.byok_encryption_key or settings.github_webhook_secret
+    if not secret:
+        raise RuntimeError(
+            "BYOK_ENCRYPTION_KEY or GITHUB_WEBHOOK_SECRET must be configured "
+            "for BYOK cookie authentication"
+        )
+    return hmac.new(secret.encode(), token.encode(), hashlib.sha256).hexdigest()
 
 
 def _check_html_admin(request: Request) -> bool:
