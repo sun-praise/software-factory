@@ -66,8 +66,12 @@ def _parse_bool_like(value: str | None) -> bool:
     return str(value).strip().lower() in _TRUE_VALUES
 
 
+_LIKE_ESCAPE_CHAR = "\\"
+
+
 def _escape_like_pattern(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    esc = _LIKE_ESCAPE_CHAR
+    return value.replace(esc, esc + esc).replace("%", esc + "%").replace("_", esc + "_")
 
 
 def _find_existing_run_by_source_url(
@@ -141,6 +145,7 @@ def _fetch_runs(
     query: str = "",
 ) -> dict[str, Any]:
     normalized_query = query.strip()
+    # sql_where contains only fixed SQL template fragments, no user input
     sql_where = ""
     sql_params: list[Any] = []
     if normalized_query:
