@@ -189,6 +189,7 @@ def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
     index_rows = conn.execute(
         "PRAGMA index_list('user_api_keys')"
     ).fetchall()
+    # PRAGMA index_list returns (seq, name, unique, origin, partial)
     has_unique = any(row[2] == 1 for row in index_rows)
     if has_unique:
         return
