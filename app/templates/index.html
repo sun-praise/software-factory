@@ -18,6 +18,12 @@
           <a href="/issues">Submit issue</a>
           <a href="/settings">Settings</a>
           <a href="/byok">API Keys</a>
+          {% if current_user %}
+          <span class="user-info">{{ current_user.username }}</span>
+          <a href="/auth/logout">Logout</a>
+          {% else %}
+          <a href="/auth/login">Login with GitHub</a>
+          {% endif %}
         </nav>
       </header>
 

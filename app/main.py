@@ -12,6 +12,7 @@ from app.routes.github import router as github_router
 from app.routes.hooks import router as hooks_router
 from app.routes.web import router as web_router
 from app.routes.byok import router as byok_router
+from app.routes.auth import router as auth_router
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ app.include_router(hooks_router)
 app.include_router(github_router)
 app.include_router(web_router)
 app.include_router(byok_router)
+app.include_router(auth_router)
 
 
 @app.get("/healthz")

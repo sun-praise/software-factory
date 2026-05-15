@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from app.db import connect_db
 from app.providers import get_git_remote_provider, get_task_source_provider
+from app.routes.auth import get_current_user_from_request
 from app.services.github_events import build_review_batch_id, build_task_idempotency_key
 from app.services.feature_flags import (
     AgentFeatureFlags,
@@ -776,6 +777,11 @@ def _enqueue_task_fix(
     }
 
 
+def _template_context(request: Request, **extra: Any) -> dict[str, Any]:
+    ctx: dict[str, Any] = {"request": request, "current_user": get_current_user_from_request(request)}
+    ctx.update(extra)
+    return ctx
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     templates: Jinja2Templates = request.app.state.templates
@@ -785,12 +791,12 @@ async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={
-            "request": request,
-            "title": "Software Factory",
-            "runs": run_page["items"],
-            "run_page": run_page,
-        },
+        context=_template_context(
+            request,
+            title="Software Factory",
+            runs=run_page["items"],
+            run_page=run_page,
+        ),
     )
 
 

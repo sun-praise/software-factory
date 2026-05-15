@@ -8,6 +8,7 @@ from app.providers.types import (
     DEFAULT_PROVIDER_NAME,
     ForgeProvider,
     GitRemoteProvider,
+    OAuthProvider,
     TaskSourceProvider,
     WebhookProvider,
 )
@@ -17,12 +18,14 @@ FORGE_PROVIDER_CATEGORY = "forge"
 TASK_SOURCE_PROVIDER_CATEGORY = "task_source"
 WEBHOOK_PROVIDER_CATEGORY = "webhook"
 GIT_REMOTE_PROVIDER_CATEGORY = "git_remote"
+OAUTH_PROVIDER_CATEGORY = "oauth"
 _PROVIDER_CATEGORIES = frozenset(
     {
         FORGE_PROVIDER_CATEGORY,
         TASK_SOURCE_PROVIDER_CATEGORY,
         WEBHOOK_PROVIDER_CATEGORY,
         GIT_REMOTE_PROVIDER_CATEGORY,
+        OAUTH_PROVIDER_CATEGORY,
     }
 )
 _CATEGORY_TO_SETTINGS_FIELD = {
@@ -30,6 +33,7 @@ _CATEGORY_TO_SETTINGS_FIELD = {
     TASK_SOURCE_PROVIDER_CATEGORY: "task_source_provider",
     WEBHOOK_PROVIDER_CATEGORY: "webhook_provider",
     GIT_REMOTE_PROVIDER_CATEGORY: "git_remote_provider",
+    OAUTH_PROVIDER_CATEGORY: "oauth_provider",
 }
 
 
@@ -51,12 +55,14 @@ class RegistrySnapshot:
     task_source: tuple[str, ...]
     webhook: tuple[str, ...]
     git_remote: tuple[str, ...]
+    oauth: tuple[str, ...]
 
 
 _forge_providers: dict[str, ForgeProvider] = {}
 _task_source_providers: dict[str, TaskSourceProvider] = {}
 _webhook_providers: dict[str, WebhookProvider] = {}
 _git_remote_providers: dict[str, GitRemoteProvider] = {}
+_oauth_providers: dict[str, OAuthProvider] = {}
 _REGISTRY_LOCK = threading.RLock()
 _registry_initialized = False
 
@@ -190,6 +196,32 @@ def register_git_remote_provider(
         )
 
 
+def register_oauth_provider(
+    name: str,
+    provider: OAuthProvider,
+    *,
+    replace: bool = False,
+) -> None:
+    normalized_name = _normalize_provider_name(name)
+    if normalized_name is None:
+        raise ProviderRegistrationError("provider name cannot be empty")
+    _validate_provider(
+        category=OAUTH_PROVIDER_CATEGORY,
+        name=normalized_name,
+        provider=provider,
+        expected_protocol=OAuthProvider,
+    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        _register_provider_locked(
+            store=_oauth_providers,
+            category=OAUTH_PROVIDER_CATEGORY,
+            name=normalized_name,
+            provider=provider,
+            replace=replace,
+        )
+
+
 def get_forge_provider(name: str | None = None) -> ForgeProvider:
     resolved_name = resolve_provider_name(
         name,
@@ -258,6 +290,23 @@ def get_git_remote_provider(name: str | None = None) -> GitRemoteProvider:
         )
 
 
+def get_oauth_provider(name: str | None = None) -> OAuthProvider:
+    resolved_name = resolve_provider_name(
+        name,
+        default_name=_configured_default_provider_name(OAUTH_PROVIDER_CATEGORY),
+    )
+    with _REGISTRY_LOCK:
+        _ensure_initialized_locked()
+        return cast(
+            OAuthProvider,
+            _get_provider_locked(
+                store=_oauth_providers,
+                category=OAUTH_PROVIDER_CATEGORY,
+                name=resolved_name,
+            ),
+        )
+
+
 def list_registered_provider_names(category: str) -> tuple[str, ...]:
     normalized_category = category.strip().lower()
     if normalized_category not in _PROVIDER_CATEGORIES:
@@ -274,7 +323,9 @@ def list_registered_provider_names(category: str) -> tuple[str, ...]:
             return tuple(sorted(_task_source_providers))
         if normalized_category == WEBHOOK_PROVIDER_CATEGORY:
             return tuple(sorted(_webhook_providers))
-        return tuple(sorted(_git_remote_providers))
+        if normalized_category == GIT_REMOTE_PROVIDER_CATEGORY:
+            return tuple(sorted(_git_remote_providers))
+        return tuple(sorted(_oauth_providers))
 
 
 def snapshot_registry() -> RegistrySnapshot:
@@ -349,6 +400,7 @@ def _snapshot_registry_locked() -> RegistrySnapshot:
         task_source=tuple(sorted(_task_source_providers)),
         webhook=tuple(sorted(_webhook_providers)),
         git_remote=tuple(sorted(_git_remote_providers)),
+        oauth=tuple(sorted(_oauth_providers)),
     )
 
 
@@ -365,6 +417,7 @@ def _clear_registry_locked() -> None:
     _task_source_providers.clear()
     _webhook_providers.clear()
     _git_remote_providers.clear()
+    _oauth_providers.clear()
 
 
 def _normalize_provider_name(value: str | None) -> str | None:
@@ -404,6 +457,7 @@ def _register_builtin_defaults_locked() -> None:
     from app.providers.github import (
         GitHubForgeProvider,
         GitHubGitRemoteProvider,
+        GitHubOAuthProvider,
         GitHubTaskSourceProvider,
         GitHubWebhookProvider,
     )
@@ -462,5 +516,12 @@ def _register_builtin_defaults_locked() -> None:
         category=GIT_REMOTE_PROVIDER_CATEGORY,
         name=DEFAULT_PROVIDER_NAME,
         provider=GitHubGitRemoteProvider(),
+        replace=False,
+    )
+    _register_provider_locked(
+        store=_oauth_providers,
+        category=OAUTH_PROVIDER_CATEGORY,
+        name=DEFAULT_PROVIDER_NAME,
+        provider=GitHubOAuthProvider(),
         replace=False,
     )

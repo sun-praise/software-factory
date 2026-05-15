@@ -7,7 +7,9 @@ import logging
 import subprocess
 from json import JSONDecodeError
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
+
+from app.providers.types import OAuthUserInfo
 
 import httpx
 
@@ -809,6 +811,108 @@ class GitHubGitRemoteProvider:
     @property
     def api_base_url(self) -> str:
         return "https://api.github.com"
+
+
+class GitHubOAuthProvider:
+    name = DEFAULT_PROVIDER_NAME
+
+    @property
+    def authorize_url(self) -> str:
+        return "https://github.com/login/oauth/authorize"
+
+    @property
+    def token_url(self) -> str:
+        return "https://github.com/login/oauth/access_token"
+
+    @property
+    def userinfo_url(self) -> str:
+        return "https://api.github.com/user"
+
+    @property
+    def scopes(self) -> tuple[str, ...]:
+        return ("read:user", "user:email")
+
+    def build_authorize_url(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        state: str,
+    ) -> str:
+        params = urlencode({
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "scope": " ".join(self.scopes),
+        })
+        return f"{self.authorize_url}?{params}"
+
+    async def exchange_code(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        code: str,
+        redirect_uri: str,
+    ) -> Mapping[str, Any]:
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                self.token_url,
+                json={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                },
+                headers={"Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def fetch_user_info(
+        self,
+        *,
+        access_token: str,
+    ) -> OAuthUserInfo:
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                self.userinfo_url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            email: str | None = data.get("email")
+            if not email:
+                emails_resp = await client.get(
+                    "https://api.github.com/user/emails",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Accept": "application/json",
+                    },
+                )
+                emails_resp.raise_for_status()
+                for entry in emails_resp.json():
+                    if entry.get("primary"):
+                        email = entry.get("email")
+                        break
+
+            return OAuthUserInfo(
+                provider=self.name,
+                provider_user_id=str(data.get("id", "")),
+                username=data.get("login", ""),
+                display_name=data.get("name") or data.get("login", ""),
+                email=email,
+                avatar_url=data.get("avatar_url"),
+                raw_profile=data,
+            )
 
 
 def _gh_result_error_details(result: subprocess.CompletedProcess[str]) -> str:

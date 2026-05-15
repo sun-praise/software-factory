@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     run_workspace_base_dir: str = ".software-factory-run-workspaces"
     byok_admin_token: str = ""
     byok_encryption_key: str = ""
+    oauth_provider: str = "github"
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    oauth_redirect_uri: str = ""
+    oauth_session_secret: str = ""
 
     @field_validator(
         "bot_logins",
@@ -131,6 +136,7 @@ class Settings(BaseSettings):
         "task_source_provider",
         "webhook_provider",
         "git_remote_provider",
+        "oauth_provider",
         mode="before",
     )
     @classmethod

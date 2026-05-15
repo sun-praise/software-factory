@@ -37,9 +37,10 @@ def init_db() -> None:
         _migrate_app_config_audit_log(conn)
         _migrate_run_result_pr_columns(conn)
         _migrate_user_api_keys(conn)
+        _migrate_users_and_oauth_sessions(conn)
 
 
-ALLOWED_TABLES = {"pull_requests", "autofix_runs", "user_api_keys"}
+ALLOWED_TABLES = {"pull_requests", "autofix_runs", "user_api_keys", "users", "oauth_sessions"}
 
 
 def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
@@ -214,4 +215,56 @@ def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);"
     )
+    conn.commit()
+
+
+def _migrate_users_and_oauth_sessions(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchall()
+    if not rows:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                provider_user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                email TEXT,
+                avatar_url TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(provider, provider_user_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_user_id ON users(provider, provider_user_id);"
+        )
+
+    oauth_rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_sessions'"
+    ).fetchall()
+    if not oauth_rows:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_token TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                access_token TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_sessions_session_token ON oauth_sessions(session_token);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_oauth_sessions_user_id ON oauth_sessions(user_id);"
+        )
     conn.commit()

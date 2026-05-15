@@ -155,3 +155,54 @@ class GitRemoteProvider(Protocol):
 
     @property
     def api_base_url(self) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthUserInfo:
+    provider: str
+    provider_user_id: str
+    username: str
+    display_name: str
+    email: str | None = None
+    avatar_url: str | None = None
+    raw_profile: Mapping[str, Any] | None = None
+
+
+@runtime_checkable
+class OAuthProvider(Protocol):
+    name: str
+
+    @property
+    def authorize_url(self) -> str: ...
+
+    @property
+    def token_url(self) -> str: ...
+
+    @property
+    def userinfo_url(self) -> str: ...
+
+    @property
+    def scopes(self) -> tuple[str, ...]: ...
+
+    def build_authorize_url(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        state: str,
+    ) -> str: ...
+
+    async def exchange_code(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        code: str,
+        redirect_uri: str,
+    ) -> Mapping[str, Any]: ...
+
+    async def fetch_user_info(
+        self,
+        *,
+        access_token: str,
+    ) -> OAuthUserInfo: ...

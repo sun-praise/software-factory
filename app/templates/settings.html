@@ -9,7 +9,13 @@
   <body>
     <main class="container">
       <header class="stacked-header">
-        <p><a href="/">Back to runs</a></p>
+        <p><a href="/">Back to runs</a>
+          {% if current_user %}
+          · {{ current_user.username }} · <a href="/auth/logout">Logout</a>
+          {% else %}
+          · <a href="/auth/login">Login with GitHub</a>
+          {% endif %}
+        </p>
         <h1>System Settings</h1>
         <p class="muted">Configure feature flags for autofix execution.</p>
       </header>
