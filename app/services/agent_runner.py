@@ -57,6 +57,7 @@ from app.services.queue import (
 from app.services.retry import RetryConfig, schedule_retry
 from app.services.run_hints import ExecutionHints, parse_execution_hints
 from app.services.runtime_settings import RuntimeSettings, resolve_runtime_settings
+from app.services.byok import build_byok_env_overrides
 from app.services.task_source import (
     build_task_pull_request_body,
     build_task_pull_request_title,
@@ -786,6 +787,7 @@ def run_once(
                         )
 
         new_failure_results: list[dict[str, Any]] = []
+        byok_overrides = build_byok_env_overrides(conn)
         for attempt in range(1, MAX_CHECK_FEEDBACK_ATTEMPTS + 1):
             operator_hints = get_run_operator_hints(conn, run_id)
             execution_hints = parse_execution_hints(operator_hints)
@@ -844,6 +846,7 @@ def run_once(
                     ),
                     on_log_line=logger.append,
                     should_cancel=lambda: is_run_cancel_requested(conn, run_id),
+                    byok_overrides=byok_overrides,
                 )
             )
             logger.append(f"agent_mode={used_agent_mode or 'unknown'}")
@@ -1517,6 +1520,7 @@ def _execute_agent_sdks(
     claude_agent_command_timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> tuple[bool, str | None, str | None, str | None]:
     last_error_code: str | None = None
     last_error_message: str | None = None
@@ -1607,6 +1611,7 @@ def _execute_agent_sdks(
             if should_cancel is not None:
                 claude_kwargs["should_cancel"] = should_cancel
             claude_kwargs["normalized_review"] = normalized_review
+            claude_kwargs["byok_overrides"] = byok_overrides
             claude_ok, claude_message, claude_error_code = _run_claude_agent(
                 **claude_kwargs,
             )
@@ -1703,6 +1708,7 @@ def _run_claude_agent(
     timeout_seconds: int,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str | None]:
     if runtime == "docker":
         return _run_claude_container_command(
@@ -1722,6 +1728,7 @@ def _run_claude_agent(
             failure_code=CLAUDE_FAILURE_CODE_COMMAND,
             on_log_line=on_log_line,
             should_cancel=should_cancel,
+            byok_overrides=byok_overrides,
         )
     return _run_claude_stream_command(
         workspace=workspace,
@@ -1739,6 +1746,7 @@ def _run_claude_agent(
         failure_code=CLAUDE_FAILURE_CODE_COMMAND,
         on_log_line=on_log_line,
         should_cancel=should_cancel,
+        byok_overrides=byok_overrides,
     )
 
 
@@ -1760,6 +1768,7 @@ def _run_claude_container_command(
     failure_code: str,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
@@ -1790,6 +1799,7 @@ def _run_claude_container_command(
         provider=provider,
         base_url=base_url,
         model=model,
+        byok_overrides=byok_overrides,
     )
     argv = _build_claude_container_command_argv(
         workspace=workspace,
@@ -1834,6 +1844,7 @@ def _run_claude_stream_command(
     failure_code: str,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str | None]:
     normalized_command = command.strip()
     if not normalized_command:
@@ -1872,6 +1883,7 @@ def _run_claude_stream_command(
             provider=provider,
             base_url=base_url,
             model=model,
+            byok_overrides=byok_overrides,
         ),
     )
 
@@ -2111,6 +2123,7 @@ def _build_claude_container_environment(
     provider: str,
     base_url: str,
     model: str,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     env = _build_claude_agent_environment(
         repo=repo,
@@ -2120,6 +2133,7 @@ def _build_claude_container_environment(
         provider=provider,
         base_url=base_url,
         model=model,
+        byok_overrides=byok_overrides,
     )
     env["HOME"] = "/tmp/claude-home"
     env["XDG_CONFIG_HOME"] = "/tmp/claude-home/.config"
@@ -2705,6 +2719,7 @@ def _build_claude_agent_environment(
     provider: str,
     base_url: str,
     model: str,
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     env = _build_agent_env(
         run_id=run_id,
@@ -2712,6 +2727,7 @@ def _build_claude_agent_environment(
         pr_number=pr_number,
         normalized_review=normalized_review,
     )
+    _byok = byok_overrides or {}
     normalized_provider = str(provider).strip().lower()
     normalized_base_url = str(base_url).strip()
     normalized_model = str(model).strip()
@@ -2719,7 +2735,7 @@ def _build_claude_agent_environment(
     if normalized_provider == "zhipu":
         env.pop("ANTHROPIC_MODEL", None)
         env.pop("ANTHROPIC_SMALL_FAST_MODEL", None)
-        zhipu_key = str(os.environ.get("ZHIPU_API_KEY", "")).strip()
+        zhipu_key = _byok.get("ZHIPU_API_KEY") or str(os.environ.get("ZHIPU_API_KEY", "")).strip()
         if zhipu_key:
             env["ANTHROPIC_AUTH_TOKEN"] = zhipu_key
             env["ANTHROPIC_API_KEY"] = zhipu_key
@@ -2729,15 +2745,19 @@ def _build_claude_agent_environment(
         env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "glm-4.7"
         env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = normalized_model or "glm-5"
     elif normalized_provider == "deepseek":
-        deepseek_key = str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
+        deepseek_key = _byok.get("DEEPSEEK_API_KEY") or str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
         if deepseek_key:
             env["ANTHROPIC_AUTH_TOKEN"] = deepseek_key
             env["ANTHROPIC_API_KEY"] = deepseek_key
     elif normalized_provider:
-        openrouter_key = str(os.environ.get("OPENROUTER_API_KEY", "")).strip()
+        openrouter_key = _byok.get("OPENROUTER_API_KEY") or str(os.environ.get("OPENROUTER_API_KEY", "")).strip()
         if openrouter_key:
             env["ANTHROPIC_AUTH_TOKEN"] = openrouter_key
         env["ANTHROPIC_API_KEY"] = ""
+    else:
+        ant_key = _byok.get("ANTHROPIC_API_KEY")
+        if ant_key:
+            env["ANTHROPIC_API_KEY"] = ant_key
 
     if normalized_base_url:
         env["ANTHROPIC_BASE_URL"] = normalized_base_url

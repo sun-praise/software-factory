@@ -36,9 +36,10 @@ def init_db() -> None:
         _migrate_app_feature_flags(conn)
         _migrate_app_config_audit_log(conn)
         _migrate_run_result_pr_columns(conn)
+        _migrate_user_api_keys(conn)
 
 
-ALLOWED_TABLES = {"pull_requests", "autofix_runs"}
+ALLOWED_TABLES = {"pull_requests", "autofix_runs", "user_api_keys"}
 
 
 def _migrate_m6_columns(conn: sqlite3.Connection) -> None:
@@ -160,3 +161,57 @@ def _ensure_columns(
         if not column_name.replace("_", "").isalnum():
             raise ValueError(f"Invalid column name: {column_name}")
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")  # nosec B608: table_name and column_name validated above
+
+
+def _migrate_user_api_keys(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_api_keys'"
+    ).fetchall()
+    if not rows:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL UNIQUE,
+                encrypted_key TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);"
+        )
+        conn.commit()
+        return
+    index_rows = conn.execute(
+        "PRAGMA index_list('user_api_keys')"
+    ).fetchall()
+    # PRAGMA index_list returns (seq, name, unique, origin, partial)
+    has_unique = any(row[2] == 1 for row in index_rows)
+    if has_unique:
+        return
+    conn.execute(
+        """
+        CREATE TABLE user_api_keys_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL UNIQUE,
+            encrypted_key TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO user_api_keys_new SELECT * FROM user_api_keys"
+    )
+    conn.execute("DROP TABLE user_api_keys")
+    conn.execute("ALTER TABLE user_api_keys_new RENAME TO user_api_keys")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_api_keys_provider ON user_api_keys(provider);"
+    )
+    conn.commit()

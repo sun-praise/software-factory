@@ -71,15 +71,24 @@ def generate_fix(
     prompt: str,
     workspace_dir: str,
     normalized_review: Mapping[str, Any],
+    byok_overrides: Mapping[str, str] | None = None,
 ) -> FixPlan:
+    """Generate a fix plan using the configured AI provider.
+
+    ``byok_overrides`` allows callers to inject user-provided API keys
+    (from the BYOK subsystem) that take precedence over the global
+    configuration.  Pass the result of ``build_byok_env_overrides``
+    when available.
+    """
     settings = get_settings()
     provider = settings.ai_provider.strip().lower()
     request_prompt = _build_request_prompt(prompt, workspace_dir, normalized_review)
+    _byok = byok_overrides or {}
 
     if provider == "anthropic":
-        text = _call_anthropic(request_prompt)
+        text = _call_anthropic(request_prompt, byok_overrides=_byok)
     elif provider == "openai":
-        text = _call_openai(request_prompt)
+        text = _call_openai(request_prompt, byok_overrides=_byok)
     else:
         raise AIConfigError(
             f"unsupported AI_PROVIDER '{settings.ai_provider or 'unset'}'"
@@ -185,9 +194,10 @@ def _resolve_context_path(workspace: Path, rel_path: str) -> Path | None:
     return candidate
 
 
-def _call_anthropic(request_prompt: str) -> str:
+def _call_anthropic(request_prompt: str, *, byok_overrides: Mapping[str, str] | None = None) -> str:
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    api_key = (byok_overrides or {}).get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
+    if not api_key:
         raise AIConfigError("ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic")
 
     payload = {
@@ -197,7 +207,7 @@ def _call_anthropic(request_prompt: str) -> str:
         "messages": [{"role": "user", "content": request_prompt}],
     }
     headers = {
-        "x-api-key": settings.anthropic_api_key,
+        "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
@@ -219,9 +229,10 @@ def _call_anthropic(request_prompt: str) -> str:
     return text
 
 
-def _call_openai(request_prompt: str) -> str:
+def _call_openai(request_prompt: str, *, byok_overrides: Mapping[str, str] | None = None) -> str:
     settings = get_settings()
-    if not settings.openai_api_key:
+    api_key = (byok_overrides or {}).get("OPENAI_API_KEY") or settings.openai_api_key
+    if not api_key:
         raise AIConfigError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
 
     payload = {
@@ -237,7 +248,7 @@ def _call_openai(request_prompt: str) -> str:
         ],
     }
     headers = {
-        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
     }
     data = _post_json(

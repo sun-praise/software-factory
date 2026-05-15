@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="container">
+      <p>
+        <a href="/">Back to runs</a> ·
+        <a href="/settings">Settings</a>
+      </p>
+
+      <header>
+        <h1>{{ title }}</h1>
+        <p class="muted">Bring your own API keys to use with Software Factory. Keys are encrypted at rest.</p>
+      </header>
+
+      {% if message %}
+      <p class="status {{ message_class | default('ok') }}">{{ message }}</p>
+      {% endif %}
+
+      <section>
+        <h2>Add API Key</h2>
+        <form method="post" action="/byok" class="settings-form">
+          <label for="provider">Provider</label>
+          <select id="provider" name="provider" required>
+            {% for p in providers %}
+            <option value="{{ p.value }}" {% if form.provider | default('') == p.value %}selected{% endif %}>{{ p.label }}</option>
+            {% endfor %}
+          </select>
+
+          <label for="api_key">API Key</label>
+          <input type="password" id="api_key" name="api_key" required placeholder="sk-...">
+
+          <label for="label">Label (optional)</label>
+          <input type="text" id="label" name="label" value="{{ form.label | default('') }}" placeholder="e.g. My Anthropic Key">
+
+          <div class="actions">
+            <button type="submit">Add Key</button>
+          </div>
+        </form>
+      </section>
+
+      {% if keys %}
+      <section>
+        <h2>Stored Keys</h2>
+        <table class="runs-table">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Label</th>
+              <th>Key</th>
+              <th>Status</th>
+              <th>Added</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for key in keys %}
+            <tr>
+              <td>{{ key.provider }}</td>
+              <td>{{ key.label }}</td>
+              <td><code>{{ key.masked_key }}</code></td>
+              <td>
+                {% if key.enabled %}
+                <span class="status ok">Active</span>
+                {% else %}
+                <span class="status">Disabled</span>
+                {% endif %}
+              </td>
+              <td class="tiny">{{ key.created_at }}</td>
+              <td>
+                <form method="post" action="/byok/{{ key.id }}/toggle" style="display:inline">
+                  <button type="submit">{% if key.enabled %}Disable{% else %}Enable{% endif %}</button>
+                </form>
+                <form method="post" action="/byok/{{ key.id }}/delete" style="display:inline"
+                      class="delete-key-form">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+      {% else %}
+      <section>
+        <p class="muted">No API keys stored yet. Add one above to get started.</p>
+      </section>
+      {% endif %}
+    </main>
+    <script>
+      document.querySelectorAll('.delete-key-form').forEach(function(form) {
+        form.addEventListener('submit', function(e) {
+          if (!confirm('Delete this API key?')) e.preventDefault();
+        });
+      });
+    </script>
+  </body>
+</html>

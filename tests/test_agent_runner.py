@@ -2762,6 +2762,7 @@ def test_execute_agent_sdks_falls_back_to_claude(
         timeout_seconds: int,
         on_log_line: object | None = None,
         should_cancel: object | None = None,
+        byok_overrides: object | None = None,
     ) -> tuple[bool, str, str | None]:
         calls.append(workspace)
         return True, "claude succeeded", None
@@ -2818,6 +2819,7 @@ def test_execute_agent_sdks_falls_back_to_openhands_after_claude_failure(
         timeout_seconds: int,
         on_log_line: object | None = None,
         should_cancel: object | None = None,
+        byok_overrides: object | None = None,
     ) -> tuple[bool, str, str | None]:
         calls.append("claude")
         return False, "claude failed", "agent_claude_failed"
