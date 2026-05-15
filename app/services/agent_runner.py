@@ -2754,6 +2754,10 @@ def _build_claude_agent_environment(
         if openrouter_key:
             env["ANTHROPIC_AUTH_TOKEN"] = openrouter_key
         env["ANTHROPIC_API_KEY"] = ""
+    else:
+        ant_key = _byok.get("ANTHROPIC_API_KEY")
+        if ant_key:
+            env["ANTHROPIC_API_KEY"] = ant_key
 
     if normalized_base_url:
         env["ANTHROPIC_BASE_URL"] = normalized_base_url
