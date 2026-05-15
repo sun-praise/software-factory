@@ -120,3 +120,22 @@ If this is wrong, the UI and the worker will read different SQLite files:
 If the UI state and worker behavior disagree, check `DB_PATH` first.
 
 In local development, runtime knobs like retry limits or bot filters may live in DB, but `DB_PATH` must still come from env so both processes point at the same SQLite file.
+
+## Rollback and Change History
+
+Config changes made through `/settings` are audit-trailed. You can inspect and revert changes:
+
+```bash
+# View recent config changes
+curl http://localhost:8011/api/settings/audit-log
+
+# View changes for a specific key
+curl "http://localhost:8011/api/settings/audit-log?key=runtime.max_retry_attempts"
+
+# Rollback a specific change (using the audit entry id)
+curl -X POST http://localhost:8011/api/settings/rollback \
+  -H "Content-Type: application/json" \
+  -d '{"key": "runtime.max_retry_attempts", "target_audit_id": 3}'
+```
+
+Workers pick up rolled-back values on the next loop iteration — no restart required.

@@ -785,6 +785,140 @@ def _serialize_list_value(value: tuple[str, ...] | list[str]) -> str:
     return json.dumps(normalized)
 
 
+@dataclass(frozen=True)
+class ConfigAuditEntry:
+    id: int
+    key: str
+    old_value: str | None
+    new_value: str | None
+    changed_by: str
+    change_source: str
+    created_at: str
+
+
+def get_config_audit_history(
+    conn: sqlite3.Connection,
+    *,
+    key: str | None = None,
+    limit: int = 50,
+) -> list[ConfigAuditEntry]:
+    if key is not None:
+        spec = _RUNTIME_SETTING_SPECS_BY_KEY.get(key)
+        if spec is None:
+            raise ValueError(f"unknown runtime setting: {key}")
+        rows = conn.execute(
+            """
+            SELECT id, key, old_value, new_value, changed_by, change_source, created_at
+            FROM app_config_audit_log
+            WHERE key = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (key, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, key, old_value, new_value, changed_by, change_source, created_at
+            FROM app_config_audit_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        ConfigAuditEntry(
+            id=row["id"],
+            key=row["key"],
+            old_value=row["old_value"],
+            new_value=row["new_value"],
+            changed_by=row["changed_by"],
+            change_source=row["change_source"],
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
+
+
+def rollback_config_value(
+    conn: sqlite3.Connection,
+    *,
+    key: str,
+    target_audit_id: int,
+    changed_by: str = "operator",
+    change_source: str = "api.rollback",
+) -> ConfigAuditEntry:
+    spec = _RUNTIME_SETTING_SPECS_BY_KEY.get(key)
+    if spec is None:
+        raise ValueError(f"unknown runtime setting: {key}")
+    if spec.ownership != _DB_OWNERSHIP:
+        raise ValueError(
+            f"runtime setting {key} is {spec.ownership} and cannot be rolled back"
+        )
+    row = conn.execute(
+        """
+        SELECT id, key, old_value, new_value, changed_by, change_source, created_at
+        FROM app_config_audit_log
+        WHERE id = ? AND key = ?
+        """,
+        (target_audit_id, key),
+    ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"audit entry {target_audit_id} not found for key {key}"
+        )
+    rollback_value = row["old_value"]
+    current_row = conn.execute(
+        "SELECT value FROM app_feature_flags WHERE key = ?", (key,)
+    ).fetchone()
+    pre_update_value = (
+        str(current_row["value"]) if current_row is not None else None
+    )
+    if pre_update_value is not None:
+        pre_update_value = _normalize_persisted_runtime_value(
+            spec, pre_update_value
+        )
+    if rollback_value is None:
+        conn.execute("DELETE FROM app_feature_flags WHERE key = ?", (key,))
+        audit_new_value = None
+    else:
+        validated = _normalize_persisted_runtime_value(spec, rollback_value)
+        conn.execute(
+            """
+            INSERT INTO app_feature_flags (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, validated),
+        )
+        audit_new_value = validated
+    if pre_update_value != audit_new_value:
+        if spec.sensitive:
+            audit_old = _REDACTED_AUDIT_VALUE
+            audit_new = _REDACTED_AUDIT_VALUE
+        else:
+            audit_old = pre_update_value
+            audit_new = audit_new_value
+        conn.execute(
+            """
+            INSERT INTO app_config_audit_log (key, old_value, new_value, changed_by, change_source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (key, audit_old, audit_new, changed_by, change_source),
+        )
+    conn.commit()
+    rolled_back_entry = ConfigAuditEntry(
+        id=row["id"],
+        key=row["key"],
+        old_value=row["old_value"],
+        new_value=row["new_value"],
+        changed_by=row["changed_by"],
+        change_source=row["change_source"],
+        created_at=row["created_at"],
+    )
+    return rolled_back_entry
+
+
 def _log_invalid_db_value(key: str, value: Any, default: Any) -> None:
     _LOG.warning(
         "invalid runtime setting for %s: %r; falling back to %r",

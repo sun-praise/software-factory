@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 
 from app.config import get_settings
@@ -14,10 +13,10 @@ from app.services.runtime_settings import (
 from scripts.backfill_runtime_settings import _collect_env_overrides
 
 
-def _make_conn(tmp_path) -> sqlite3.Connection:
+def _make_conn(monkeypatch, tmp_path) -> sqlite3.Connection:
     get_settings.cache_clear()
     db_path = tmp_path / "backfill_test.db"
-    os.environ["DB_PATH"] = str(db_path)
+    monkeypatch.setenv("DB_PATH", str(db_path))
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_SQL)
@@ -58,7 +57,7 @@ def test_backfill_writes_missing_settings_to_db(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("GITHUB_WEBHOOK_DEBOUNCE_SECONDS", "42")
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "7")
-    conn = _make_conn(tmp_path)
+    conn = _make_conn(monkeypatch, tmp_path)
 
     from scripts.backfill_runtime_settings import backfill_runtime_settings
 
@@ -74,7 +73,7 @@ def test_backfill_writes_missing_settings_to_db(monkeypatch, tmp_path) -> None:
 def test_backfill_skips_already_stored_keys(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "7")
-    conn = _make_conn(tmp_path)
+    conn = _make_conn(monkeypatch, tmp_path)
     conn.execute(
         "INSERT INTO app_feature_flags (key, value) VALUES (?, ?)",
         (RUNTIME_MAX_AUTOFIX_PER_PR_KEY, "3"),
@@ -94,7 +93,7 @@ def test_backfill_skips_already_stored_keys(monkeypatch, tmp_path) -> None:
 def test_backfill_dry_run_does_not_write(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "9")
-    conn = _make_conn(tmp_path)
+    conn = _make_conn(monkeypatch, tmp_path)
 
     from scripts.backfill_runtime_settings import backfill_runtime_settings
 
@@ -108,7 +107,7 @@ def test_backfill_dry_run_does_not_write(monkeypatch, tmp_path) -> None:
 
 def test_backfill_noop_when_no_env_vars(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
-    _make_conn(tmp_path)
+    _make_conn(monkeypatch, tmp_path)
 
     from scripts.backfill_runtime_settings import backfill_runtime_settings
 
@@ -119,7 +118,7 @@ def test_backfill_noop_when_no_env_vars(monkeypatch, tmp_path) -> None:
 def test_backfill_records_audit_rows(monkeypatch, tmp_path) -> None:
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("MAX_AUTOFIX_PER_PR", "5")
-    conn = _make_conn(tmp_path)
+    conn = _make_conn(monkeypatch, tmp_path)
 
     from scripts.backfill_runtime_settings import backfill_runtime_settings
 

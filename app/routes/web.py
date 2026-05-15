@@ -21,12 +21,15 @@ from app.services.feature_flags import (
     save_agent_feature_flags,
 )
 from app.services.runtime_settings import (
+    ConfigAuditEntry,
     RuntimeSettingsPayload,
     build_runtime_settings_context,
     describe_runtime_settings,
+    get_config_audit_history,
     get_runtime_form_int_field_specs,
     parse_settings_list_form_value,
     resolve_runtime_settings,
+    rollback_config_value,
     save_runtime_settings,
 )
 from app.schemas.issues import (
@@ -991,6 +994,89 @@ async def runtime_settings_api() -> JSONResponse:
             ],
         }
     )
+
+
+@router.get("/api/settings/audit-log")
+async def config_audit_log_api(
+    key: str | None = None, limit: int = 50
+) -> JSONResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="limit must be between 1 and 500",
+        )
+    with connect_db() as conn:
+        try:
+            entries = get_config_audit_history(conn, key=key, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+    return JSONResponse(
+        {
+            "entries": [_serialize_audit_entry(e) for e in entries],
+            "count": len(entries),
+        }
+    )
+
+
+@router.post("/api/settings/rollback")
+async def config_rollback_api(request: Request) -> JSONResponse:
+    body = await request.json()
+    key = body.get("key")
+    target_audit_id = body.get("target_audit_id")
+    changed_by = body.get("changed_by", "operator")
+    if not key or target_audit_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="key and target_audit_id are required",
+        )
+    try:
+        target_audit_id = int(target_audit_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_audit_id must be an integer",
+        )
+    with connect_db() as conn:
+        try:
+            rolled_back = rollback_config_value(
+                conn,
+                key=key,
+                target_audit_id=target_audit_id,
+                changed_by=changed_by,
+                change_source="api.rollback",
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        current = [
+            _serialize_runtime_setting_description(item)
+            for item in describe_runtime_settings(conn)
+            if item.key == key and not item.sensitive
+        ]
+    return JSONResponse(
+        {
+            "ok": True,
+            "rolled_back_from": _serialize_audit_entry(rolled_back),
+            "current": current[0] if current else None,
+        }
+    )
+
+
+def _serialize_audit_entry(entry: ConfigAuditEntry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "key": entry.key,
+        "old_value": entry.old_value,
+        "new_value": entry.new_value,
+        "changed_by": entry.changed_by,
+        "change_source": entry.change_source,
+        "created_at": entry.created_at,
+    }
 
 
 @router.post("/settings", response_class=HTMLResponse)
