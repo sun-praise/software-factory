@@ -973,14 +973,14 @@ async def settings_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
-        context={
-            "request": request,
-            "title": "Software Factory - Settings",
-            "saved": request.query_params.get("saved") == "1",
-            "runtime_settings_descriptions": runtime_descriptions,
+        context=_template_context(
+            request,
+            title="Software Factory - Settings",
+            saved=request.query_params.get("saved") == "1",
+            runtime_settings_descriptions=runtime_descriptions,
             **flag_context,
             **runtime_context,
-        },
+        ),
     )
 
 

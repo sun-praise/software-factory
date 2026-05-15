@@ -163,7 +163,7 @@ async def callback(
     if not code or not state:
         return HTMLResponse("<h1>Authentication failed</h1><p>Missing code or state.</p>", status_code=400)
 
-    if cookie_state != state:
+    if not secrets.compare_digest(cookie_state or "", state):
         return HTMLResponse("<h1>Authentication failed</h1><p>State mismatch.</p>", status_code=400)
 
     provider = get_oauth_provider()
@@ -256,4 +256,5 @@ def get_current_user_from_request(
         return None
     with connect_db() as conn:
         _cleanup_expired_sessions(conn)
+        conn.commit()
         return _get_current_user(conn, session_token)
