@@ -18,7 +18,7 @@
 | 在 oh-my-pi 中首次出现 | 2026-05-16 (通过 `git subtree add` 合入) |
 | 源码仓库 | 私有/已删除 (can1357/robomp 与 can1357/roboomp 均 404) |
 | 维护者 | can1357 (oh-my-pi 作者, 2026-02 写过 ["The harness problem"](https://blog.can.ac/2026/02/12/the-harness-problem/)) |
-| 父项目背景 | oh-my-pi 是 Pi (Mario Zechner) 的 fork, 强调 harness 优化; 2025-08 起开发, 2025-12 公开, 当前 ~6,900 commits |
+| 父项目背景 | oh-my-pi 基于 Pi (Mario Zechner, 现迁至 [earendil-works/pi](https://github.com/earendil-works/pi)) 的代码独立创建 (非 GitHub fork), 强调 harness 优化; 2025-08-09 起开发 (与 Pi 首 commit 同日), 2025-12-31 公开, 当前 ~6,900 commits |
 
 ## 时间线对比
 
@@ -109,4 +109,4 @@ agent 唯一能 mutate GitHub 的接口 (10 个):
 - robomp 目录: https://github.com/can1357/oh-my-pi/tree/main/python/robomp
 - robomp AGENTS.md (架构详细描述): https://github.com/can1357/oh-my-pi/blob/main/python/robomp/AGENTS.md
 - robomp README.md: https://github.com/can1357/oh-my-pi/blob/main/python/robomp/README.md
-- Pi (父项目, Mario Zechner): https://github.com/badlogic/pi-mono
+- Pi (父项目, Mario Zechner, 现由 earendil-works 维护): https://github.com/earendil-works/pi
