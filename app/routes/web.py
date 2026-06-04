@@ -1172,6 +1172,13 @@ async def save_settings(request: Request) -> RedirectResponse:
         claude_agent_container_image=claude_agent_container_image,
         claude_agent_command_timeout_seconds=claude_agent_command_timeout_seconds,
         claude_agent_worktree_base_dir=claude_agent_worktree_base_dir,
+        omp_command=str(form.get("omp_command", "omp")).strip() or "omp",
+        omp_model=str(form.get("omp_model", "glm-5.1")).strip() or "glm-5.1",
+        omp_provider=str(form.get("omp_provider", "zhipu-coding")).strip() or "zhipu-coding",
+        omp_thinking_level=str(form.get("omp_thinking_level", "high")).strip() or "high",
+        omp_command_timeout_seconds=_parse_form_int(
+            form.get("omp_command_timeout_seconds"), default=1800, minimum=1
+        ),
     )
 
     with connect_db() as conn:

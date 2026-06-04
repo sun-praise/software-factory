@@ -2719,6 +2719,7 @@ def test_normalize_agent_modes() -> None:
 
 def test_resolve_agent_modes_for_execution_falls_back_to_defaults() -> None:
     assert _resolve_agent_modes_for_execution(("unknown", "", "other")) == (
+        "omp",
         "claude_agent_sdk",
         "openhands",
     )

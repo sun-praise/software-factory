@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from app.services.agent_modes import (
     CLAUDE_AGENT_MODE,
     LEGACY_AGENT_MODE,
+    OMP_AGENT_MODE,
     OPENHANDS_AGENT_MODE,
     RALPH_AGENT_MODE,
 )
@@ -34,13 +35,19 @@ FEATURE_FLAG_CLAUDE_AGENT_CONTAINER_IMAGE_KEY = "agent.claude_agent.container_im
 FEATURE_FLAG_CLAUDE_AGENT_TIMEOUT_KEY = "agent.claude_agent.command_timeout_seconds"
 FEATURE_FLAG_CLAUDE_AGENT_WORKTREE_DIR_KEY = "agent.claude_agent.worktree_base_dir"
 FEATURE_FLAG_LEGACY_ENABLED_KEY = "agent.legacy.enabled"
+FEATURE_FLAG_OMP_ENABLED_KEY = "agent.omp.enabled"
+FEATURE_FLAG_OMP_COMMAND_KEY = "agent.omp.command"
+FEATURE_FLAG_OMP_MODEL_KEY = "agent.omp.model"
+FEATURE_FLAG_OMP_PROVIDER_KEY = "agent.omp.provider"
+FEATURE_FLAG_OMP_THINKING_KEY = "agent.omp.thinking_level"
+FEATURE_FLAG_OMP_TIMEOUT_KEY = "agent.omp.command_timeout_seconds"
 CLAUDE_AGENT_PROVIDER_ZHIPU = "zhipu"
 CLAUDE_AGENT_PROVIDER_OPENROUTER = "openrouter"
 CLAUDE_AGENT_PROVIDER_DEEPSEEK = "deepseek"
 CLAUDE_AGENT_RUNTIME_HOST = "host"
 CLAUDE_AGENT_RUNTIME_DOCKER = "docker"
 
-_DEFAULT_AGENT_SDKS = (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
+_DEFAULT_AGENT_SDKS = (OMP_AGENT_MODE, CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
 _DEFAULT_RALPH_COMMAND = "ralph"
 _DEFAULT_OPENHANDS_COMMAND = "openhands"
 _DEFAULT_CLAUDE_AGENT_COMMAND = "claude"
@@ -52,6 +59,11 @@ _DEFAULT_CLAUDE_AGENT_CONTAINER_IMAGE = "software-factory/claude-agent:latest"
 _DEFAULT_RALPH_COMMAND_TIMEOUT_SECONDS = 1800
 _DEFAULT_OPENHANDS_COMMAND_TIMEOUT_SECONDS = 600
 _DEFAULT_CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS = 1800
+_DEFAULT_OMP_COMMAND = "omp"
+_DEFAULT_OMP_MODEL = "glm-5.1"
+_DEFAULT_OMP_PROVIDER = "zhipu-coding"
+_DEFAULT_OMP_THINKING = "high"
+_DEFAULT_OMP_COMMAND_TIMEOUT_SECONDS = 1800
 _DEFAULT_AGENT_WORKTREE_BASE_DIR = ".software-factory-worktrees"
 _TEXT_OVERRIDE_FIELDS = (
     "ralph_command",
@@ -64,11 +76,16 @@ _TEXT_OVERRIDE_FIELDS = (
     "claude_agent_runtime",
     "claude_agent_container_image",
     "claude_agent_worktree_base_dir",
+    "omp_command",
+    "omp_model",
+    "omp_provider",
+    "omp_thinking_level",
 )
 _POSITIVE_INT_OVERRIDE_FIELDS = (
     "ralph_command_timeout_seconds",
     "openhands_command_timeout_seconds",
     "claude_agent_command_timeout_seconds",
+    "omp_command_timeout_seconds",
 )
 
 
@@ -88,6 +105,11 @@ class AgentFeatureFlags:
     claude_agent_container_image: str
     claude_agent_command_timeout_seconds: int
     claude_agent_worktree_base_dir: str
+    omp_command: str
+    omp_model: str
+    omp_provider: str
+    omp_thinking_level: str
+    omp_command_timeout_seconds: int
 
 
 class AgentFeatureFlagEnvOverrides(BaseSettings):
@@ -157,6 +179,36 @@ class AgentFeatureFlagEnvOverrides(BaseSettings):
         validation_alias=AliasChoices(
             "CLAUDE_AGENT_WORKTREE_BASE_DIR",
             "CLAUDE_AGENT_SDK_WORKTREE_BASE_DIR",
+        ),
+    )
+    omp_command: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OMP_COMMAND",
+        ),
+    )
+    omp_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OMP_MODEL",
+        ),
+    )
+    omp_provider: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OMP_PROVIDER",
+        ),
+    )
+    omp_thinking_level: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OMP_THINKING_LEVEL",
+        ),
+    )
+    omp_command_timeout_seconds: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OMP_COMMAND_TIMEOUT_SECONDS",
         ),
     )
 
@@ -269,6 +321,26 @@ def _build_default_agent_feature_flags(
             env_overrides.claude_agent_worktree_base_dir,
             defaults.claude_agent_worktree_base_dir,
         ),
+        omp_command=_resolve_override_or_default(
+            env_overrides.omp_command,
+            defaults.omp_command,
+        ),
+        omp_model=_resolve_override_or_default(
+            env_overrides.omp_model,
+            defaults.omp_model,
+        ),
+        omp_provider=_resolve_override_or_default(
+            env_overrides.omp_provider,
+            defaults.omp_provider,
+        ),
+        omp_thinking_level=_resolve_override_or_default(
+            env_overrides.omp_thinking_level,
+            defaults.omp_thinking_level,
+        ),
+        omp_command_timeout_seconds=(
+            env_overrides.omp_command_timeout_seconds
+            or defaults.omp_command_timeout_seconds
+        ),
     )
 
 
@@ -379,6 +451,36 @@ def _resolve_agent_feature_flags_from_sources(
             override=env_overrides.claude_agent_worktree_base_dir,
             raw_flags=raw_flags,
             default=defaults.claude_agent_worktree_base_dir,
+        ),
+        omp_command=_resolve_text_value(
+            key=FEATURE_FLAG_OMP_COMMAND_KEY,
+            override=env_overrides.omp_command,
+            raw_flags=raw_flags,
+            default=defaults.omp_command,
+        ),
+        omp_model=_resolve_text_value(
+            key=FEATURE_FLAG_OMP_MODEL_KEY,
+            override=env_overrides.omp_model,
+            raw_flags=raw_flags,
+            default=defaults.omp_model,
+        ),
+        omp_provider=_resolve_provider_value(
+            key=FEATURE_FLAG_OMP_PROVIDER_KEY,
+            override=env_overrides.omp_provider,
+            raw_flags=raw_flags,
+            default=defaults.omp_provider,
+        ),
+        omp_thinking_level=_resolve_text_value(
+            key=FEATURE_FLAG_OMP_THINKING_KEY,
+            override=env_overrides.omp_thinking_level,
+            raw_flags=raw_flags,
+            default=defaults.omp_thinking_level,
+        ),
+        omp_command_timeout_seconds=_resolve_positive_int_value(
+            key=FEATURE_FLAG_OMP_TIMEOUT_KEY,
+            override=env_overrides.omp_command_timeout_seconds,
+            raw_flags=raw_flags,
+            default=defaults.omp_command_timeout_seconds,
         ),
     )
 
@@ -544,6 +646,11 @@ def _get_code_default_agent_feature_flags() -> AgentFeatureFlags:
             _DEFAULT_CLAUDE_AGENT_COMMAND_TIMEOUT_SECONDS
         ),
         claude_agent_worktree_base_dir=_DEFAULT_AGENT_WORKTREE_BASE_DIR,
+        omp_command=_DEFAULT_OMP_COMMAND,
+        omp_model=_DEFAULT_OMP_MODEL,
+        omp_provider=_DEFAULT_OMP_PROVIDER,
+        omp_thinking_level=_DEFAULT_OMP_THINKING,
+        omp_command_timeout_seconds=_DEFAULT_OMP_COMMAND_TIMEOUT_SECONDS,
     )
 
 

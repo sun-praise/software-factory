@@ -38,7 +38,9 @@ from app.services.agent_modes import (
     CLAUDE_AGENT_MODE,
     OPENHANDS_AGENT_MODE,
     RALPH_AGENT_MODE,
+    OMP_AGENT_MODE,
 )
+from app.services.omp_client import run_omp_agent, session_has_prior_context
 from app.services.feature_flags import (
     _normalize_agent_modes as normalize_agent_modes,
     resolve_agent_feature_flags,
@@ -82,6 +84,7 @@ OPENHANDS_FAILURE_CODE_WORKTREE = "agent_worktree_failed"
 OPENHANDS_FAILURE_CODE_COMMAND = "agent_openhands_failed"
 CLAUDE_FAILURE_CODE_COMMAND = "agent_claude_failed"
 CLAUDE_FAILURE_CODE_STALL = "agent_claude_stalled"
+OMP_FAILURE_CODE_COMMAND = "agent_omp_failed"
 RUN_CANCELLED_CODE = "cancelled"
 CLAUDE_PROGRESS_STALL_TIMEOUT_SECONDS = 120
 BOOTSTRAP_STATE_DIRNAME = "software-factory"
@@ -844,6 +847,11 @@ def run_once(
                     claude_agent_command_timeout_seconds=(
                         feature_flags.claude_agent_command_timeout_seconds
                     ),
+                    omp_command=feature_flags.omp_command,
+                    omp_provider=feature_flags.omp_provider,
+                    omp_model=feature_flags.omp_model,
+                    omp_thinking_level=feature_flags.omp_thinking_level,
+                    omp_command_timeout_seconds=feature_flags.omp_command_timeout_seconds,
                     on_log_line=logger.append,
                     should_cancel=lambda: is_run_cancel_requested(conn, run_id),
                     byok_overrides=byok_overrides,
@@ -1495,7 +1503,7 @@ def _resolve_agent_modes_for_execution(raw_modes: tuple[str, ...]) -> tuple[str,
     normalized_modes = normalize_agent_modes(raw_modes)
     if normalized_modes:
         return normalized_modes
-    return (CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
+    return (OMP_AGENT_MODE, CLAUDE_AGENT_MODE, OPENHANDS_AGENT_MODE)
 
 
 def _execute_agent_sdks(
@@ -1518,6 +1526,11 @@ def _execute_agent_sdks(
     claude_agent_runtime: str,
     claude_agent_container_image: str,
     claude_agent_command_timeout_seconds: int,
+    omp_command: str = "",
+    omp_provider: str = "",
+    omp_model: str = "",
+    omp_thinking_level: str = "high",
+    omp_command_timeout_seconds: int = 1800,
     on_log_line: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     byok_overrides: Mapping[str, str] | None = None,
@@ -1589,6 +1602,39 @@ def _execute_agent_sdks(
             last_error_code = openhands_error_code
             last_error_message = openhands_message
             last_mode = OPENHANDS_AGENT_MODE
+            continue
+
+        if mode == OMP_AGENT_MODE:
+            omp_kwargs: dict[str, Any] = {
+                "workspace": workspace,
+                "run_id": run_id,
+                "repo": repo,
+                "pr_number": pr_number,
+                "prompt": prompt,
+                "normalized_review": normalized_review,
+                "command": omp_command,
+                "provider": omp_provider,
+                "model": omp_model,
+                "thinking_level": omp_thinking_level,
+                "timeout_seconds": omp_command_timeout_seconds,
+            }
+            if on_log_line is not None:
+                omp_kwargs["on_log_line"] = on_log_line
+            if should_cancel is not None:
+                omp_kwargs["should_cancel"] = should_cancel
+            omp_kwargs["byok_overrides"] = byok_overrides
+            omp_ok, omp_message, omp_error_code = _run_omp_agent_execution(
+                **omp_kwargs,
+            )
+            if omp_ok:
+                return True, None, None, OMP_AGENT_MODE
+
+            if omp_error_code == RUN_CANCELLED_CODE:
+                return False, omp_error_code, omp_message, OMP_AGENT_MODE
+
+            last_error_code = omp_error_code
+            last_error_message = omp_message
+            last_mode = OMP_AGENT_MODE
             continue
 
         if mode == CLAUDE_AGENT_MODE:
@@ -1749,6 +1795,58 @@ def _run_claude_agent(
         byok_overrides=byok_overrides,
     )
 
+
+def _run_omp_agent_execution(
+    workspace: str,
+    run_id: int,
+    repo: str,
+    pr_number: int,
+    prompt: str,
+    normalized_review: Mapping[str, Any],
+    *,
+    command: str,
+    provider: str,
+    model: str,
+    thinking_level: str,
+    timeout_seconds: int,
+    repo_instructions: str | None = None,
+    on_log_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    byok_overrides: Mapping[str, str] | None = None,
+) -> tuple[bool, str, str | None]:
+    """Run the agent via omp --mode rpc (non-interactive print mode)."""
+    normalized_command = command.strip()
+    if not normalized_command:
+        return False, "omp command is not configured", OMP_FAILURE_CODE_COMMAND
+    if not _command_exists(normalized_command.split()[0]):
+        return False, f"omp command not found: {normalized_command.split()[0]}", OMP_FAILURE_CODE_COMMAND
+
+    # Build session dir for persistence (inside workspace)
+    session_dir = str(Path(workspace) / ".omp-session")
+    Path(session_dir).mkdir(parents=True, exist_ok=True)
+
+    # Build environment overrides
+    env: dict[str, str] = {}
+    if byok_overrides:
+        env.update(byok_overrides)
+
+    # Build append-system-prompt from repo instructions
+    append_system_prompt = repo_instructions
+
+    return run_omp_agent(
+        workspace=workspace,
+        prompt=prompt,
+        model=model,
+        provider=provider,
+        thinking_level=thinking_level,
+        session_dir=session_dir,
+        append_system_prompt=append_system_prompt,
+        timeout_seconds=timeout_seconds,
+        omp_command=normalized_command,
+        on_log_line=on_log_line,
+        should_cancel=should_cancel,
+        env_overrides=env or None,
+    )
 
 def _run_claude_container_command(
     *,
