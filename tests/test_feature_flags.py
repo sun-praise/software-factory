@@ -163,7 +163,7 @@ def test_invalid_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) ->
 
     flags = resolve_agent_feature_flags(conn)
 
-    assert flags.agent_sdks == ("claude_agent_sdk", "openhands")
+    assert flags.agent_sdks == ("omp", "claude_agent_sdk", "openhands")
 
 
 def test_blank_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) -> None:
@@ -174,7 +174,7 @@ def test_blank_agent_sdks_env_falls_back_to_defaults(monkeypatch, tmp_path) -> N
 
     flags = resolve_agent_feature_flags(conn)
 
-    assert flags.agent_sdks == ("claude_agent_sdk", "openhands")
+    assert flags.agent_sdks == ("omp", "claude_agent_sdk", "openhands")
 
 
 def test_blank_db_provider_falls_back_to_default(monkeypatch, tmp_path) -> None:
