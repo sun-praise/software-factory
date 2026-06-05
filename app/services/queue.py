@@ -366,8 +366,7 @@ def request_run_cancel(conn: sqlite3.Connection, run_id: int) -> str | None:
     current_status = get_run_status(conn, run_id)
     if current_status is None:
         return None
-
-    if current_status in {"success", "failed", "cancelled"}:
+    if current_status in {"success", "failed", "cancelled", "cancel_requested"}:
         return current_status
 
     if current_status in {"queued", "retry_scheduled"}:

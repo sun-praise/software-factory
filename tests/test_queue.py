@@ -10,8 +10,10 @@ from app.services.queue import (
     claim_next_queued_run,
     enqueue_autofix_run,
     get_run_operator_hints,
+    get_run_status,
     mark_run_finished,
     recover_stale_runs,
+    request_run_cancel,
     touch_run_progress,
 )
 
@@ -196,3 +198,41 @@ def test_append_run_operator_hint_rejects_oversized_append() -> None:
 
     with pytest.raises(ValueError, match="operator hint exceeds max length"):
         append_run_operator_hint(conn, run_id, "x" * 1001)
+
+
+def test_request_run_cancel_idempotent_on_cancel_requested() -> None:
+    """Double-cancel on cancel_requested must not execute a spurious UPDATE."""
+    conn = _make_conn()
+    run_id = enqueue_autofix_run(
+        conn=conn,
+        repo="acme/w",
+        pr_number=1,
+        head_sha="abc",
+        normalized_review_json={},
+    )
+    assert run_id is not None
+
+    # Transition to running, then first cancel → cancel_requested
+    claimed = claim_next_queued_run(conn)
+    assert claimed is not None and claimed["status"] == "running"
+
+    result = request_run_cancel(conn, run_id)
+    assert result == "cancel_requested"
+    assert get_run_status(conn, run_id) == "cancel_requested"
+
+    updated_at_before = conn.execute(
+        "SELECT updated_at FROM autofix_runs WHERE id = ?", (run_id,)
+    ).fetchone()["updated_at"]
+
+    # Second cancel on same run — must be no-op (no UPDATE)
+    result = request_run_cancel(conn, run_id)
+    assert result == "cancel_requested"
+
+    row = conn.execute(
+        "SELECT status, updated_at, error_summary FROM autofix_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["status"] == "cancel_requested"
+    assert row["updated_at"] == updated_at_before
+    # error_summary must still be the original cancel value, not overwritten
+    assert row["error_summary"] == "cancel_requested_by_user"
