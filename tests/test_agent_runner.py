@@ -3453,6 +3453,53 @@ def test_run_claude_agent_rejects_shell_control_tokens(tmp_path: Path) -> None:
     assert "unsupported shell control operators" in message
 
 
+def test_run_claude_agent_rejects_shell_control_token_as_argv0(tmp_path: Path) -> None:
+    """Shell metacharacter as argv[0] must be caught (not skipped)."""
+    ok, message, error_code = _run_claude_agent(
+        workspace=str(tmp_path),
+        run_id=10,
+        repo="acme/widgets",
+        pr_number=8,
+        prompt="fix this",
+        normalized_review={},
+        command="&& true",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api",
+        model="openrouter/hunter-alpha",
+        runtime="host",
+        container_image="",
+        timeout_seconds=42,
+    )
+
+    assert ok is False
+    assert error_code == "agent_claude_failed"
+    assert "unsupported shell control operators" in message
+
+
+def test_run_ralph_agent_rejects_shell_control_token_as_argv0(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Shell metacharacter as argv[0] caught in _run_agent_command path."""
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda value: f"/usr/bin/{value}")
+
+    ok, message, error_code = agent_runner._run_ralph_agent(
+        workspace=str(tmp_path),
+        run_id=10,
+        repo="acme/widgets",
+        pr_number=8,
+        prompt="fix this",
+        normalized_review={},
+        command="&& true",
+        timeout_seconds=42,
+    )
+
+    assert ok is False
+    assert error_code == "agent_ralph_failed"
+    assert "unsupported shell control operators" in message
+
+
 def test_sanitize_log_text_redacts_tokens() -> None:
     raw = (
         "token=abc123 secret: xyz ghp_abcdefghijklmnopqrstuvwxyz "
