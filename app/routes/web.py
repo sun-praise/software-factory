@@ -182,7 +182,7 @@ def _fetch_runs(
         ).fetchall()
 
     total_count = int(count_row["total_count"]) if count_row is not None else 0
-    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
     normalized_page = min(page, total_pages)
     runs = [
         {

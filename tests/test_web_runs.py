@@ -110,6 +110,17 @@ def test_fetch_runs_search_with_like_wildcards(tmp_path: Path) -> None:
     assert "acme/testX1" in plain.text
 
 
+def test_fetch_runs_total_pages_zero_when_empty(tmp_path: Path) -> None:
+    db_path = _setup_db(tmp_path)
+    # no rows inserted — DB is empty
+    result = web_routes._fetch_runs(page=1, page_size=10, query="")
+    assert result["total_count"] == 0
+    assert result["total_pages"] == 0
+    assert result["page"] == 0
+    assert result["has_prev"] is False
+    assert result["has_next"] is False
+    assert result["items"] == []
+
 def test_manual_issue_run_detail_omits_fake_pull_request_link(tmp_path: Path) -> None:
     db_path = _setup_db(tmp_path)
     with sqlite3.connect(db_path) as conn:

@@ -48,6 +48,7 @@
           </div>
         </form>
 
+        {% if run_page.total_count > 0 %}
         <p class="muted run-results-summary">
           Showing {{ runs|length }} of {{ run_page.total_count }} runs
           {% if run_page.query %}
@@ -55,6 +56,7 @@
           {% endif %}
           · Page {{ run_page.page }} / {{ run_page.total_pages }}
         </p>
+        {% endif %}
 
         {% if runs and runs|length > 0 %}
         <ul class="run-list">
