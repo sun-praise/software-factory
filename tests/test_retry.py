@@ -205,3 +205,41 @@ def test_schedule_retry_backward_compat_individual_params() -> None:
     assert plan.retry_after == "2026-03-12T10:00:20Z"
     assert row is not None
     assert row["status"] == "retry_scheduled"
+
+
+def test_schedule_retry_preserves_terminal_status() -> None:
+    """schedule_retry must not mutate terminal runs (success, cancelled)."""
+    for terminal_status in ("success", "cancelled"):
+        conn = _make_conn()
+        cursor = conn.execute(
+            """
+            INSERT INTO autofix_runs (repo, pr_number, status, attempt_count, max_attempts, retryable)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("acme/widgets", 99, terminal_status, 1, 3, 1),
+        )
+        conn.commit()
+        run_id = cursor.lastrowid
+        assert run_id is not None
+
+        plan = schedule_retry(
+            conn,
+            run_id,
+            error_code="late_error",
+            config=RetryConfig(),
+        )
+
+        row = conn.execute(
+            "SELECT status, last_error_code, last_error_at FROM autofix_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+
+        assert plan.scheduled is False, f"should not schedule retry for {terminal_status}"
+        assert row is not None
+        assert row["status"] == terminal_status, (
+            f"status must remain {terminal_status}, got {row['status']}"
+        )
+        assert row["last_error_code"] is None, "terminal runs should not be mutated"
+        assert row["last_error_at"] is None, "terminal runs should not be mutated"
+
+        conn.close()
