@@ -1880,7 +1880,7 @@ def _run_claude_container_command(
         return False, f"{agent_name} command is invalid: {exc}", failure_code
     if not inner_argv:
         return False, f"{agent_name} command is not configured", failure_code
-    if any(token in _DISALLOWED_COMMAND_TOKENS for token in inner_argv[1:]):
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in inner_argv):
         return (
             False,
             f"{agent_name} command contains unsupported shell control operators",
@@ -1954,7 +1954,7 @@ def _run_claude_stream_command(
         return False, f"{agent_name} command is invalid: {exc}", failure_code
     if not argv:
         return False, f"{agent_name} command is not configured", failure_code
-    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv[1:]):
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv):
         return (
             False,
             f"{agent_name} command contains unsupported shell control operators",
@@ -2331,7 +2331,7 @@ def _run_agent_command(
         return False, f"{agent_name} command is invalid: {exc}", failure_code
     if not argv:
         return False, f"{agent_name} command is not configured", failure_code
-    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv[1:]):
+    if any(token in _DISALLOWED_COMMAND_TOKENS for token in argv):
         return (
             False,
             f"{agent_name} command contains unsupported shell control operators",
