@@ -3659,7 +3659,7 @@ def _should_post_run_comment(
     payload: Mapping[str, Any],
     status: str,
 ) -> bool:
-    if status == "retry_scheduled":
+    if status in {"retry_scheduled", "waiting_for_baseline_fix"}:
         return False
     if _safe_text(run.get("trigger_source")) in {"manual_issue", "manual_task"}:
         return False
