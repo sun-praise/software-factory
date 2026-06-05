@@ -126,7 +126,10 @@ def reset_autofix_count_on_sha_change(
     pr_number: int,
     new_head_sha: str | None,
 ) -> bool:
-    """Reset autofix_count when head_sha changes.
+    """Reset autofix_count when head_sha changes to a never-before-seen SHA.
+
+    Tracks seen SHAs in the `seen_shas` column to prevent ping-pong attacks
+    (SHA-A → SHA-B → SHA-A) from bypassing the autofix limit.
 
     Note: This function does NOT commit. Caller is responsible for transaction management.
 
@@ -136,16 +139,25 @@ def reset_autofix_count_on_sha_change(
     if not new_head_sha:
         return False
     row = conn.execute(
-        "SELECT head_sha FROM pull_requests WHERE repo = ? AND pr_number = ? LIMIT 1",
+        "SELECT head_sha, seen_shas FROM pull_requests WHERE repo = ? AND pr_number = ? LIMIT 1",
         (repo, pr_number),
     ).fetchone()
     if row is None:
         return False
     old_sha = _safe_text(row["head_sha"])
-    if old_sha and old_sha != new_head_sha:
-        conn.execute(
-            "UPDATE pull_requests SET autofix_count = 0, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
-            (repo, pr_number),
-        )
-        return True
-    return False
+    if not old_sha or old_sha == new_head_sha:
+        return False
+    seen_raw = row["seen_shas"] or ""
+    if new_head_sha in seen_raw.split(","):
+        return False
+    # Add both the old (now-seen) and new SHA to the tracking set
+    parts = [p for p in seen_raw.split(",") if p]
+    if old_sha not in parts:
+        parts.append(old_sha)
+    parts.append(new_head_sha)
+    new_seen = ",".join(parts)
+    conn.execute(
+        "UPDATE pull_requests SET autofix_count = 0, seen_shas = ?, updated_at = CURRENT_TIMESTAMP WHERE repo = ? AND pr_number = ?",
+        (new_seen, repo, pr_number),
+    )
+    return True

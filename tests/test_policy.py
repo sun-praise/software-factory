@@ -165,3 +165,42 @@ def test_reset_autofix_count_returns_false_for_empty_sha() -> None:
 
     assert result is False
     assert get_autofix_count(conn, "acme/widgets", 22) == 1
+
+
+def test_reset_autofix_count_does_not_reset_on_sha_ping_pong() -> None:
+    """SHA-A → SHA-B → SHA-A should not reset count twice.
+
+    Simulating the caller flow where ensure_pull_request_row updates
+    head_sha after each reset.
+    """
+    conn = _make_conn()
+
+    # Round 1: SHA-A, consume 2 autofix slots
+    ensure_pull_request_row(conn, "acme/widgets", 30, head_sha="sha-A")
+    increment_autofix_count(conn, "acme/widgets", 30, amount=2)
+    assert get_autofix_count(conn, "acme/widgets", 30) == 2
+
+    # Round 2: push SHA-B → reset + update head_sha → consume 2
+    result1 = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 30, new_head_sha="sha-B"
+    )
+    assert result1 is True
+    ensure_pull_request_row(conn, "acme/widgets", 30, head_sha="sha-B")
+    assert get_autofix_count(conn, "acme/widgets", 30) == 0
+    increment_autofix_count(conn, "acme/widgets", 30, amount=2)
+    assert get_autofix_count(conn, "acme/widgets", 30) == 2
+
+    # Round 3: push SHA-A (back to previously-seen SHA) → must NOT reset
+    result2 = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 30, new_head_sha="sha-A"
+    )
+    assert result2 is False
+    assert get_autofix_count(conn, "acme/widgets", 30) == 2
+
+    # Round 4: push new SHA-C → should still reset for genuinely new SHA
+    result3 = reset_autofix_count_on_sha_change(
+        conn, "acme/widgets", 30, new_head_sha="sha-C"
+    )
+    assert result3 is True
+    ensure_pull_request_row(conn, "acme/widgets", 30, head_sha="sha-C")
+    assert get_autofix_count(conn, "acme/widgets", 30) == 0
