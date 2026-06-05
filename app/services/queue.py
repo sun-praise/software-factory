@@ -147,6 +147,8 @@ def claim_next_queued_run(
         return {key: value for key, value in zip(keys, row, strict=False)}
     return _to_dict(row, conn.cursor())
 
+_VALID_FINISH_STATUSES: frozenset[str] = frozenset({"success", "failed", "cancelled"})
+
 
 def mark_run_finished(
     conn: sqlite3.Connection,
@@ -159,6 +161,11 @@ def mark_run_finished(
     opened_pr_number: int | None = None,
     opened_pr_url: str | None = None,
 ) -> None:
+    if status not in _VALID_FINISH_STATUSES:
+        raise ValueError(
+            f"Invalid finish status {status!r}; "
+            f"must be one of {sorted(_VALID_FINISH_STATUSES)}"
+        )
     conn.execute(
         """
         UPDATE autofix_runs

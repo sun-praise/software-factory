@@ -196,3 +196,48 @@ def test_append_run_operator_hint_rejects_oversized_append() -> None:
 
     with pytest.raises(ValueError, match="operator hint exceeds max length"):
         append_run_operator_hint(conn, run_id, "x" * 1001)
+
+
+class TestMarkRunFinishedStatusValidation:
+    """Tests for status parameter validation in mark_run_finished."""
+
+    def test_rejects_invalid_status(self) -> None:
+        conn = _make_conn()
+        run_id = enqueue_autofix_run(
+            conn=conn,
+            repo="acme/widgets",
+            pr_number=42,
+            head_sha="abc123",
+            normalized_review_json={"summary": "issue"},
+        )
+        with pytest.raises(ValueError, match="Invalid finish status"):
+            mark_run_finished(conn=conn, run_id=run_id, status="banana")
+
+    def test_rejects_empty_status(self) -> None:
+        conn = _make_conn()
+        run_id = enqueue_autofix_run(
+            conn=conn,
+            repo="acme/widgets",
+            pr_number=42,
+            head_sha="abc123",
+            normalized_review_json={"summary": "issue"},
+        )
+        with pytest.raises(ValueError, match="Invalid finish status"):
+            mark_run_finished(conn=conn, run_id=run_id, status="")
+
+    @pytest.mark.parametrize("valid_status", ["success", "failed", "cancelled"])
+    def test_accepts_valid_finish_statuses(self, valid_status: str) -> None:
+        conn = _make_conn()
+        run_id = enqueue_autofix_run(
+            conn=conn,
+            repo="acme/widgets",
+            pr_number=42,
+            head_sha="abc123",
+            normalized_review_json={"summary": "issue"},
+        )
+        mark_run_finished(conn=conn, run_id=run_id, status=valid_status)
+        row = conn.execute(
+            "SELECT status FROM autofix_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == valid_status
