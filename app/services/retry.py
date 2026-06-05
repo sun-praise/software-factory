@@ -117,14 +117,24 @@ def schedule_retry(
     current_time = _normalize_now(now)
     error_time = _to_timestamp(current_time)
 
-    if not should_retry(
+    can_retry = should_retry(
         status=status,
         attempt_count=attempt_count,
         max_attempts=max_attempts,
         retryable=retryable,
         error_code=error_code,
         non_retryable_error_codes=config.non_retryable_error_codes,
-    ):
+    )
+
+    if not can_retry:
+        if status in TERMINAL_STATUSES:
+            return RetryPlan(
+                run_id=run_id,
+                scheduled=False,
+                retry_after=None,
+                delay_seconds=None,
+                next_attempt_count=attempt_count,
+            )
         conn.execute(
             """
             UPDATE autofix_runs
