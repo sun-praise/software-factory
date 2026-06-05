@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
     state TEXT NOT NULL DEFAULT 'IDLE',
     linked_session_id INTEGER,
     autofix_count INTEGER NOT NULL DEFAULT 0,
+    seen_shas TEXT NOT NULL DEFAULT '',
     lock_owner TEXT,
     lock_run_id INTEGER,
     lock_acquired_at TEXT,

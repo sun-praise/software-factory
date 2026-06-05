@@ -36,6 +36,7 @@ def init_db() -> None:
         _migrate_app_feature_flags(conn)
         _migrate_app_config_audit_log(conn)
         _migrate_run_result_pr_columns(conn)
+        _migrate_seen_shas(conn)
         _migrate_user_api_keys(conn)
 
 
@@ -137,6 +138,16 @@ def _migrate_run_result_pr_columns(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
+
+def _migrate_seen_shas(conn: sqlite3.Connection) -> None:
+    _ensure_columns(
+        conn,
+        "pull_requests",
+        {
+            "seen_shas": "TEXT NOT NULL DEFAULT ''",
+        },
+    )
+    conn.commit()
 
 def _ensure_columns(
     conn: sqlite3.Connection,
